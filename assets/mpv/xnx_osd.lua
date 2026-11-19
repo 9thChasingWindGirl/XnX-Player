@@ -234,7 +234,7 @@ local outro_skipped = false
 
 -- Forward declarations. Lua locals are not hoisted: the menu section above the
 -- render section calls back into it, so these names must exist first.
-local mark_dirty, render, show_ui, schedule_hide, send_back
+local mark_dirty, render, show_ui, schedule_hide, send_back, close_menu
 
 local function now()
   return mp.get_time()
@@ -1048,6 +1048,12 @@ local function open_menu(id)
     mark_dirty()
     return
   end
+  -- Clicking the button of the menu that is already open closes it; otherwise
+  -- the toolbar reads as unresponsive.
+  if state.menu and state.menu.id == id then
+    close_menu()
+    return
+  end
   local rows = build_menu(id)
   state.menu = {
     id = id,
@@ -1059,7 +1065,7 @@ local function open_menu(id)
   mark_dirty()
 end
 
-local function close_menu()
+function close_menu()
   if state.menu == nil then
     return false
   end
