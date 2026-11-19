@@ -102,11 +102,14 @@ Map<String, String> buildMpvOptions({
     // keep-open keeps the last frame and the video window alive after EOF;
     // without it the surface is torn down and the app flashes black.
     'keep-open': 'yes',
-    // force-window makes the child window exist before the first frame, which
-    // is what lets the host measure and fit it immediately.
-    'force-window': 'yes',
+    // force-window=immediate creates the child window before the first frame,
+    // which is what lets the host measure and fit it immediately.
+    'force-window': 'immediate',
     'terminal': 'no',
     'msg-level': 'all=info',
+    // The app owns resume state (`AppStore.remember`), so mpv must not also
+    // write watch-later files and race with it.
+    'save-position-on-quit': 'no',
 
     // Video output: gpu-next on D3D11 is what gives the reference build its
     // HDR handling; gpu-hq supplies the peak percentile / contrast recovery
@@ -125,11 +128,13 @@ Map<String, String> buildMpvOptions({
     'tscale': 'oversample',
 
     // Audio
+    'audio-device': 'auto',
     'audio-channels': 'auto-safe',
     'audio-pitch-correction': 'yes',
     'volume': '${settings.volume}',
     'volume-max': '130',
     'audio-spdif': audioSpdifValue(settings.audioPassthrough),
+    'audio-file-auto': 'fuzzy',
 
     // Cache / network
     'cache': 'yes',
@@ -137,6 +142,10 @@ Map<String, String> buildMpvOptions({
     'demuxer-max-back-bytes': '128MiB',
     'demuxer-readahead-secs': '60',
     'network-timeout': '30',
+    // Mirrors the reference build: streamed pages still go through yt-dlp when
+    // it is available; without it mpv simply plays the direct URL.
+    'ytdl': 'yes',
+    'ytdl-format': 'bestvideo+bestaudio/best',
 
     // Subtitles
     'sub-auto': 'fuzzy',
@@ -145,6 +154,7 @@ Map<String, String> buildMpvOptions({
     'alang': 'chi,zh,zh-CN,zh-Hans,chs,sc,jpn,ja,eng,en',
     'sub-font-size': '42',
     'sub-border-size': '2.5',
+    'sub-shadow-offset': '1',
     'sub-ass-override': 'no',
 
     // Captures

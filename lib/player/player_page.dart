@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
@@ -16,6 +17,7 @@ import '../playback/mpv/mpv_window.dart';
 import '../playback/mpv/video_surface.dart';
 import '../ui/core/tv_scale.dart';
 import 'osd_bridge.dart';
+import 'osd_keys.dart';
 
 /// Full-window playback surface.
 ///
@@ -25,20 +27,27 @@ import 'osd_bridge.dart';
 /// not follow the parent on resize or fullscreen switches. Flutter only owns the
 /// loading, error and diagnostics states plus the keyboard bindings.
 class PlayerPage extends StatefulWidget {
-  const PlayerPage({super.key, required this.item});
+  const PlayerPage({super.key, required this.item, this.queue = const <MediaItem>[]});
 
   final MediaItem item;
+
+  /// Siblings queued behind [item], so `下一集` / `playlist-next` work without a
+  /// second navigation. The episode shelf passes the whole season here.
+  final List<MediaItem> queue;
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
 }
 
 class _PlayerPageState extends State<PlayerPage> {
+  static const int _maxQueue = 30;
+
   MpvPlayer? _player;
   OsdBridge? _bridge;
   VideoSurface? _surface;
   StreamSubscription<bool>? _loadedSub;
   Timer? _watchdog;
+  Timer? _escFallback;
 
   String? _error;
   String? _hint;
@@ -56,6 +65,7 @@ class _PlayerPageState extends State<PlayerPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _watchdog?.cancel();
+    _escFallback?.cancel();
     _loadedSub?.cancel();
     _bridge?.dispose();
     _player?.lastError.removeListener(_onMpvError);
@@ -113,11 +123,40 @@ class _PlayerPageState extends State<PlayerPage> {
       }
 
       final String? scriptPath = await MpvAssets.osdScriptPath();
-      final String logPath =
-          '${Directory.systemTemp.path}${Platform.pathSeparator}xnx_player_mpv.log';
+      final String sep = Platform.pathSeparator;
+      final String logPath = '${Directory.systemTemp.path}${sep}xnx_player_mpv.log';
+
+      // Screenshots land next to the app state rather than in the working
+      // directory, which is the build folder during development.
+      final String appDir =
+          '${Platform.environment['APPDATA'] ?? Directory.systemTemp.path}${sep}XnX Player';
+      final String shotDir = '$appDir${sep}screenshots';
+      try {
+        Directory(shotDir).createSync(recursive: true);
+      } catch (_) {
+        // Read-only profile: mpv falls back to its own default.
+      }
 
       // Backends may need a round-trip for a playable URL (AList raw link).
       final String url = await AppStore.instance.resolve(widget.item);
+
+      // Queue the sibling episodes. A single unresolvable sibling must not take
+      // the whole season down, so only the clicked item is strict.
+      final List<String> queue = <String>[url];
+      for (final MediaItem sibling in widget.queue) {
+        if (queue.length >= _maxQueue) {
+          break;
+        }
+        if (sibling.id == widget.item.id) {
+          continue;
+        }
+        try {
+          queue.add(await AppStore.instance.resolve(sibling));
+        } catch (_) {
+          // Skip it; the playlist simply loses one entry.
+        }
+      }
+
       final PlaybackPrefs prefs = AppStore.instance.prefs;
 
       final MpvPlayer player = MpvPlayer();
@@ -126,6 +165,7 @@ class _PlayerPageState extends State<PlayerPage> {
           osdScriptPath: scriptPath ?? '',
           wid: host,
           logFile: logPath,
+          screenshotDir: shotDir,
           settings: _settingsFor(prefs),
         ),
         logLevel: 'info',
@@ -139,6 +179,8 @@ class _PlayerPageState extends State<PlayerPage> {
         ..onBack = _close
         ..onTogglePause = player.togglePause
         ..onSeekRequest = player.seekTo
+        ..onLoadSubtitle = _loadSubtitle
+        ..onEvent = (Map<Object?, Object?> _) => _escFallback?.cancel()
         ..attach();
 
       _loadedSub = player.onFileLoaded.listen((bool _) {
@@ -155,13 +197,13 @@ class _PlayerPageState extends State<PlayerPage> {
       if (prefs.subtitleSize > 0) {
         player.setProperty('sub-font-size', '${prefs.subtitleSize}');
       }
-      final Duration? resume = widget.item.resumeAt;
-      if (resume != null && resume.inSeconds > 5) {
-        player.setProperty('start', '${resume.inSeconds}');
-      }
-
-      player.load(url);
+      // The OSD reads these before the first frame so the title and the
+      // opening-skip preference are already in place at file-loaded.
       player.setProperty('user-data/xnx/title', widget.item.title);
+      player.setProperty('user-data/xnx/skip-intro', prefs.skipIntro ? 'yes' : 'no');
+
+      final Duration resume = widget.item.resumeAt ?? Duration.zero;
+      player.loadQueue(queue, startAt: resume.inSeconds > 5 ? resume : Duration.zero);
 
       // A silent black screen used to be unactionable; after 12s with no
       // file-loaded event we surface the mpv log instead of waiting forever.
@@ -203,7 +245,36 @@ class _PlayerPageState extends State<PlayerPage> {
     });
   }
 
+  /// Opens a file dialog for an external subtitle and hands it to mpv.
+  ///
+  /// The OSD lives inside mpv and cannot show a dialog, so it asks Flutter to
+  /// do it (`{"type":"subtitle"}`); the picked file goes straight to `sub-add`.
+  Future<void> _loadSubtitle() async {
+    final MpvPlayer? player = _player;
+    if (player == null) {
+      return;
+    }
+    try {
+      final XFile? file = await openFile(
+        acceptedTypeGroups: <XTypeGroup>[
+          const XTypeGroup(
+            label: '字幕',
+            extensions: <String>['srt', 'ass', 'ssa', 'vtt', 'sub', 'sup', 'idx', 'smi'],
+          ),
+        ],
+      );
+      if (file == null) {
+        return;
+      }
+      player.command(<String>['sub-add', file.path, 'select']);
+      player.showUi();
+    } catch (_) {
+      // Dialog unavailable (headless): keep playing.
+    }
+  }
+
   void _close() {
+    _escFallback?.cancel();
     if (!mounted) {
       return;
     }
@@ -237,12 +308,7 @@ class _PlayerPageState extends State<PlayerPage> {
       return false;
     }
     final LogicalKeyboardKey key = event.logicalKey;
-    final MpvPlayer? player = _player;
 
-    if (key == LogicalKeyboardKey.escape) {
-      _close();
-      return true;
-    }
     if (key == LogicalKeyboardKey.f1) {
       final bool open = !_showDiagnostics;
       setState(() => _showDiagnostics = open);
@@ -256,22 +322,45 @@ class _PlayerPageState extends State<PlayerPage> {
       }
       return true;
     }
+
+    final MpvPlayer? player = _player;
     if (player == null || _error != null) {
+      // Nothing to forward to: keep the player escapable.
+      if (key == LogicalKeyboardKey.escape) {
+        _close();
+        return true;
+      }
       return false;
     }
-    if (key == LogicalKeyboardKey.space) {
-      player.togglePause();
-      return true;
+
+    final HardwareKeyboard keyboard = HardwareKeyboard.instance;
+    // Ctrl combinations belong to the app shell (Ctrl+F, Ctrl+O...).
+    if (keyboard.isControlPressed) {
+      return false;
     }
-    if (key == LogicalKeyboardKey.arrowRight) {
-      player.seekBy(10);
-      return true;
+
+    final String? composed = OsdKeys.compose(
+      key.debugName,
+      shift: keyboard.isShiftPressed,
+      alt: keyboard.isAltPressed,
+    );
+    if (composed == null) {
+      return false;
     }
-    if (key == LogicalKeyboardKey.arrowLeft) {
-      player.seekBy(-10);
-      return true;
+
+    // Escape has a fallback: if the OSD never answers, the user must not be
+    // trapped in a fullscreen native surface.
+    if (key == LogicalKeyboardKey.escape) {
+      _escFallback?.cancel();
+      _escFallback = Timer(const Duration(milliseconds: 450), () {
+        if (mounted) {
+          _close();
+        }
+      });
     }
-    return false;
+
+    player.sendKey(composed);
+    return true;
   }
 
   @override

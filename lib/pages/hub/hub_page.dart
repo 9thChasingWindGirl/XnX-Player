@@ -27,7 +27,10 @@ class HubPage extends StatefulWidget {
   });
 
   final MediaItem item;
-  final ValueChanged<MediaItem> onPlay;
+
+  /// [queue] carries the sibling episodes so the player can continue the season
+  /// without coming back to this page.
+  final void Function(MediaItem item, List<MediaItem> queue) onPlay;
 
   @override
   State<HubPage> createState() => _HubPageState();
@@ -170,7 +173,7 @@ class _HubPageState extends State<HubPage> {
                             primary: true,
                             width: 220,
                             accent: item.accentColor,
-                            onSelect: () => widget.onPlay(item),
+                            onSelect: () => widget.onPlay(item, const <MediaItem>[]),
                           ),
                           const SizedBox(width: 20),
                           PsIconButton(
@@ -219,7 +222,7 @@ class _HubPageState extends State<HubPage> {
                     opacity: shelfArrive,
                     child: _EpisodeShelf(
                       items: _children,
-                      onSelect: (MediaItem episode) => widget.onPlay(episode),
+                      onSelect: (MediaItem episode) => widget.onPlay(episode, _children),
                     ),
                   ),
                 ),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
@@ -481,8 +482,42 @@ class MpvPlayer {
   }
 
   void load(String path, {Duration startAt = Duration.zero}) {
-    final String options = startAt > Duration.zero ? 'start=${(startAt.inMilliseconds / 1000).toStringAsFixed(3)}' : 'start=0';
+    final String options =
+        'start=${(startAt.inMilliseconds / 1000).toStringAsFixed(3)}';
     command(<String>['loadfile', path, 'replace', '-1', options], async: true);
+  }
+
+  /// Loads [urls] as a playlist so "下一集" works without a second round-trip.
+  ///
+  /// Only the first entry honours [startAt]: resume points belong to the file
+  /// the user actually clicked.
+  void loadQueue(List<String> urls, {Duration startAt = Duration.zero}) {
+    if (urls.isEmpty) {
+      return;
+    }
+    final String options =
+        'start=${(startAt.inMilliseconds / 1000).toStringAsFixed(3)}';
+    command(<String>['loadfile', urls.first, 'replace', '-1', options], async: true);
+    for (int i = 1; i < urls.length; i++) {
+      command(<String>['loadfile', urls[i], 'append'], async: true);
+    }
+  }
+
+  /// Sends a JSON command to the Lua OSD (`xnx-cmd`).
+  ///
+  /// The transport is a single JSON string on purpose: the Lua side can grow
+  /// new verbs without touching the FFI surface.
+  void sendScriptMessage(Map<String, Object?> payload) {
+    command(<String>['script-message', 'xnx-cmd', jsonEncode(payload)], async: true);
+  }
+
+  /// Forwards one key to the OSD, which owns all playback actions.
+  void sendKey(String name) {
+    sendScriptMessage(<String, Object?>{'cmd': 'key', 'key': name});
+  }
+
+  void showUi() {
+    sendScriptMessage(<String, Object?>{'cmd': 'show'});
   }
 
   void togglePause() {

@@ -201,7 +201,9 @@ class _ShellPageState extends State<ShellPage> {
     }
   }
 
-  Future<void> _play(MediaItem item) {
+  Future<void> _play(MediaItem item) => _playQueue(item, const <MediaItem>[]);
+
+  Future<void> _playQueue(MediaItem item, List<MediaItem> queue) {
     return _push(
       PageRouteBuilder<void>(
         opaque: true,
@@ -209,7 +211,7 @@ class _ShellPageState extends State<ShellPage> {
         reverseTransitionDuration: PsMotion.base,
         pageBuilder: (BuildContext context, Animation<double> animation,
                 Animation<double> secondaryAnimation) =>
-            PlayerPage(item: item),
+            PlayerPage(item: item, queue: queue),
         transitionsBuilder: (BuildContext context, Animation<double> animation,
             Animation<double> secondaryAnimation, Widget child) {
           return FadeTransition(opacity: animation, child: child);
@@ -226,9 +228,9 @@ class _ShellPageState extends State<ShellPage> {
         reverseTransitionDuration: PsMotion.base,
         pageBuilder: (BuildContext context, Animation<double> animation,
                 Animation<double> secondaryAnimation) =>
-            HubPage(item: item, onPlay: (MediaItem choice) {
+            HubPage(item: item, onPlay: (MediaItem choice, List<MediaItem> queue) {
           Navigator.of(context).pop();
-          unawaited(_play(choice));
+          unawaited(_playQueue(choice, queue));
         }),
         transitionsBuilder: (BuildContext context, Animation<double> animation,
             Animation<double> secondaryAnimation, Widget child) {
