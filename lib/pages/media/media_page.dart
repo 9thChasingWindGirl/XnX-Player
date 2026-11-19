@@ -67,7 +67,7 @@ class MediaPageState extends State<MediaPage> {
 
   List<MediaItem> get _visible {
     final List<MediaItem> all = AppStore.instance.items
-        .where((MediaItem item) => item.kind != MediaKind.folder)
+        .where((MediaItem item) => item.kind != MediaKind.season)
         .toList(growable: false);
     if (_filter == null) {
       return all;
