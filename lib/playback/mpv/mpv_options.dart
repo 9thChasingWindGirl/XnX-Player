@@ -80,6 +80,7 @@ Map<String, String> buildMpvOptions({
   required String osdScriptPath,
   MpvSettings settings = const MpvSettings(),
   int? wid,
+  String? logFile,
   String? watchLaterDir,
   String? screenshotDir,
 }) {
@@ -88,17 +89,24 @@ Map<String, String> buildMpvOptions({
     'config': 'no',
     'load-scripts': 'yes',
     'osc': 'no',
-    'osd-level': '0',
+    'osd-level': '1',
     'osd-bar': 'no',
     'osd-on-seek': 'no',
-    'input-default-bindings': 'yes',
+    // Keys are handled by Flutter (and by our Lua OSD), so mpv's built-in
+    // bindings must not fight the focus engine for arrows and space.
+    'input-default-bindings': 'no',
     'input-vo-keyboard': 'yes',
     'input-gamepad': 'no',
     'cursor-autohide': '1000',
     'idle': 'yes',
-    'keep-open': 'no',
+    // keep-open keeps the last frame and the video window alive after EOF;
+    // without it the surface is torn down and the app flashes black.
+    'keep-open': 'yes',
+    // force-window makes the child window exist before the first frame, which
+    // is what lets the host measure and fit it immediately.
+    'force-window': 'yes',
     'terminal': 'no',
-    'msg-level': 'all=warn',
+    'msg-level': 'all=info',
 
     // Video output: gpu-next on D3D11 is what gives the reference build its
     // HDR handling; gpu-hq supplies the peak percentile / contrast recovery
@@ -155,6 +163,9 @@ Map<String, String> buildMpvOptions({
 
   if (wid != null) {
     options['wid'] = '$wid';
+  }
+  if (logFile != null) {
+    options['log-file'] = logFile;
   }
   if (osdScriptPath.isNotEmpty) {
     options['script'] = osdScriptPath;

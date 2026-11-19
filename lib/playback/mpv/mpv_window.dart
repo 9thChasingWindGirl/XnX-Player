@@ -3,61 +3,306 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
-/// Resolves the handle of our own top-level window, so mpv can render into the
-/// app instead of opening a separate player window.
+/// A plain rectangle in device pixels. Kept free of Flutter types so the whole
+/// window layer can be unit-tested without a renderer.
+class WindowBox {
+  const WindowBox(this.left, this.top, this.width, this.height);
+
+  final int left;
+  final int top;
+  final int width;
+  final int height;
+
+  bool get isEmpty => width <= 0 || height <= 0;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WindowBox &&
+      other.left == left &&
+      other.top == top &&
+      other.width == width &&
+      other.height == height;
+
+  @override
+  int get hashCode => Object.hash(left, top, width, height);
+
+  @override
+  String toString() => 'WindowBox($left,$top ${width}x$height)';
+}
+
+class ChildWindow {
+  const ChildWindow(this.handle, this.className, this.box);
+
+  final int handle;
+  final String className;
+  final WindowBox box;
+
+  @override
+  String toString() => 'ChildWindow(0x${handle.toRadixString(16)} $className $box)';
+}
+
+final class _Rect extends Struct {
+  @Int32()
+  external int left;
+
+  @Int32()
+  external int top;
+
+  @Int32()
+  external int right;
+
+  @Int32()
+  external int bottom;
+}
+
+typedef _EnumProcNative = Int32 Function(IntPtr hwnd, IntPtr param);
+typedef _EnumProcDart = int Function(int hwnd, int param);
+
+/// Win32 plumbing for hosting mpv inside our Flutter window.
 ///
-/// Safety matters here: handing mpv a foreign HWND would paint video into
-/// somebody else's window, so the process id is verified before returning any
-/// handle that did not come from an exact title match.
-int? appWindowHandle({String title = 'XnX Player'}) {
-  if (!Platform.isWindows) {
-    return null;
-  }
-  try {
-    final DynamicLibrary user32 = DynamicLibrary.open('user32.dll');
-    final DynamicLibrary kernel32 = DynamicLibrary.open('kernel32.dll');
+/// Why a container window instead of passing the runner handle straight to mpv:
+/// `wid` semantics differ between mpv builds — some create a *child* window
+/// under the given handle, others draw into it directly. A container makes both
+/// cases harmless: video can never land on the Flutter surface, and we always
+/// have one rectangle we own and can move, hide and re-fit.
+///
+/// This mirrors Zerk Play 2.0's `VideoHost` (a method channel to
+/// `windows/runner/video_host.cpp`) with one difference: the container is
+/// created here through FFI, so the CI-generated runner template stays stock.
+class Win32 {
+  Win32._();
 
-    final int Function(Pointer<Utf16>, Pointer<Utf16>) findWindow =
-        user32.lookupFunction<IntPtr Function(Pointer<Utf16>, Pointer<Utf16>),
-            int Function(Pointer<Utf16>, Pointer<Utf16>)>('FindWindowW');
-    final int Function() getForegroundWindow =
-        user32.lookupFunction<IntPtr Function(), int Function()>('GetForegroundWindow');
-    final int Function() getActiveWindow = user32.lookupFunction<IntPtr Function(), int Function()>('GetActiveWindow');
-    final int Function(int, Pointer<Uint32>) getWindowThreadProcessId =
-        user32.lookupFunction<Uint32 Function(IntPtr, Pointer<Uint32>), int Function(int, Pointer<Uint32>)>(
-      'GetWindowThreadProcessId',
-    );
-    final int Function() getCurrentProcessId = kernel32.lookupFunction<Uint32 Function(), int Function()>(
-      'GetCurrentProcessId',
-    );
+  static final DynamicLibrary _user32 = DynamicLibrary.open('user32.dll');
+  static final DynamicLibrary _kernel32 = DynamicLibrary.open('kernel32.dll');
 
-    final Pointer<Utf16> titlePtr = title.toNativeUtf16();
-    try {
-      final int byTitle = findWindow(nullptr, titlePtr);
-      if (byTitle != 0) {
-        return byTitle;
-      }
-    } finally {
-      calloc.free(titlePtr);
+  /// Class name registered by the stock Flutter Windows runner.
+  static const String runnerClass = 'FLUTTER_RUNNER_WIN32_WINDOW';
+
+  /// Class name of the child window the embedder draws into.
+  static const String flutterViewClass = 'FLUTTERVIEW';
+
+  static const String _hostClass = 'STATIC';
+
+  static const int _wsChild = 0x40000000;
+  static const int _wsClipSiblings = 0x04000000;
+  static const int _wsClipChildren = 0x02000000;
+  static const int _hwndTop = 0;
+  static const int _swpNoActivate = 0x0010;
+  static const int _swpShowWindow = 0x0040;
+  static const int _swShow = 5;
+  static const int _swHide = 0;
+
+  static final int Function(Pointer<Utf16>, Pointer<Utf16>) _findWindow =
+      _user32.lookupFunction<IntPtr Function(Pointer<Utf16>, Pointer<Utf16>),
+          int Function(Pointer<Utf16>, Pointer<Utf16>)>('FindWindowW');
+
+  static final int Function(int, int, Pointer<Utf16>, Pointer<Utf16>, int, int, int, int, int, int, int, int, int)
+      _createWindowEx = _user32.lookupFunction<
+          IntPtr Function(Uint32, Pointer<Utf16>, Pointer<Utf16>, Uint32, Int32, Int32, Int32, Int32,
+              IntPtr, IntPtr, IntPtr, IntPtr),
+          int Function(int, int, Pointer<Utf16>, Pointer<Utf16>, int, int, int, int, int, int, int,
+              int, int)>('CreateWindowExW');
+
+  static final int Function(int) _destroyWindow =
+      _user32.lookupFunction<Int32 Function(IntPtr), int Function(int)>('DestroyWindow');
+
+  static final int Function(int, Pointer<_Rect>) _getClientRect =
+      _user32.lookupFunction<Int32 Function(IntPtr, Pointer<_Rect>),
+          int Function(int, Pointer<_Rect>)>('GetClientRect');
+
+  static final int Function(int, int, int, int, int) _moveWindow =
+      _user32.lookupFunction<Int32 Function(IntPtr, Int32, Int32, Int32, Int32, Int32),
+          int Function(int, int, int, int, int)>('MoveWindow');
+
+  static final int Function(int, int, int, int, int, int, int) _setWindowPos =
+      _user32.lookupFunction<Int32 Function(IntPtr, IntPtr, Int32, Int32, Int32, Int32, Uint32),
+          int Function(int, int, int, int, int, int, int)>('SetWindowPos');
+
+  static final int Function(int, int) _showWindow =
+      _user32.lookupFunction<Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow');
+
+  static final int Function(int) _isWindow =
+      _user32.lookupFunction<Int32 Function(IntPtr), int Function(int)>('IsWindow');
+
+  static final int Function(int, Pointer<Utf16>, int) _getClassNameW =
+      _user32.lookupFunction<Int32 Function(IntPtr, Pointer<Utf16>, Int32),
+          int Function(int, Pointer<Utf16>, int)>('GetClassNameW');
+
+  static final int Function(int, Pointer<NativeFunction<_EnumProcNative>>, int) _enumChildWindows =
+      _user32.lookupFunction<Int32 Function(IntPtr, Pointer<NativeFunction<_EnumProcNative>>, IntPtr),
+              int Function(int, Pointer<NativeFunction<_EnumProcNative>>, int)>('EnumChildWindows');
+
+  static final int Function(Pointer<NativeFunction<_EnumProcNative>>, int) _enumWindows =
+      _user32.lookupFunction<Int32 Function(Pointer<NativeFunction<_EnumProcNative>>, IntPtr),
+          int Function(Pointer<NativeFunction<_EnumProcNative>>, int)>('EnumWindows');
+
+  static final int Function(int, Pointer<Uint32>) _getWindowThreadProcessId =
+      _user32.lookupFunction<Uint32 Function(IntPtr, Pointer<Uint32>),
+          int Function(int, Pointer<Uint32>)>('GetWindowThreadProcessId');
+
+  static final int Function() _getCurrentProcessId =
+      _kernel32.lookupFunction<Uint32 Function(), int Function()>('GetCurrentProcessId');
+
+  static final int Function(Pointer<Utf16>) _getModuleHandle =
+      _kernel32.lookupFunction<IntPtr Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>(
+    'GetModuleHandleW',
+  );
+
+  /// Finds our own top-level window.
+  ///
+  /// The stock runner registers [runnerClass], which is unique to our process,
+  /// so no title matching (and no "did I grab somebody else's window" risk) is
+  /// involved. A pid-checked enumeration is the fallback for custom runners.
+  static int? appWindow() {
+    if (!Platform.isWindows) {
+      return null;
     }
+    final int self = _getCurrentProcessId();
+    final int byClass = _findWindow(runnerClass.toNativeUtf16(), nullptr);
+    if (byClass != 0 && _windowProcessId(byClass) == self) {
+      return byClass;
+    }
+    int found = 0;
+    final NativeCallable<_EnumProcNative> callable =
+        NativeCallable<_EnumProcNative>.isolateLocal((int hwnd, int _) {
+      if (found != 0) {
+        return 0;
+      }
+      if (_windowProcessId(hwnd) == self) {
+        found = hwnd;
+        return 0;
+      }
+      return 1;
+    });
+    try {
+      _enumWindows(callable.nativeFunction, 0);
+    } finally {
+      callable.close();
+    }
+    return found == 0 ? null : found;
+  }
 
-    final int self = getCurrentProcessId();
-    for (final int candidate in <int>[getForegroundWindow(), getActiveWindow()]) {
-      if (candidate == 0) {
+  /// Creates the container mpv renders into. Not visible until [setVisible].
+  static int? createHost(int parent, WindowBox box) {
+    if (!Platform.isWindows || parent == 0 || box.isEmpty) {
+      return null;
+    }
+    final int handle = _createWindowEx(
+      0,
+      _hostClass.toNativeUtf16(),
+      nullptr,
+      _wsChild | _wsClipChildren | _wsClipSiblings,
+      box.left,
+      box.top,
+      box.width,
+      box.height,
+      parent,
+      0,
+      _getModuleHandle(nullptr),
+      0,
+    );
+    return handle == 0 ? null : handle;
+  }
+
+  static void destroy(int hwnd) {
+    if (hwnd != 0) {
+      _destroyWindow(hwnd);
+    }
+  }
+
+  static bool isWindow(int hwnd) => hwnd != 0 && _isWindow(hwnd) != 0;
+
+  static int? _windowProcessId(int hwnd) {
+    final Pointer<Uint32> pid = calloc<Uint32>();
+    try {
+      _getWindowThreadProcessId(hwnd, pid);
+      return pid.value;
+    } finally {
+      calloc.free(pid);
+    }
+  }
+
+  static WindowBox? clientBox(int hwnd) {
+    if (hwnd == 0 || _isWindow(hwnd) == 0) {
+      return null;
+    }
+    final Pointer<_Rect> rect = calloc<_Rect>();
+    try {
+      if (_getClientRect(hwnd, rect) == 0) {
+        return null;
+      }
+      final _Rect value = rect.ref;
+      return WindowBox(value.left, value.top, value.right - value.left, value.bottom - value.top);
+    } finally {
+      calloc.free(rect);
+    }
+  }
+
+  static String _className(int hwnd) {
+    const int capacity = 256;
+    final Pointer<Utf16> buffer = calloc<Uint16>(capacity).cast<Utf16>();
+    try {
+      return _getClassNameW(hwnd, buffer, capacity) <= 0 ? '' : buffer.toDartString();
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  /// Every direct child of [parent], with class name and client box.
+  static List<ChildWindow> children(int parent) {
+    final List<ChildWindow> result = <ChildWindow>[];
+    final NativeCallable<_EnumProcNative> callable =
+        NativeCallable<_EnumProcNative>.isolateLocal((int hwnd, int _) {
+      final WindowBox? box = clientBox(hwnd);
+      result.add(ChildWindow(hwnd, _className(hwnd), box ?? const WindowBox(0, 0, 0, 0)));
+      return 1;
+    });
+    try {
+      _enumChildWindows(parent, callable.nativeFunction, 0);
+    } finally {
+      callable.close();
+    }
+    return result;
+  }
+
+  /// The surface mpv actually paints into.
+  ///
+  /// If mpv created a child under our container we return the widest one; if it
+  /// painted into the container itself we return null and the caller keeps using
+  /// the container rectangle. Flutter's own view is always excluded.
+  static int? videoChild(int parent) {
+    int best = 0;
+    int bestArea = 0;
+    for (final ChildWindow child in children(parent)) {
+      if (child.className == flutterViewClass || child.className == runnerClass) {
         continue;
       }
-      final Pointer<Uint32> pidPtr = calloc<Uint32>();
-      try {
-        getWindowThreadProcessId(candidate, pidPtr);
-        if (pidPtr.value == self) {
-          return candidate;
-        }
-      } finally {
-        calloc.free(pidPtr);
+      if (child.box.isEmpty) {
+        continue;
+      }
+      final int area = child.box.width * child.box.height;
+      if (area > bestArea) {
+        bestArea = area;
+        best = child.handle;
       }
     }
-    return null;
-  } catch (_) {
-    return null;
+    return best == 0 ? null : best;
+  }
+
+  /// Fits [hwnd] to [box] and raises it above the Flutter view.
+  static bool fit(int hwnd, WindowBox box) {
+    if (hwnd == 0 || box.isEmpty || _isWindow(hwnd) == 0) {
+      return false;
+    }
+    final bool moved = _moveWindow(hwnd, box.left, box.top, box.width, box.height, 1) != 0;
+    _setWindowPos(hwnd, _hwndTop, 0, 0, 0, 0, _swpNoActivate | _swpShowWindow);
+    return moved;
+  }
+
+  static void setVisible(int hwnd, {required bool visible}) {
+    if (hwnd == 0 || _isWindow(hwnd) == 0) {
+      return;
+    }
+    _showWindow(hwnd, visible ? _swShow : _swHide);
   }
 }

@@ -126,6 +126,17 @@ class MpvPlayer {
   final StreamController<MpvClientEvent> _clientEvents = StreamController<MpvClientEvent>.broadcast();
   final StreamController<bool> _fileLoaded = StreamController<bool>.broadcast();
 
+  /// Last few lines mpv emitted at the requested message level. Surfaced in the
+  /// player's diagnostics panel so a black screen turns into a readable error
+  /// instead of a guessing game.
+  final List<String> _logs = <String>[];
+  final ValueNotifier<int> logRevision = ValueNotifier<int>(0);
+
+  /// Set when mpv reports a failed load (`mpv_end_file_reason` = error).
+  final ValueNotifier<String?> lastError = ValueNotifier<String?>(null);
+
+  static const int _maxLogLines = 60;
+
   Pointer<Void>? _handle;
   NativeCallable<Void Function(Pointer<Void>)>? _wakeup;
   bool _disposed = false;
@@ -137,9 +148,16 @@ class MpvPlayer {
 
   bool get isInitialized => _initialized;
 
+  /// Immutable snapshot of the buffered mpv log lines.
+  List<String> get logs => List<String>.unmodifiable(_logs);
+
   LibMpv get _mpv => LibMpv.instance;
 
-  void start({required Map<String, String> options, String? logFile}) {
+  void start({
+    required Map<String, String> options,
+    String? logFile,
+    String logLevel = 'info',
+  }) {
     if (_handle != null) {
       throw StateError('mpv already started');
     }
@@ -168,6 +186,20 @@ class MpvPlayer {
 
     _mpv.setWakeupCallback(handle, _listener().nativeFunction, nullptr);
     _observe();
+    _requestLogs(logLevel);
+  }
+
+  void _requestLogs(String level) {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null) {
+      return;
+    }
+    final Pointer<Utf8> levelPtr = level.toNativeUtf8();
+    try {
+      _mpv.requestLogMessages(handle, levelPtr);
+    } finally {
+      calloc.free(levelPtr);
+    }
   }
 
   NativeCallable<Void Function(Pointer<Void>)> _listener() {
@@ -237,7 +269,10 @@ class MpvPlayer {
         }
         break;
       case mpvEventEndFile:
-        state.value = state.value.copyWith(eof: true, buffering: false);
+        _handleEndFile(event);
+        break;
+      case mpvEventLogMessage:
+        _handleLogMessage(event);
         break;
       case mpvEventClientMessage:
         _handleClientMessage(event);
@@ -247,6 +282,42 @@ class MpvPlayer {
       default:
         break;
     }
+  }
+
+  void _handleEndFile(MpvEvent event) {
+    state.value = state.value.copyWith(eof: true, buffering: false);
+    if (event.data.address == 0) {
+      return;
+    }
+    final MpvEventEndFile end = event.data.cast<MpvEventEndFile>().ref;
+    if (end.error < 0) {
+      lastError.value = '${_mpv.errorText(end.error)} (${end.error})';
+    }
+  }
+
+  void _handleLogMessage(MpvEvent event) {
+    if (event.data.address == 0) {
+      return;
+    }
+    final MpvEventLogMessage message = event.data.cast<MpvEventLogMessage>().ref;
+    final StringBuffer buffer = StringBuffer();
+    if (message.prefix.address != 0) {
+      buffer.write('[');
+      buffer.write(message.prefix.toDartString());
+      buffer.write('] ');
+    }
+    if (message.text.address != 0) {
+      buffer.write(message.text.toDartString().trimRight());
+    }
+    final String line = buffer.toString();
+    if (line.isEmpty) {
+      return;
+    }
+    _logs.add(line);
+    if (_logs.length > _maxLogLines) {
+      _logs.removeRange(0, _logs.length - _maxLogLines);
+    }
+    logRevision.value = logRevision.value + 1;
   }
 
   void _handlePropertyChange(MpvEvent event) {
@@ -450,6 +521,8 @@ class MpvPlayer {
     _wakeup = null;
     _clientEvents.close();
     _fileLoaded.close();
+    lastError.dispose();
+    logRevision.dispose();
     state.dispose();
   }
 }

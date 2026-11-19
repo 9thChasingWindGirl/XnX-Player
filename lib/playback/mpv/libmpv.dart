@@ -73,6 +73,15 @@ final class MpvEventEndFile extends Struct {
   external int playlistInsertNumEntries;
 }
 
+final class MpvEventLogMessage extends Struct {
+  external Pointer<Utf8> prefix;
+  external Pointer<Utf8> level;
+  external Pointer<Utf8> text;
+
+  @Int32()
+  external int logLevel;
+}
+
 final class MpvNodeUnion extends Union {
   external Pointer<Utf8> string;
 
