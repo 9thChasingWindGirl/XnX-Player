@@ -23,10 +23,13 @@ class MpvAssets {
 
     final String exeDir = File(Platform.resolvedExecutable).parent.path;
     final String sep = Platform.pathSeparator;
+
+    String beside(String tail) => '$exeDir$sep${tail.replaceAll('/', sep)}$sep$scriptName';
+
     final List<String> candidates = <String>[
-      '$exeDir${sep}data${sep}flutter_assets${sep}assets${sep}mpv${sep}$scriptName',
-      '$exeDir${sep}assets${sep}mpv${sep}$scriptName',
-      '$exeDir${sep}data${sep}assets${sep}mpv${sep}$scriptName',
+      beside('data/flutter_assets/assets/mpv'),
+      beside('assets/mpv'),
+      beside('data/assets/mpv'),
     ];
 
     for (final String candidate in candidates) {
@@ -42,7 +45,7 @@ class MpvAssets {
       if (!dir.existsSync()) {
         dir.createSync(recursive: true);
       }
-      final File file = File('${dir.path}${sep}$scriptName');
+      final File file = File('${dir.path}$sep$scriptName');
       await file.writeAsBytes(
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
         flush: true,

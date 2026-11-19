@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -182,7 +182,7 @@ class _LoadingPanel extends StatelessWidget {
             const SizedBox(height: PsSpace.lg),
             Text(title, style: PsType.card, textAlign: TextAlign.center),
             const SizedBox(height: PsSpace.xs),
-            Text('正在打开媒体…', style: PsType.micro),
+            const Text('正在打开媒体…', style: PsType.micro),
           ],
         ),
       ),
@@ -207,11 +207,11 @@ class _ErrorPanel extends StatelessWidget {
           children: <Widget>[
             const Icon(Icons.error_outline_rounded, size: 56, color: PsColor.danger),
             const SizedBox(height: PsSpace.lg),
-            Text('无法播放', style: PsType.page),
+            const Text('无法播放', style: PsType.page),
             const SizedBox(height: PsSpace.md),
             Text(message, style: PsType.body),
             const SizedBox(height: PsSpace.xl),
-            Text('按 Esc 返回', style: PsType.micro),
+            const Text('按 Esc 返回', style: PsType.micro),
           ],
         ),
       ),

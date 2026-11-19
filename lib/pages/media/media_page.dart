@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_zone.dart';
@@ -36,9 +36,9 @@ class MediaPage extends StatelessWidget {
           bottom: 160,
         ),
         children: <Widget>[
-          Text('媒体来源', style: PsType.page),
+          const Text('媒体来源', style: PsType.page),
           const SizedBox(height: PsSpace.xs),
-          Text('接入服务器与网盘，统一成同一个媒体库。', style: PsType.body),
+          const Text('接入服务器与网盘，统一成同一个媒体库。', style: PsType.body),
           const SizedBox(height: PsSpace.xl),
           FocusZone(
             id: 'sources',

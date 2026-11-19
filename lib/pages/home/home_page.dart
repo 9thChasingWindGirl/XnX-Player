@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
@@ -52,8 +52,10 @@ class _Backdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
+    // One const tree: three layered gradients (stage wash + two corner glows +
+    // a left-to-right scrim that keeps hero text legible over bright key art).
+    return const DecoratedBox(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -73,7 +75,7 @@ class _Backdrop extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   radius: 0.62,
-                  colors: <Color>[const Color(0x3D4A6EA8), const Color(0x00000000)],
+                  colors: <Color>[Color(0x3D4A6EA8), Color(0x00000000)],
                 ),
               ),
             ),
@@ -87,17 +89,21 @@ class _Backdrop extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   radius: 0.6,
-                  colors: <Color>[const Color(0x1F2C4A6E), const Color(0x00000000)],
+                  colors: <Color>[Color(0x1F2C4A6E), Color(0x00000000)],
                 ),
               ),
             ),
           ),
-          const DecoratedBox(
+          DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.centerLeft,
                 end: Alignment.centerRight,
-                colors: <Color>[Color(0xB3000000), Color(0x1A000000), Color(0x00000000)],
+                colors: <Color>[
+                  Color(0xB3000000),
+                  Color(0x1A000000),
+                  Color(0x00000000),
+                ],
                 stops: <double>[0.0, 0.45, 0.75],
               ),
             ),

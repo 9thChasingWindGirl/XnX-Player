@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../design/ps_tokens.dart';
 import '../core/tv_focusable.dart';

@@ -1,6 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../design/ps_tokens.dart';
 import '../ui/core/focus_zone.dart';
@@ -68,7 +68,7 @@ class _Dock extends StatelessWidget {
                 height: 216,
                 child: FocusZone(
                   id: 'dock-cards',
-                  child: ListView(
+                  child: ListView.separated(
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: PsSpace.safeX),
                     itemCount: 3,

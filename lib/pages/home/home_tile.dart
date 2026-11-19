@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
