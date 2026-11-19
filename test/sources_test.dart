@@ -102,8 +102,16 @@ http://stream/2.m3u8
       expect(items.length, 2);
       expect(items.first.title, 'Movies');
       expect(items.first.kind, MediaKind.folder);
+      expect(items.first.path, '/dav/Movies/');
       expect(items.last.title, 'Blade Runner 2049');
       expect(items.last.path, '/dav/Movies/Blade.Runner.2049.mkv');
+      // Regression: rebuilding an absolute URL from the request URI used to
+      // leave a dangling '?' and turn every path into a query string.
+      expect(
+        items.every((MediaItem item) => (item.path ?? '').isNotEmpty),
+        isTrue,
+        reason: 'href 应当被当作路径解析，而不是相对请求地址重新拼接',
+      );
     });
   });
 

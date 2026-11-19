@@ -162,10 +162,30 @@ class AListSource extends MediaSource {
 }
 
 /// Plain WebDAV (CloudDrive2, Nextcloud, Alist's dav endpoint, ...).
+///
+/// URLs are composed as `scheme://authority` + an absolute server path. WebDAV
+/// hrefs are always rooted at the server, so keeping the configured URL's own
+/// path prefix inside `_base` would duplicate it: with
+/// `https://host/remote.php/dav/files/me` a listing of `/remote.php/dav/...`
+/// would come out as `/remote.php/dav/files/me/remote.php/dav/...`.
 class WebDavSource extends MediaSource {
   WebDavSource(super.config);
 
-  String get _base => trimSlashes(config.url);
+  Uri get _url => Uri.tryParse(
+        config.url.contains('://') ? config.url.trim() : 'http://${config.url.trim()}',
+      ) ??
+      Uri();
+
+  String get _origin =>
+      _url.host.isEmpty ? '' : '${_url.scheme}://${_url.authority}';
+
+  /// Absolute server path the browser starts at: the configured sub-path when
+  /// present, otherwise whatever path the configured URL carried.
+  String get _rootPath {
+    final String configured = config.path.trim().isNotEmpty ? config.path.trim() : _url.path;
+    final String normalized = _normalizePath(configured);
+    return normalized == '/' ? '/' : '$normalized/';
+  }
 
   Map<String, String> get _headers => <String, String>{
         'Authorization': Http.basic(config.username, config.password),
@@ -179,14 +199,14 @@ class WebDavSource extends MediaSource {
 
   @override
   Future<List<MediaItem>> browse() async {
-    if (_base.isEmpty) {
+    if (_origin.isEmpty) {
       throw const SourceException('请填写 WebDAV 地址');
     }
-    return _list(config.path.isEmpty ? '/' : config.path);
+    return _list(_rootPath);
   }
 
   Future<List<MediaItem>> _list(String path) async {
-    final Uri uri = Uri.parse('$_base${path.startsWith('/') ? path : '/$path'}');
+    final Uri uri = Uri.parse('$_origin${path.startsWith('/') ? path : '/$path'}');
     final HttpResult result = await Http.propfind(uri, _body, headers: _headers);
     if (result.status == 401) {
       throw const SourceException('WebDAV 认证失败');
@@ -208,7 +228,7 @@ class WebDavSource extends MediaSource {
     if (path.startsWith('http')) {
       return path;
     }
-    return '$_base${path.startsWith('/') ? path : '/$path'}';
+    return '$_origin${path.startsWith('/') ? path : '/$path'}';
   }
 
   @override
@@ -221,7 +241,6 @@ class WebDavSource extends MediaSource {
 List<MediaItem> parseWebDav(String xml, String sourceId, Uri requestUri, String requestPath) {
   final XmlNode root = parseXml(xml);
   final List<MediaItem> out = <MediaItem>[];
-  final Uri origin = requestUri.replace(path: '', query: '');
 
   for (final XmlNode response in root.descendants('response')) {
     final List<XmlNode> hrefs = response.descendants('href');
@@ -254,10 +273,30 @@ List<MediaItem> parseWebDav(String xml, String sourceId, Uri requestUri, String 
       continue;
     }
 
-    final Uri absolute = rawHref.startsWith('http')
-        ? Uri.parse(rawHref)
-        : Uri.parse('${origin.toString()}$rawHref');
-    final String path = absolute.path;
+    // A WebDAV href is already rooted at the server ("/dav/Movies/x.mkv"), so
+    // it is a path, not something to resolve against the request URI. The
+    // previous version rebuilt an absolute URL with
+    // `requestUri.replace(query: '')`; that sets an *empty* query rather than
+    // clearing it, so toString() produced "http://host?" and everything after
+    // it parsed as a query string — leaving every path empty.
+    final Uri? parsedHref = Uri.tryParse(decoded);
+    final String rawPath;
+    if (parsedHref != null && parsedHref.hasScheme) {
+      rawPath = parsedHref.path; // Some servers return absolute URLs.
+    } else if (decoded.startsWith('/')) {
+      rawPath = decoded;
+    } else {
+      final String base = requestUri.path.endsWith('/')
+          ? requestUri.path
+          : '${requestUri.path}/';
+      rawPath = '$base$decoded';
+    }
+    String path = _normalizePath(rawPath);
+    // Keep the trailing slash on collections: PROPFIND on "/dav/Movies" 301s
+    // to "/dav/Movies/" and dart:io does not re-send a non-GET method.
+    if (isDir && path != '/') {
+      path = '$path/';
+    }
     final int size = int.tryParse(_descendantText(response, 'getcontentlength')) ?? 0;
 
     out.add(
