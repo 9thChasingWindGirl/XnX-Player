@@ -3,19 +3,16 @@ import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
-import '../core/strings.dart';
-import '../data/models/media_item.dart';
-import '../data/store.dart';
-import '../design/ps_motion.dart';
-import '../design/ps_tokens.dart';
-import '../ui/core/focus_highlight.dart';
-import '../ui/core/focus_zone.dart';
-import '../ui/core/motion_clock.dart';
-import '../ui/core/tv_focusable.dart';
-import '../ui/widgets/ps_backdrop.dart';
-import '../ui/widgets/ps_button.dart';
-import '../ui/widgets/ps_page.dart';
-import 'home/home_tile.dart';
+import '../../core/strings.dart';
+import '../../data/models/media_item.dart';
+import '../../data/store.dart';
+import '../../design/ps_motion.dart';
+import '../../design/ps_tokens.dart';
+import '../../ui/core/motion_clock.dart';
+import '../../ui/core/tv_focusable.dart';
+import '../../ui/widgets/ps_button.dart';
+import '../../ui/widgets/ps_page.dart';
+import '../home/home_tile.dart';
 
 /// Game hub: the page a cover opens into.
 ///

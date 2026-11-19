@@ -8,8 +8,8 @@ import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
 import '../../data/sources/media_source.dart';
 import '../../design/ps_tokens.dart';
-import '../core/text_entry.dart';
-import '../widgets/ps_button.dart';
+import '../../ui/core/text_entry.dart';
+import '../../ui/widgets/ps_button.dart';
 
 /// Add / edit a backend.
 ///

@@ -17,10 +17,12 @@ class TopStatusBar extends StatefulWidget {
     super.key,
     required this.tabIndex,
     required this.onTabSelected,
+    required this.onSearch,
   });
 
   final int tabIndex;
   final ValueChanged<int> onTabSelected;
+  final VoidCallback onSearch;
 
   @override
   State<TopStatusBar> createState() => _TopStatusBarState();
@@ -122,7 +124,7 @@ class _TopStatusBarState extends State<TopStatusBar> {
                 TvFocusable(
                   radius: PsRadius.pill,
                   showRing: false,
-                  onSelect: () => widget.onTabSelected(1),
+                  onSelect: widget.onSearch,
                   child: Padding(
                     padding: const EdgeInsets.all(8),
                     child: Icon(Icons.search_rounded, size: 26, color: PsColor.text),

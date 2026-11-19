@@ -12,6 +12,7 @@ import '../design/ps_tokens.dart';
 import '../pages/home/home_page.dart';
 import '../pages/hub/hub_page.dart';
 import '../pages/media/media_page.dart';
+import '../pages/search/search_page.dart';
 import '../pages/settings/settings_page.dart';
 import '../player/player_page.dart';
 import '../ui/core/focus_highlight.dart';
@@ -43,6 +44,13 @@ class _ShellPageState extends State<ShellPage> {
   int _tab = 0;
   final Set<int> _visited = <int>{0};
   bool _ccOpen = false;
+  bool _searchOpen = false;
+
+  /// Number of pushed routes (hub, player) above the shell. While any is open
+  /// the shell must stay out of the keyboard: its handlers are registered
+  /// first, so otherwise it would eat F1/Space/arrows that belong to the
+  /// player's own bindings.
+  int _routes = 0;
 
   @override
   void initState() {
@@ -62,9 +70,17 @@ class _ShellPageState extends State<ShellPage> {
     if (event is! KeyDownEvent) {
       return false;
     }
+    if (_routes > 0) {
+      return false;
+    }
     final LogicalKeyboardKey key = event.logicalKey;
 
     if (key == LogicalKeyboardKey.escape) {
+      if (_searchOpen) {
+        setState(() => _searchOpen = false);
+        FocusNavigator.focusFirst();
+        return true;
+      }
       if (_ccOpen) {
         setState(() => _ccOpen = false);
         return true;
@@ -77,6 +93,11 @@ class _ShellPageState extends State<ShellPage> {
       return false;
     }
 
+    if (key == LogicalKeyboardKey.slash ||
+        (key == LogicalKeyboardKey.keyF && HardwareKeyboard.instance.isControlPressed)) {
+      _openSearch();
+      return true;
+    }
     if (key == LogicalKeyboardKey.tab) {
       setState(() => _ccOpen = !_ccOpen);
       return true;
@@ -136,11 +157,28 @@ class _ShellPageState extends State<ShellPage> {
 
   void _onControlCenter(CcItem item) {
     setState(() => _ccOpen = false);
-    if (item.id == 'home') {
-      _selectTab(0);
-    } else if (item.id == 'downloads' || item.id == 'music') {
-      _selectTab(1);
+    switch (item.id) {
+      case 'home':
+        _selectTab(0);
+      case 'downloads' || 'music':
+        _selectTab(1);
+      case 'search':
+        _openSearch();
+      default:
+        break;
     }
+  }
+
+  void _openSearch() {
+    setState(() {
+      _searchOpen = true;
+      _ccOpen = false;
+    });
+  }
+
+  void _closeSearch() {
+    setState(() => _searchOpen = false);
+    FocusNavigator.focusFirst();
   }
 
   void _addSource() {
@@ -154,8 +192,17 @@ class _ShellPageState extends State<ShellPage> {
     });
   }
 
-  Future<void> _play(MediaItem item) async {
-    await Navigator.of(context).push<void>(
+  Future<void> _push(Route<void> route) async {
+    _routes++;
+    try {
+      await Navigator.of(context).push<void>(route);
+    } finally {
+      _routes--;
+    }
+  }
+
+  Future<void> _play(MediaItem item) {
+    return _push(
       PageRouteBuilder<void>(
         opaque: true,
         transitionDuration: PsMotion.slow,
@@ -171,8 +218,8 @@ class _ShellPageState extends State<ShellPage> {
     );
   }
 
-  Future<void> _openHub(MediaItem item) async {
-    await Navigator.of(context).push<void>(
+  Future<void> _openHub(MediaItem item) {
+    return _push(
       PageRouteBuilder<void>(
         opaque: true,
         transitionDuration: PsMotion.slow,
@@ -283,8 +330,26 @@ class _ShellPageState extends State<ShellPage> {
                       left: 0,
                       right: 0,
                       top: 0,
-                      child: TopStatusBar(tabIndex: _tab, onTabSelected: _selectTab),
+                      child: TopStatusBar(
+                        tabIndex: _tab,
+                        onTabSelected: _selectTab,
+                        onSearch: _openSearch,
+                      ),
                     ),
+                    if (_searchOpen)
+                      Positioned.fill(
+                        child: SearchOverlay(
+                          onPlay: (MediaItem item) {
+                            setState(() => _searchOpen = false);
+                            unawaited(_play(item));
+                          },
+                          onOpen: (MediaItem item) {
+                            setState(() => _searchOpen = false);
+                            unawaited(_openHub(item));
+                          },
+                          onClose: _closeSearch,
+                        ),
+                      ),
                   ],
                 ),
               ),

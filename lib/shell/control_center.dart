@@ -119,7 +119,8 @@ class _DockCard extends StatefulWidget {
 
 class _DockCardState extends State<_DockCard> {
   static const List<String> _titles = <String>['继续观看', '最近活动', '下载与上传'];
-  static const List<String> _subtitles = <String>['星际拾荒者 · S02E06', '本周 3 项', '无进行中的任务'];
+  static const List<String> _subtitles = <String>['接着上次的进度', '本机改动记录', '无进行中的任务'];
+  static const List<String> _targets = <String>['home', 'notifications', 'downloads'];
   static const List<List<Color>> _art = <List<Color>>[
     <Color>[Color(0xFF2B3B58), Color(0xFF101724)],
     <Color>[Color(0xFF3A2E4E), Color(0xFF171122)],
@@ -128,14 +129,26 @@ class _DockCardState extends State<_DockCard> {
 
   bool _focused = false;
 
+  /// Each card opens the dock entry it is named after. Firing the first item
+  /// for all three is the kind of placeholder that makes a UI feel dead.
+  CcItem get _target {
+    final String id = _targets[widget.index % _targets.length];
+    for (final CcItem item in kControlCenterItems) {
+      if (item.id == id) {
+        return item;
+      }
+    }
+    return kControlCenterItems.first;
+  }
+
   @override
   Widget build(BuildContext context) {
     final List<Color> art = _art[widget.index % _art.length];
     return TvFocusable(
       radius: PsRadius.cardLarge,
-      focusScale: 1.04,
+      highlightScale: 1.04,
       onFocused: (bool focused) => setState(() => _focused = focused),
-      onSelect: () => widget.onSelect(kControlCenterItems.first),
+      onSelect: () => widget.onSelect(_target),
       child: Container(
         width: 384,
         height: 216,
@@ -180,7 +193,7 @@ class _DockIconState extends State<_DockIcon> {
   Widget build(BuildContext context) {
     return TvFocusable(
       radius: PsRadius.card,
-      focusScale: 1.08,
+      highlightScale: 1.08,
       showShine: false,
       onFocused: (bool focused) => setState(() => _focused = focused),
       onSelect: () => widget.onSelect(widget.item),

@@ -110,14 +110,16 @@ http://stream/2.m3u8
   group('parseXml', () {
     test('strips namespace prefixes and reads attributes', () {
       final XmlNode root = parseXml('<a:root xmlns:a="x"><a:item id="1">hi</a:item></a:root>');
-      expect(root.name, 'root');
-      expect(root.descendants('item').first.attr('id'), '1');
-      expect(root.descendants('item').first.trimmed, 'hi');
+      final XmlNode? element = root.child('root');
+      expect(element, isNotNull);
+      expect(element!.name, 'root');
+      expect(element.descendants('item').first.attr('id'), '1');
+      expect(element.descendants('item').first.trimmed, 'hi');
     });
 
     test('decodes entities', () {
       final XmlNode root = parseXml('<t>a &amp; b &lt;c&gt;</t>');
-      expect(root.trimmed, 'a & b <c>');
+      expect(root.child('t')?.trimmed, 'a & b <c>');
     });
   });
 }

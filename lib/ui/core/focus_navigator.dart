@@ -86,6 +86,22 @@ class FocusNavigator {
     return false;
   }
 
+  /// Focuses the first item of one zone. Used when a text field hands the
+  /// keyboard back to the grid underneath it (search, dialogs): jumping to
+  /// "the first focusable in the app" would land on the top bar instead.
+  static bool focusIn(String zoneId) {
+    final FocusRegistry registry = FocusRegistry.instance;
+    registry.prune();
+    for (final FocusEntry entry in registry.entries) {
+      if (entry.zoneId == zoneId && entry.node.canRequestFocus) {
+        entry.node.requestFocus();
+        reveal(entry);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Requests focus for [entry] and scrolls it into view.
   static void reveal(FocusEntry entry) {
     if (!entry.context.mounted) {
