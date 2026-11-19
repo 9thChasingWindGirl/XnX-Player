@@ -517,6 +517,33 @@ class MpvPlayer {
   /// Convenience wrapper for boolean properties (`yes` / `no`).
   bool getPropertyFlag(String name) => getProperty(name) == 'yes';
 
+  /// Whether a script with this file name is registered with mpv.
+  ///
+  /// `script-list` reports names without the `.lua` suffix, so both sides are
+  /// normalised before comparing.
+  bool scriptLoaded(String name) {
+    final String? list = getProperty('script-list');
+    if (list == null) {
+      return false;
+    }
+    String bare(String s) => s.replaceAll('.lua', '').trim();
+    return bare(list).contains(bare(name));
+  }
+
+  /// Loads a Lua script and returns mpv's verdict.
+  ///
+  /// `--script=` before init is silent when the path is wrong: mpv just has no
+  /// script. Loading it afterwards through the command interface lets the
+  /// caller check `script-list` and show a real error instead of a player with
+  /// no UI.
+  bool loadScript(String path) {
+    final int rc = command(<String>['load-script', path]);
+    if (rc < 0) {
+      return false;
+    }
+    return scriptLoaded(path.split(RegExp(r'[\\/]')).last);
+  }
+
   void load(String path, {Duration startAt = Duration.zero}) {
     final String options =
         'start=${(startAt.inMilliseconds / 1000).toStringAsFixed(3)}';

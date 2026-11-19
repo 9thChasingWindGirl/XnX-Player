@@ -137,17 +137,23 @@ local function rrect_path(w, h, r)
   }, ' ')
 end
 
+-- `alpha` here is an OPACITY, 0x00 = invisible, 0xFF = solid, which is the
+-- opposite of ASS's \1a tag. Inverting it once here keeps every call site
+-- readable and stops the classic "I asked for a translucent panel and got a
+-- solid white block" mistake.
 local function rect(x, y, w, h, r, color, alpha)
   if w <= 0 or h <= 0 then
     return ''
   end
+  local opacity = 0xFF - math.max(0, math.min(0xFF, round(alpha or 0)))
   return string.format(
     '{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\1a&H%02X&}%s{\\p0}',
-    round(x), round(y), color, round(alpha), rrect_path(w, h, r)
+    round(x), round(y), color, opacity, rrect_path(w, h, r)
   )
 end
 
 local function triangle(x, y, s, dir, color, alpha)
+  local opacity = 0xFF - math.max(0, math.min(0xFF, round(alpha or 0)))
   local path
   if dir == 'left' then
     path = string.format('m %d 0 l 0 %d %d %d', round(s), round(s / 2), round(s), round(s))
@@ -156,7 +162,7 @@ local function triangle(x, y, s, dir, color, alpha)
   end
   return string.format(
     '{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\1a&H%02X&}%s{\\p0}',
-    round(x), round(y), color, round(alpha), path
+    round(x), round(y), color, opacity, path
   )
 end
 
@@ -1197,7 +1203,7 @@ local function draw_progress(parts)
       parts[#parts + 1] = rect(x, top, w * buffer_ratio, thickness, thickness / 2, WHITE, 0x1E)
     end
     if ratio > 0.0005 then
-      parts[#parts + 1] = rect(x, top, w * ratio, thickness, thickness / 2, WHITE, 0x00)
+      parts[#parts + 1] = rect(x, top, w * ratio, thickness, thickness / 2, WHITE, 0xFF)
       local knob = hovered and 16 or 12
       parts[#parts + 1] = rect(
         x + w * ratio - knob / 2,
@@ -1226,14 +1232,14 @@ local function draw_progress(parts)
       end
     end
   else
-    parts[#parts + 1] = rect(x, top, w, thickness, thickness / 2, WHITE, 0x00)
+    parts[#parts + 1] = rect(x, top, w, thickness, thickness / 2, WHITE, 0xFF)
   end
 
   -- Hover scrub bubble.
   if hovered and state.pointer and not live then
     local px = math.max(x, math.min(x + w, state.pointer.x))
     local target = (px - x) / w * duration
-    parts[#parts + 1] = rect(px - 1, top - 8, 2, thickness + 16, 1, WHITE, 0x00)
+    parts[#parts + 1] = rect(px - 1, top - 8, 2, thickness + 16, 1, WHITE, 0xFF)
     local label = fmt_time(target)
     local bw = measure(label, 20) + 24
     parts[#parts + 1] = rect(px - bw / 2, top - 46, bw, 32, 8, BLACK, 0xA0)
@@ -1275,7 +1281,7 @@ local function draw_scrim(parts)
 end
 
 local function draw_audio_stage(parts)
-  parts[#parts + 1] = rect(0, 0, W, H, 0, BLACK, 0x00)
+  parts[#parts + 1] = rect(0, 0, W, H, 0, BLACK, 0xFF)
   local title = clip(state.title ~= '' and state.title or state.fallback_title, 34)
   parts[#parts + 1] = text(W / 2, H / 2 - 150, 20, DIM, 0x00, '音频播放', 8, false)
   parts[#parts + 1] = text(W / 2, H / 2 - 110, 64, WHITE, 0x00, title, 8, true)
@@ -1446,7 +1452,7 @@ local function draw_menu(parts)
       local selected = (k == menu.index)
       local hovered = state.hover == ('row:' .. tostring(k))
       if selected then
-        parts[#parts + 1] = rect(left + 12, y + 3, MENU_W - 24, ROW_H - 6, 14, WHITE, 0x00)
+        parts[#parts + 1] = rect(left + 12, y + 3, MENU_W - 24, ROW_H - 6, 14, WHITE, 0xFF)
       elseif hovered then
         parts[#parts + 1] = rect(left + 12, y + 3, MENU_W - 24, ROW_H - 6, 14, WHITE, 0x1E)
       end
@@ -1454,7 +1460,7 @@ local function draw_menu(parts)
       local dim = selected and '&H3A3A3A&' or DIM
       local label = clip(row.label or '', 34)
       if row.active and not selected then
-        parts[#parts + 1] = rect(left + 24, y + ROW_H / 2 - 3, 6, 6, 3, WHITE, 0x00)
+        parts[#parts + 1] = rect(left + 24, y + ROW_H / 2 - 3, 6, 6, 3, WHITE, 0xFF)
       end
       local tx = left + 28
       if row.active and not selected then
@@ -1495,10 +1501,10 @@ local function draw_controls(parts)
   local play_hover = state.hover == 'button:play'
   parts[#parts + 1] = rect(SAFE, row_top, 52, 44, 12, WHITE, play_hover and 0x2A or 0x00)
   if state.paused then
-    parts[#parts + 1] = triangle(SAFE + 17, row_top + 10, 24, 'right', WHITE, 0x00)
+    parts[#parts + 1] = triangle(SAFE + 17, row_top + 10, 24, 'right', WHITE, 0xFF)
   else
-    parts[#parts + 1] = rect(SAFE + 17, row_top + 10, 7, 24, 2, WHITE, 0x00)
-    parts[#parts + 1] = rect(SAFE + 28, row_top + 10, 7, 24, 2, WHITE, 0x00)
+    parts[#parts + 1] = rect(SAFE + 17, row_top + 10, 7, 24, 2, WHITE, 0xFF)
+    parts[#parts + 1] = rect(SAFE + 28, row_top + 10, 7, 24, 2, WHITE, 0xFF)
   end
   add_hit({ id = 'button:play', x = SAFE, y = row_top, w = 52, h = 44, onClick = toggle_pause })
 

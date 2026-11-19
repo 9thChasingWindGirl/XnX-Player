@@ -16,7 +16,9 @@ class PlaybackPrefs {
     // opt-in from 设置 → 播放.
     this.passthrough = PassthroughPref.off,
     this.hdrPassthrough = true,
-    this.smoothMotion = true,
+    // Off by default: interpolation + display-resample needs a spare GPU and a
+    // live audio clock to work, and costs frames when either is missing.
+    this.smoothMotion = false,
     this.volume = 80,
     this.deband = false,
     this.reduceMotion = false,

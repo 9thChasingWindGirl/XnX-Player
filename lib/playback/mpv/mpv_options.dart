@@ -14,7 +14,10 @@ class MpvSettings {
     this.quality = VideoQuality.balanced,
     this.hwdec = 'auto-safe',
     this.hdrPassthrough = true,
-    this.smoothMotion = true,
+    // Off by default, like the reference build: interpolation plus
+    // display-resample needs a spare GPU and a working audio clock, and when
+    // either is missing the picture stalls on its first frame. Opt-in.
+    this.smoothMotion = false,
     this.audioPassthrough = AudioPassthrough.off,
     this.deband = false,
     this.volume = 80,
@@ -64,7 +67,9 @@ Map<String, String> qualityOptions(VideoQuality quality) {
     case VideoQuality.high:
       return <String, String>{
         'scale': 'ewa_lanczossharp',
-        'cscale': 'ewa_lanczossoft',
+        // Plain ewa_lanczos: the gpu-next backend has no libplacebo analog for
+        // `ewa_lanczossoft` and logs a mapping failure for it.
+        'cscale': 'ewa_lanczos',
         'dscale': 'mitchell',
         'correct-downscaling': 'yes',
         'sigmoid-upscaling': 'yes',
@@ -76,8 +81,11 @@ Map<String, String> qualityOptions(VideoQuality quality) {
 ///
 /// [wid] is the native window handle mpv renders into; when null mpv opens its
 /// own window (used as a fallback if the host handle cannot be resolved).
+///
+/// The OSD Lua is deliberately *not* passed as `script=`: a missing or wrong
+/// path there is silent, and the result is a player with no UI. The app loads
+/// it with `load-script` after init and checks `script-list`.
 Map<String, String> buildMpvOptions({
-  required String osdScriptPath,
   MpvSettings settings = const MpvSettings(),
   int? wid,
   String? logFile,
@@ -176,9 +184,6 @@ Map<String, String> buildMpvOptions({
   }
   if (logFile != null) {
     options['log-file'] = logFile;
-  }
-  if (osdScriptPath.isNotEmpty) {
-    options['script'] = osdScriptPath;
   }
   if (watchLaterDir != null) {
     options['watch-later-directory'] = watchLaterDir;

@@ -10,6 +10,7 @@ import '../design/ps_tokens.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
 import '../data/store.dart';
+import '../playback/mpv/capabilities.dart';
 import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
@@ -60,6 +61,15 @@ class _PlayerPageState extends State<PlayerPage> {
   String? _hint;
   bool _fileLoaded = false;
   bool _showDiagnostics = false;
+
+  /// Whether mpv accepted the OSD Lua. This is the whole player UI, so it is
+  /// worth a line in the diagnostics panel.
+  String _scriptNote = '未解析';
+  String _logPath = '';
+
+  /// One-line summary of what the runtime probe concluded (decoder, audio
+  /// endpoint, HDR output).
+  String _capsNote = '尚未探测';
 
   @override
   void initState() {
@@ -132,7 +142,22 @@ class _PlayerPageState extends State<PlayerPage> {
 
       final String? scriptPath = await MpvAssets.osdScriptPath();
       final String sep = Platform.pathSeparator;
-      final String logPath = '${Directory.systemTemp.path}${sep}xnx_player_mpv.log';
+
+      // Logs belong next to the exe: %TEMP% gets cleaned by disk tools and is
+      // impossible to find when someone asks for a log. Falls back to the temp
+      // directory only when the install folder is read-only (Program Files).
+      final String exeDir = File(Platform.resolvedExecutable).parent.path;
+      String logPath = '${Directory.systemTemp.path}${sep}xnx_player_mpv.log';
+      try {
+        final Directory logDir = Directory('$exeDir${sep}log');
+        if (!logDir.existsSync()) {
+          logDir.createSync(recursive: true);
+        }
+        logPath = '${logDir.path}${sep}xnx_player_mpv.log';
+      } catch (_) {
+        // Read-only install location; keep the temp path.
+      }
+      _logPath = logPath;
 
       // Screenshots land next to the app state rather than in the working
       // directory, which is the build folder during development.
@@ -170,7 +195,6 @@ class _PlayerPageState extends State<PlayerPage> {
       final MpvPlayer player = MpvPlayer();
       player.start(
         options: buildMpvOptions(
-          osdScriptPath: scriptPath ?? '',
           wid: host,
           logFile: logPath,
           screenshotDir: shotDir,
@@ -180,6 +204,30 @@ class _PlayerPageState extends State<PlayerPage> {
       );
       _player = player;
       player.lastError.addListener(_onMpvError);
+
+      // The OSD is the player UI. `script=` before init fails silently when the
+      // path is wrong — the user just gets a picture with no controls — so it
+      // is loaded through the command interface and verified against
+      // `script-list`. Loading it exactly once, from one code path, also avoids
+      // two OSD instances fighting over the same key bindings.
+      if (scriptPath == null) {
+        _scriptNote = MpvAssets.lastError ?? '脚本路径解析失败';
+      } else if (player.loadScript(scriptPath)) {
+        _scriptNote = '已加载';
+      } else {
+        _scriptNote = '加载失败：$scriptPath';
+        // mpv finishes setting up scripts asynchronously; look again shortly
+        // before reporting a failure the user cannot act on.
+        Timer(const Duration(milliseconds: 900), () {
+          if (!mounted) {
+            return;
+          }
+          final MpvPlayer? live = _player;
+          if (live != null && live.scriptLoaded(MpvAssets.scriptName)) {
+            setState(() => _scriptNote = '已加载');
+          }
+        });
+      }
 
       surface.start();
 
@@ -204,6 +252,7 @@ class _PlayerPageState extends State<PlayerPage> {
         // window would just cover the loading state with black.
         _surface?.show();
         _startHealthWatch();
+        _probeCapabilities();
       });
 
       player.setProperty('volume', '${prefs.volume}');
@@ -335,6 +384,12 @@ class _PlayerPageState extends State<PlayerPage> {
         if (sync == 'display-resample') {
           player.setProperty('video-sync', 'audio');
         }
+        // Remember it: the next launch should not pay the same 2s of silence
+        // while the audio device refuses passthrough again.
+        final PlaybackPrefs now = AppStore.instance.prefs;
+        if (now.passthrough != PassthroughPref.off) {
+          unawaited(AppStore.instance.updatePrefs(now.copyWith(passthrough: PassthroughPref.off)));
+        }
         _healthStage = 1;
         _healthTicks = 0;
         _healthNote = '没有可用的音频输出：已关闭音频直通，同步基准改用音频时钟';
@@ -356,15 +411,29 @@ class _PlayerPageState extends State<PlayerPage> {
         _healthNote = '画面没有出现，已从 display-resample 切到音频时钟';
       } else if (_healthStage == 1) {
         player.setProperty('hwdec', 'no');
+        // A GPU that cannot map 10-bit surfaces will fail the same way on every
+        // launch, so record the answer instead of rediscovering it each time.
+        final PlaybackPrefs now = AppStore.instance.prefs;
+        if (now.hardwareDecoding) {
+          unawaited(AppStore.instance.updatePrefs(now.copyWith(hardwareDecoding: false)));
+        }
         _healthStage = 2;
         _healthNote = '画面仍未出现，已关闭硬件解码，改用软件解码';
       } else if (_healthStage == 2) {
         // Last rung: the HDR path is the remaining suspect, so turn both the
-        // hint and the VO down to the most compatible combination.
+        // hint and the VO down to the most compatible combination. Dolby Vision
+        // is the exception: plain `gpu` cannot apply the RPU and renders it as
+        // green/purple, which is worse than whatever we are fixing.
         player.setProperty('target-colorspace-hint', 'no');
-        player.setProperty('vo', 'gpu');
+        final bool dolbyVision =
+            dolbyVisionNeedsGpuNext(player.getProperty('video-params/primaries'));
+        if (!dolbyVision) {
+          player.setProperty('vo', 'gpu');
+        }
         _healthStage = 3;
-        _healthNote = '画面仍未出现，已关闭 HDR 直通并退回 gpu VO';
+        _healthNote = dolbyVision
+            ? '画面仍未出现，已关闭 HDR 直通（杜比视界片源保留 gpu-next）'
+            : '画面仍未出现，已关闭 HDR 直通并退回 gpu VO';
       } else {
         timer.cancel();
         _health = null;
@@ -388,6 +457,76 @@ class _PlayerPageState extends State<PlayerPage> {
       return _healthNote ?? '首选项（gpu-next · 硬解 · HDR 直通）';
     }
     return '第 $_healthStage 级回退 · ${_healthNote ?? ''}';
+  }
+
+  /// Asks the live player what it actually settled on, instead of trusting what
+  /// we asked for.
+  ///
+  /// Every one of these can silently end up as something else: hardware
+  /// decoding falls back to software, HDR gets tone mapped into SDR, bitstream
+  /// passthrough gets refused. Reading the result back is the only way to tell
+  /// the user (or ourselves) the truth, and it is what makes the defaults safe
+  /// to keep neutral.
+  void _probeCapabilities() {
+    final MpvPlayer? player = _player;
+    if (player == null) {
+      return;
+    }
+    final String hwdec = describeHwdec(
+      player.getProperty('hwdec-current'),
+      player.getProperty('hwdec'),
+    );
+    final String? outPrim = player.getProperty('video-out-params/primaries');
+    final String? outGamma = player.getProperty('video-out-params/gamma');
+    final String? srcPrim = player.getProperty('video-params/primaries');
+    final String? srcGamma = player.getProperty('video-params/gamma');
+    final bool dolbyVision = dolbyVisionNeedsGpuNext(srcPrim);
+    final bool hdrSource = isHdrSource(srcGamma) || dolbyVision;
+    final bool hdrOutput = isHdrOutput(outPrim, outGamma);
+
+    final StringBuffer caps = StringBuffer();
+    caps.write(hwdec);
+    if (hdrSource) {
+      caps.write(dolbyVision ? ' · 杜比视界片源' : ' · HDR 片源');
+      caps.write(hdrOutput ? ' → HDR 直通' : ' → 映射到 SDR');
+    } else {
+      caps.write(' · SDR');
+    }
+    final String? audioFormat = player.getProperty('audio-out-params/format');
+    if (audioFormat != null) {
+      caps.write(' · 音频 $audioFormat');
+    }
+    _capsNote = caps.toString();
+
+    // Passthrough is opt-in, and even when asked for it is only kept if the
+    // endpoint accepted the bitstream. Checking after the fact is the only
+    // honest test: a device that refuses takes the whole audio output with it.
+    final AudioPassthrough wanted = _settingsFor(AppStore.instance.prefs).audioPassthrough;
+    if (wanted == AudioPassthrough.off) {
+      return;
+    }
+    Timer(const Duration(seconds: 2), () {
+      if (!mounted) {
+        return;
+      }
+      final MpvPlayer? live = _player;
+      if (live == null) {
+        return;
+      }
+      final String? format = live.getProperty('audio-out-params/format');
+      final String? ao = live.getProperty('ao');
+      final bool passthroughLive = isBitstreamFormat(format);
+      if (ao == null || ao.isEmpty || ao == 'null' || !passthroughLive) {
+        live.setProperty('audio-spdif', '');
+        setState(() {
+          _capsNote = '$_capsNote · 直通被设备拒绝，已回退解码';
+        });
+      } else {
+        setState(() {
+          _capsNote = '$_capsNote · 直通生效';
+        });
+      }
+    });
   }
 
   /// Opens a file dialog for an external subtitle and hands it to mpv.
@@ -528,10 +667,12 @@ class _PlayerPageState extends State<PlayerPage> {
                 right: PsSpace.safeX,
                 bottom: PsSpace.lg,
                 child: _DiagnosticsPanel(
-                  logPath: '${Directory.systemTemp.path}${Platform.pathSeparator}xnx_player_mpv.log',
+                  logPath: _logPath,
                   lines: player.logs,
                   surfaceInfo: _surface?.diagnostics ?? '未枚举到子窗口',
                   health: _healthText,
+                  scriptNote: _scriptNote,
+                  capsNote: _capsNote,
                   facts: <String>[
                     'vo=${player.getProperty('vo') ?? '—'}'
                         ' 已配置=${player.getProperty('vo-configured') ?? '—'}'
@@ -639,6 +780,8 @@ class _DiagnosticsPanel extends StatefulWidget {
     required this.lines,
     required this.surfaceInfo,
     required this.health,
+    required this.scriptNote,
+    required this.capsNote,
     required this.facts,
   });
 
@@ -646,6 +789,8 @@ class _DiagnosticsPanel extends StatefulWidget {
   final List<String> lines;
   final String surfaceInfo;
   final String health;
+  final String scriptNote;
+  final String capsNote;
   final List<String> facts;
 
   @override
@@ -710,6 +855,8 @@ class _DiagnosticsPanelState extends State<_DiagnosticsPanel> {
             ),
             const SizedBox(height: PsSpace.xs),
             Text('画面：${widget.health}', style: _mono.copyWith(color: PsColor.text)),
+            Text('控件：${widget.scriptNote}', style: _mono.copyWith(color: PsColor.text)),
+            Text('能力：${widget.capsNote}', style: _mono.copyWith(color: PsColor.textDim)),
             Text('子窗口：${widget.surfaceInfo}', style: _mono.copyWith(color: PsColor.textDim)),
             for (final String fact in widget.facts)
               Text(fact, style: _mono.copyWith(color: PsColor.textDim)),
