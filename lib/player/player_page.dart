@@ -180,7 +180,11 @@ class _PlayerPageState extends State<PlayerPage> {
         ..onTogglePause = player.togglePause
         ..onSeekRequest = player.seekTo
         ..onLoadSubtitle = _loadSubtitle
-        ..onEvent = (Map<Object?, Object?> _) => _escFallback?.cancel()
+        // Lua answered, so the optimistic Esc handling is not needed. A block
+        // body is required: `?.` on a void member cannot be used as a value.
+        ..onEvent = (Map<Object?, Object?> _) {
+          _escFallback?.cancel();
+        }
         ..attach();
 
       _loadedSub = player.onFileLoaded.listen((bool _) {
