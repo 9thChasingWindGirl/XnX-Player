@@ -32,14 +32,14 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _cycleQuality(int direction) {
-    final List<QualityPref> values = QualityPref.values;
+    const List<QualityPref> values = QualityPref.values;
     final int index = values.indexOf(_store.prefs.quality);
     final int next = (index + direction + values.length) % values.length;
     _apply(_store.prefs.copyWith(quality: values[next]));
   }
 
   void _cyclePassthrough(int direction) {
-    final List<PassthroughPref> values = PassthroughPref.values;
+    const List<PassthroughPref> values = PassthroughPref.values;
     final int index = values.indexOf(_store.prefs.passthrough);
     final int next = (index + direction + values.length) % values.length;
     _apply(_store.prefs.copyWith(passthrough: values[next]));
@@ -68,7 +68,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(S.tabSettings, style: PsType.page),
+                    const Text(S.tabSettings, style: PsType.page),
                     const SizedBox(height: 8),
                     Text(
                       '播放内核 mpv · gpu-next / D3D11',

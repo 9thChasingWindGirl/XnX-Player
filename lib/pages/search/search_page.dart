@@ -162,7 +162,7 @@ class _SearchOverlayState extends State<SearchOverlay> {
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    Text(S.search, style: PsType.eyebrow),
+                    const Text(S.search, style: PsType.eyebrow),
                     const SizedBox(width: 20),
                     Text(
                       typing ? '${_results.length} 个结果' : '按标题、剧集或频道名检索',

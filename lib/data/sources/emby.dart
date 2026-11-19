@@ -24,7 +24,7 @@ class EmbySource extends MediaSource {
 
   String get _authValue {
     final String token = _token ?? config.token;
-    final String auth = 'MediaBrowser Client="$_client", Device="Windows", '
+    const String auth = 'MediaBrowser Client="$_client", Device="Windows", '
         'DeviceId="xnx-player-windows", Version="$_version"';
     return token.isEmpty ? auth : '$auth, Token="$token"';
   }
@@ -181,7 +181,7 @@ class EmbySource extends MediaSource {
       progress: (played / 100).clamp(0.0, 1.0).toDouble(),
       duration: ticks > 0 ? Duration(microseconds: ticks ~/ 10) : null,
       resumeAt: positionTicks > 0 ? Duration(microseconds: positionTicks ~/ 10) : null,
-      path: '$idValue',
+      path: idValue,
       posterUrl: _imageUrl(idValue, 'Primary'),
       backdropUrl: _imageUrl(idValue, 'Backdrop'),
       badge: badge,

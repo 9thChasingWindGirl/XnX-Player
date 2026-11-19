@@ -103,7 +103,7 @@ class MediaPageState extends State<MediaPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(S.tabLibrary, style: PsType.page),
+                    const Text(S.tabLibrary, style: PsType.page),
                     const SizedBox(height: 8),
                     Text(
                       '${AppStore.instance.sources.length} 个来源  ·  ${items.length} 项内容',

@@ -14,7 +14,7 @@ import 'mpv_window.dart';
 /// Zerk Play 2.0 gives its native `VideoHost`; doing it here keeps the Windows
 /// runner template stock, which matters because CI regenerates it.
 class VideoSurface {
-  VideoSurface(this.parent, {bool visible = true}) : _visible = visible;
+  VideoSurface(this.parent, {this.visible = true});
 
   final int parent;
 
@@ -23,7 +23,7 @@ class VideoSurface {
   WindowBox? _hostBox;
   WindowBox? _videoBox;
   Timer? _timer;
-  bool _visible;
+  bool visible;
   String _diagnostics = '未创建容器';
 
   /// The container handle. This is what mpv gets as `wid`.
@@ -31,7 +31,7 @@ class VideoSurface {
 
   String get diagnostics => _diagnostics;
 
-  bool get isVisible => _visible;
+  bool get isVisible => visible;
 
   void start({Duration interval = const Duration(milliseconds: 400)}) {
     if (!Platform.isWindows) {
@@ -88,7 +88,7 @@ class VideoSurface {
           'host=0x${host.toRadixString(16)} video=${video == null ? 'none' : '0x${video.toRadixString(16)}'} 子窗口=[$classes]';
     }
 
-    if (!_visible) {
+    if (!visible) {
       // Nothing may be laid out while hidden: fitting calls SetWindowPos with
       // SWP_SHOWWINDOW (`MoveWindow` repaints too), which would flash an opaque
       // window over Flutter's loading panel every poll.
@@ -115,7 +115,7 @@ class VideoSurface {
   }
 
   void hide() {
-    _visible = false;
+    visible = false;
     final int? host = _host;
     if (host != null) {
       Win32.setVisible(host, visible: false);
@@ -123,7 +123,7 @@ class VideoSurface {
   }
 
   void show() {
-    _visible = true;
+    visible = true;
     _hostBox = null;
     _videoBox = null;
     sync();

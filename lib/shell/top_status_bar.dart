@@ -125,8 +125,8 @@ class _TopStatusBarState extends State<TopStatusBar> {
                   radius: PsRadius.pill,
                   showRing: false,
                   onSelect: widget.onSearch,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
                     child: Icon(Icons.search_rounded, size: 26, color: PsColor.text),
                   ),
                 ),
@@ -135,8 +135,8 @@ class _TopStatusBarState extends State<TopStatusBar> {
                   radius: PsRadius.pill,
                   showRing: false,
                   onSelect: () => widget.onTabSelected(2),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
                     child: Icon(Icons.settings_rounded, size: 26, color: PsColor.text),
                   ),
                 ),

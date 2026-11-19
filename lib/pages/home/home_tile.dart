@@ -64,18 +64,18 @@ class PosterCard extends StatelessWidget {
               else
                 _ArtFallback(item: item),
               // Bottom scrim: the title has to read over any artwork.
-              Positioned.fill(
+              const Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: <Color>[
-                        const Color(0x00000000),
-                        const Color(0x1A000000),
-                        const Color(0xD9000000),
+                        Color(0x00000000),
+                        Color(0x1A000000),
+                        Color(0xD9000000),
                       ],
-                      stops: const <double>[0.42, 0.68, 1.0],
+                      stops: <double>[0.42, 0.68, 1.0],
                     ),
                   ),
                 ),
@@ -168,7 +168,7 @@ class _ArtFallback extends StatelessWidget {
           ),
         ),
         Positioned(
-          right: -((item.hashCode % 40) + 10),
+          right: -(((item.hashCode % 40) + 10).toDouble()),
           top: -20,
           child: Container(
             width: 120,

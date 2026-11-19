@@ -16,11 +16,15 @@ import 'dart:ui' show Color, Offset, Rect;
 class Spring {
   Spring({double value = 0, this.frequency = 20, this.damping = 1})
       : _value = value,
-        _target = value;
+        target = value;
 
   double _value;
-  double _target;
-  double _velocity;
+
+  /// Where the spring is heading. Public on purpose: every caller drives the
+  /// motion by assigning here, there is no hidden side channel.
+  double target;
+
+  double _velocity = 0;
 
   /// Angular frequency (rad/s). Higher is snappier.
   final double frequency;
@@ -29,17 +33,13 @@ class Spring {
   final double damping;
 
   double get value => _value;
-  double get target => _target;
   double get velocity => _velocity;
 
-  set target(double value) => _target = value;
-
-  bool get settled =>
-      (_value - _target).abs() < 0.0005 && _velocity.abs() < 0.0005;
+  bool get settled => (_value - target).abs() < 0.0005 && _velocity.abs() < 0.0005;
 
   void snap(double value) {
     _value = value;
-    _target = value;
+    target = value;
     _velocity = 0;
   }
 
@@ -52,8 +52,8 @@ class Spring {
     final double hoo = dt * oo;
     final double hhoo = dt * hoo;
     final double detInv = 1 / (f + hhoo);
-    final double x = (f * _value + dt * _velocity + hhoo * _target) * detInv;
-    final double v = (_velocity + hoo * (_target - _value)) * detInv;
+    final double x = (f * _value + dt * _velocity + hhoo * target) * detInv;
+    final double v = (_velocity + hoo * (target - _value)) * detInv;
     _value = x;
     _velocity = v;
   }

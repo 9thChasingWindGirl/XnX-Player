@@ -198,7 +198,7 @@ class _HubPageState extends State<HubPage> {
                 ),
               ),
               if (_loading)
-                Positioned(
+                const Positioned(
                   left: PsSpace.safeX,
                   top: 720,
                   child: Text(S.loading, style: PsType.body),
@@ -336,7 +336,7 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
           if (clock.time != _last) {
             _last = clock.time;
             if (_focus >= 0) {
-              final double pitch = _cardWidth + _gap;
+              const double pitch = _cardWidth + _gap;
               final double anchor = PsSpace.safeX + pitch * 1.5;
               final double left = PsSpace.safeX + _focus * pitch;
               final double contentRight = PsSpace.safeX + widget.items.length * pitch;
