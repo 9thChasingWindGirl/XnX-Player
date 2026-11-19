@@ -111,6 +111,8 @@ class Win32 {
   static const int _wsClipSiblings = 0x04000000;
   static const int _wsClipChildren = 0x02000000;
   static const int _hwndTop = 0;
+  static const int _swpNoSize = 0x0001;
+  static const int _swpNoMove = 0x0002;
   static const int _swpNoActivate = 0x0010;
   static const int _swpShowWindow = 0x0040;
   static const int _swShow = 5;
@@ -303,12 +305,13 @@ class Win32 {
   static int? videoChild(int parent) {
     int best = 0;
     int bestArea = 0;
+    int fallback = 0;
     for (final ChildWindow child in children(parent)) {
       if (child.className == flutterViewClass || child.className == runnerClass) {
         continue;
       }
-      if (child.box.isEmpty) {
-        continue;
+      if (fallback == 0) {
+        fallback = child.handle;
       }
       final int area = child.box.width * child.box.height;
       if (area > bestArea) {
@@ -316,7 +319,10 @@ class Win32 {
         best = child.handle;
       }
     }
-    return best == 0 ? null : best;
+    // A freshly created mpv child reports a 0x0 client rect until it handles its
+    // first WM_SIZE. Dropping it left the surface stuck at "none"; returning it
+    // lets the caller grow it to the container's client area.
+    return best != 0 ? best : (fallback == 0 ? null : fallback);
   }
 
   /// Fits [hwnd] to [box] and raises it above the Flutter view.
@@ -325,7 +331,19 @@ class Win32 {
       return false;
     }
     final bool moved = _moveWindow(hwnd, box.left, box.top, box.width, box.height, 1) != 0;
-    _setWindowPos(hwnd, _hwndTop, 0, 0, 0, 0, _swpNoActivate | _swpShowWindow);
+    // SWP_NOSIZE and SWP_NOMOVE are mandatory here. Without them SetWindowPos
+    // applies the cx/cy arguments (0, 0) and moves the window to the origin,
+    // instantly undoing the MoveWindow above — the container collapses to 0x0,
+    // mpv's child follows it, and nothing is ever visible.
+    _setWindowPos(
+      hwnd,
+      _hwndTop,
+      0,
+      0,
+      0,
+      0,
+      _swpNoSize | _swpNoMove | _swpNoActivate | _swpShowWindow,
+    );
     return moved;
   }
 

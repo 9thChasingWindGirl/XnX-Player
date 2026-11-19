@@ -169,6 +169,9 @@ class _PlayerPageState extends State<PlayerPage> {
         if (!mounted || _fileLoaded) {
           return;
         }
+        // Nothing decoded, so the surface is either hidden or black; drop it
+        // anyway so the panel below cannot be covered by an opaque container.
+        _surface?.hide();
         setState(() {
           _showDiagnostics = true;
           _hint = '12 秒内未收到 mpv 的 file-loaded 事件，已显示诊断信息。';
@@ -241,7 +244,16 @@ class _PlayerPageState extends State<PlayerPage> {
       return true;
     }
     if (key == LogicalKeyboardKey.f1) {
-      setState(() => _showDiagnostics = !_showDiagnostics);
+      final bool open = !_showDiagnostics;
+      setState(() => _showDiagnostics = open);
+      // The video container is a native child window: it always paints above
+      // the Flutter layer. Leaving it up would hide the panel behind opaque
+      // video, which is exactly how "F1 does nothing" looks to the user.
+      if (open) {
+        _surface?.hide();
+      } else if (_fileLoaded) {
+        _surface?.show();
+      }
       return true;
     }
     if (player == null || _error != null) {

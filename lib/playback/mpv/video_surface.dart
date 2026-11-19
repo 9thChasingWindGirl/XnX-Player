@@ -83,9 +83,20 @@ class VideoSurface {
     if (video != _video) {
       _video = video;
       _videoBox = null;
-      final String classes = Win32.children(host).map((ChildWindow c) => c.className).join(',');
-      _diagnostics =
-          'host=0x${host.toRadixString(16)} video=${video == null ? 'none' : '0x${video.toRadixString(16)}'} 子窗口=[$classes]';
+    }
+
+    // Sizes belong in the diagnostics: "video=none" alone did not say whether
+    // the child was missing or merely 0x0, which is what the F1 panel needed.
+    final WindowBox? hostClient = Win32.clientBox(host);
+    final WindowBox? videoClient = video == null ? null : Win32.clientBox(video);
+    final String classes =
+        Win32.children(host).map((ChildWindow c) => c.className).join(',');
+    String size(WindowBox? box) => box == null ? '-' : '${box.width}x${box.height}';
+    final String next = 'host=0x${host.toRadixString(16)} ${size(hostClient)} '
+        'video=${video == null ? 'none' : '0x${video.toRadixString(16)} ${size(videoClient)}'} '
+        '子窗口=[$classes]';
+    if (next != _diagnostics) {
+      _diagnostics = next;
     }
 
     if (!visible) {
