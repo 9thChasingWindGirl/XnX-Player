@@ -7,9 +7,12 @@ import '../design/ps_tokens.dart';
 import '../ui/core/focus_zone.dart';
 import '../ui/core/tv_focusable.dart';
 
-/// Top chrome: the two hub tabs on the left, the status cluster on the right
-/// (search / settings / account / clock), exactly the four PS5 keeps up there.
-class TopStatusBar extends StatelessWidget {
+/// Top chrome: hub tabs on the left, the status cluster on the right.
+///
+/// The tabs are focusable so the highlight can travel up from a shelf and land
+/// on them — a detail that makes the whole screen feel like one surface instead
+/// of a page with a static header.
+class TopStatusBar extends StatefulWidget {
   const TopStatusBar({
     super.key,
     required this.tabIndex,
@@ -20,184 +23,19 @@ class TopStatusBar extends StatelessWidget {
   final ValueChanged<int> onTabSelected;
 
   @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: PsSpace.topBarHeight,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: PsSpace.safeX),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: <Widget>[
-            FocusZone(
-              id: 'tabs',
-              child: Row(
-                children: <Widget>[
-                  _Tab(
-                    label: S.tabGames,
-                    selected: tabIndex == 0,
-                    autofocus: false,
-                    onSelect: () => onTabSelected(0),
-                  ),
-                  const SizedBox(width: PsSpace.xl),
-                  _Tab(
-                    label: S.tabMedia,
-                    selected: tabIndex == 1,
-                    onSelect: () => onTabSelected(1),
-                  ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            const _StatusIcon(icon: Icons.search_rounded, label: '搜索'),
-            const SizedBox(width: PsSpace.md),
-            const _StatusIcon(icon: Icons.settings_outlined, label: '设置'),
-            const SizedBox(width: PsSpace.md),
-            const _Avatar(label: 'X'),
-            const SizedBox(width: PsSpace.lg),
-            const _Clock(),
-          ],
-        ),
-      ),
-    );
-  }
+  State<TopStatusBar> createState() => _TopStatusBarState();
 }
 
-class _Tab extends StatefulWidget {
-  const _Tab({
-    required this.label,
-    required this.selected,
-    required this.onSelect,
-    this.autofocus = false,
-  });
+class _TopStatusBarState extends State<TopStatusBar> {
+  static const List<String> _tabs = <String>[S.tabHome, S.tabLibrary, S.tabSettings];
 
-  final String label;
-  final bool selected;
-  final VoidCallback onSelect;
-  final bool autofocus;
-
-  @override
-  State<_Tab> createState() => _TabState();
-}
-
-class _TabState extends State<_Tab> {
-  bool _focused = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool lit = widget.selected || _focused;
-    return TvFocusable(
-      autofocus: widget.autofocus,
-      focusScale: 1.0,
-      showRing: false,
-      showShine: false,
-      radius: PsRadius.pill,
-      onFocused: (bool focused) => setState(() => _focused = focused),
-      onSelect: widget.onSelect,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          AnimatedDefaultTextStyle(
-            duration: PsMotion.base,
-            curve: PsMotion.curve,
-            style: PsType.section.copyWith(
-              fontWeight: widget.selected ? FontWeight.w500 : FontWeight.w300,
-              color: lit ? PsColor.text : PsColor.textDim,
-              letterSpacing: 0.6,
-            ),
-            child: Text(widget.label),
-          ),
-          const SizedBox(height: 6),
-          AnimatedContainer(
-            duration: PsMotion.base,
-            curve: PsMotion.curve,
-            height: 2,
-            width: widget.selected ? 34 : (_focused ? 18 : 0),
-            decoration: BoxDecoration(
-              color: PsColor.text,
-              borderRadius: BorderRadius.circular(1),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatusIcon extends StatefulWidget {
-  const _StatusIcon({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  State<_StatusIcon> createState() => _StatusIconState();
-}
-
-class _StatusIconState extends State<_StatusIcon> {
-  bool _focused = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      radius: PsRadius.pill,
-      focusScale: 1.08,
-      showRing: false,
-      showShine: false,
-      debugLabel: widget.label,
-      onFocused: (bool focused) => setState(() => _focused = focused),
-      child: Container(
-        width: 48,
-        height: 48,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: _focused ? const Color(0x24FFFFFF) : const Color(0x00FFFFFF),
-        ),
-        child: Icon(widget.icon, size: 26, color: PsColor.text),
-      ),
-    );
-  }
-}
-
-class _Avatar extends StatelessWidget {
-  const _Avatar({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 40,
-      height: 40,
-      alignment: Alignment.center,
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[Color(0xFF3E5C8A), Color(0xFF1B2740)],
-        ),
-      ),
-      child: Text(label, style: PsType.label.copyWith(fontWeight: FontWeight.w600)),
-    );
-  }
-}
-
-class _Clock extends StatefulWidget {
-  const _Clock();
-
-  @override
-  State<_Clock> createState() => _ClockState();
-}
-
-class _ClockState extends State<_Clock> {
-  late Timer _timer;
+  Timer? _clock;
   DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 20), (_) {
+    _clock = Timer.periodic(const Duration(seconds: 20), (Timer timer) {
       if (mounted) {
         setState(() => _now = DateTime.now());
       }
@@ -206,14 +44,120 @@ class _ClockState extends State<_Clock> {
 
   @override
   void dispose() {
-    _timer.cancel();
+    _clock?.cancel();
     super.dispose();
+  }
+
+  String get _timeLabel {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(_now.hour)}:${two(_now.minute)}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final String hh = _now.hour.toString().padLeft(2, '0');
-    final String mm = _now.minute.toString().padLeft(2, '0');
-    return Text('$hh:$mm', style: PsType.label.copyWith(letterSpacing: 0.6));
+    return SizedBox(
+      height: 104,
+      child: Stack(
+        children: <Widget>[
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            height: 120,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: <Color>[
+                      const Color(0xFF000000).withValues(alpha: 0.55),
+                      const Color(0x00000000),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: PsSpace.safeX,
+            top: 30,
+            child: FocusZone(
+              id: 'tabs',
+              child: Row(
+                children: <Widget>[
+                  for (int i = 0; i < _tabs.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 36),
+                      child: TvFocusable(
+                        radius: 14,
+                        onSelect: () => widget.onTabSelected(i),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+                          child: Text(
+                            _tabs[i],
+                            style: PsType.meta.copyWith(
+                              fontSize: 26,
+                              color: PsColor.text.withValues(
+                                alpha: i == widget.tabIndex ? 1 : 0.55,
+                              ),
+                              fontWeight:
+                                  i == widget.tabIndex ? FontWeight.w600 : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            right: PsSpace.safeX,
+            top: 26,
+            child: Row(
+              children: <Widget>[
+                Text(_timeLabel, style: PsType.meta.copyWith(fontSize: 26)),
+                const SizedBox(width: 26),
+                TvFocusable(
+                  radius: PsRadius.pill,
+                  showRing: false,
+                  onSelect: () => widget.onTabSelected(1),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(Icons.search_rounded, size: 26, color: PsColor.text),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                TvFocusable(
+                  radius: PsRadius.pill,
+                  showRing: false,
+                  onSelect: () => widget.onTabSelected(2),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(Icons.settings_rounded, size: 26, color: PsColor.text),
+                  ),
+                ),
+                const SizedBox(width: 18),
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: PsColor.text.withValues(alpha: 0.14),
+                    border: Border.all(color: PsColor.text.withValues(alpha: 0.24)),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'R',
+                    style: PsType.label.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

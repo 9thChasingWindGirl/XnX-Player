@@ -10,9 +10,10 @@ void main() {
     });
 
     test('different ids usually land on different artwork', () {
-      const MediaItem a = MediaItem(id: 'emby::1', title: 'A');
-      const MediaItem b = MediaItem(id: 'emby::2', title: 'B');
+      const MediaItem a = MediaItem(id: 'a', title: 'A');
+      const MediaItem b = MediaItem(id: 'b', title: 'B');
       expect(a.artwork, isNot(equals(b.artwork)));
+      expect(a.artwork.length, 3);
     });
 
     test('folders and seasons are not directly playable', () {

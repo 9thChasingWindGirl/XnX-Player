@@ -6,6 +6,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../design/ps_tokens.dart';
+import '../data/models/media_item.dart';
+import '../data/prefs.dart';
+import '../data/store.dart';
 import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
@@ -22,10 +25,9 @@ import 'osd_bridge.dart';
 /// not follow the parent on resize or fullscreen switches. Flutter only owns the
 /// loading, error and diagnostics states plus the keyboard bindings.
 class PlayerPage extends StatefulWidget {
-  const PlayerPage({super.key, required this.path, required this.title});
+  const PlayerPage({super.key, required this.item});
 
-  final String path;
-  final String title;
+  final MediaItem item;
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -57,6 +59,16 @@ class _PlayerPageState extends State<PlayerPage> {
     _loadedSub?.cancel();
     _bridge?.dispose();
     _player?.lastError.removeListener(_onMpvError);
+    // Capture the position while mpv is still alive: resume state is what makes
+    // "继续观看" real instead of decorative.
+    final MpvViewState? last = _player?.state.value;
+    if (last != null && last.duration > 1 && last.position > 1) {
+      AppStore.instance.remember(
+        widget.item,
+        Duration(milliseconds: (last.position * 1000).round()),
+        Duration(milliseconds: (last.duration * 1000).round()),
+      );
+    }
     // Tear mpv down first: destroying the container it renders into while it
     // still owns the surface is asking for a native crash on exit.
     _player?.dispose();
@@ -104,12 +116,17 @@ class _PlayerPageState extends State<PlayerPage> {
       final String logPath =
           '${Directory.systemTemp.path}${Platform.pathSeparator}xnx_player_mpv.log';
 
+      // Backends may need a round-trip for a playable URL (AList raw link).
+      final String url = await AppStore.instance.resolve(widget.item);
+      final PlaybackPrefs prefs = AppStore.instance.prefs;
+
       final MpvPlayer player = MpvPlayer();
       player.start(
         options: buildMpvOptions(
           osdScriptPath: scriptPath ?? '',
           wid: host,
           logFile: logPath,
+          settings: _settingsFor(prefs),
         ),
         logLevel: 'info',
       );
@@ -134,8 +151,17 @@ class _PlayerPageState extends State<PlayerPage> {
         _surface?.show();
       });
 
-      player.load(widget.path);
-      player.setProperty('user-data/xnx/title', widget.title);
+      player.setProperty('volume', '${prefs.volume}');
+      if (prefs.subtitleSize > 0) {
+        player.setProperty('sub-font-size', '${prefs.subtitleSize}');
+      }
+      final Duration? resume = widget.item.resumeAt;
+      if (resume != null && resume.inSeconds > 5) {
+        player.setProperty('start', '${resume.inSeconds}');
+      }
+
+      player.load(url);
+      player.setProperty('user-data/xnx/title', widget.item.title);
 
       // A silent black screen used to be unactionable; after 12s with no
       // file-loaded event we surface the mpv log instead of waiting forever.
@@ -179,6 +205,28 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     Navigator.of(context).maybePop();
+  }
+
+  /// Maps the persisted preferences onto mpv options.
+  MpvSettings _settingsFor(PlaybackPrefs prefs) {
+    return MpvSettings(
+      quality: switch (prefs.quality) {
+        QualityPref.fast => VideoQuality.fast,
+        QualityPref.balanced => VideoQuality.balanced,
+        QualityPref.high => VideoQuality.high,
+      },
+      hwdec: prefs.hardwareDecoding ? 'auto-safe' : 'no',
+      hdrPassthrough: prefs.hdrPassthrough,
+      smoothMotion: prefs.smoothMotion,
+      audioPassthrough: switch (prefs.passthrough) {
+        PassthroughPref.all => AudioPassthrough.all,
+        PassthroughPref.dolby => AudioPassthrough.dolby,
+        PassthroughPref.dts => AudioPassthrough.dts,
+        PassthroughPref.off => AudioPassthrough.off,
+      },
+      deband: prefs.deband,
+      volume: prefs.volume,
+    );
   }
 
   bool _onKey(KeyEvent event) {
@@ -227,7 +275,7 @@ class _PlayerPageState extends State<PlayerPage> {
             if (_error != null)
               Positioned.fill(child: _ErrorPanel(message: _error!, hint: _hint, onBack: _close))
             else if (showVideoState)
-              Positioned.fill(child: _LoadingPanel(title: widget.title, hint: _hint)),
+              Positioned.fill(child: _LoadingPanel(title: widget.item.title, hint: _hint)),
             if (_showDiagnostics && player != null)
               Positioned(
                 left: PsSpace.safeX,
