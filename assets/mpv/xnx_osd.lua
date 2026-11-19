@@ -858,16 +858,10 @@ local function build_menu(id)
     prop_row('亮度', 'brightness', 1, -100, 100, '%.0f')
     prop_row('对比度', 'contrast', 1, -100, 100, '%.0f')
     prop_row('饱和度', 'saturation', 1, -100, 100, '%.0f')
-    -- gamma is a multiplier around 1.0, not an offset around 0.
-    local gamma = mp.get_property_number('gamma') or 1
-    table.insert(rows, {
-      label = '伽马',
-      value = string.format('%.2f', gamma),
-      kind = 'adjust',
-      act = function(d)
-        mp.set_property_number('gamma', math.max(0.1, math.min(4, gamma + d * 0.02)))
-      end,
-    })
+    -- mpv's video equalizer options (brightness/contrast/saturation/gamma) are
+    -- all offsets centred on 0 with range -100..100 — gamma is not a 1.0
+    -- multiplier, unlike mplayer.
+    prop_row('伽马', 'gamma', 1, -100, 100, '%.0f')
     prop_row('缩放', 'video-zoom', 0.02, -1, 1, '%.2f')
     table.insert(rows, {
       label = '镜像',
@@ -891,10 +885,9 @@ local function build_menu(id)
       label = '恢复默认画面',
       kind = 'item',
       act = function()
-        for _, prop in ipairs({ 'brightness', 'contrast', 'saturation', 'video-zoom' }) do
+        for _, prop in ipairs({ 'brightness', 'contrast', 'saturation', 'gamma', 'video-zoom' }) do
           mp.set_property_number(prop, 0)
         end
-        mp.set_property_number('gamma', 1)
         mp.set_property_number('video-rotate', 0)
         mp.set_property('video-flip', 'no')
         toast('画面已恢复默认')

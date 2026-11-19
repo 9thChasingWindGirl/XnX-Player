@@ -1,53 +1,65 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xnx_player/player/osd_keys.dart';
 
 void main() {
   group('OsdKeys', () {
     test('maps the navigation and media keys the OSD binds', () {
-      expect(OsdKeys.compose('Space'), 'space');
-      expect(OsdKeys.compose('Arrow Left'), 'left');
-      expect(OsdKeys.compose('Arrow Right'), 'right');
-      expect(OsdKeys.compose('Arrow Up'), 'up');
-      expect(OsdKeys.compose('Arrow Down'), 'down');
-      expect(OsdKeys.compose('Escape'), 'esc');
-      expect(OsdKeys.compose('Tab'), 'tab');
-      expect(OsdKeys.compose('Backspace'), 'bs');
-      expect(OsdKeys.compose('Page Up'), 'pageup');
-      expect(OsdKeys.compose('Page Down'), 'pagedown');
+      expect(OsdKeys.compose(LogicalKeyboardKey.space), 'space');
+      expect(OsdKeys.compose(LogicalKeyboardKey.arrowLeft), 'left');
+      expect(OsdKeys.compose(LogicalKeyboardKey.arrowRight), 'right');
+      expect(OsdKeys.compose(LogicalKeyboardKey.arrowUp), 'up');
+      expect(OsdKeys.compose(LogicalKeyboardKey.arrowDown), 'down');
+      expect(OsdKeys.compose(LogicalKeyboardKey.escape), 'esc');
+      expect(OsdKeys.compose(LogicalKeyboardKey.tab), 'tab');
+      expect(OsdKeys.compose(LogicalKeyboardKey.backspace), 'bs');
+      expect(OsdKeys.compose(LogicalKeyboardKey.pageUp), 'pageup');
+      expect(OsdKeys.compose(LogicalKeyboardKey.pageDown), 'pagedown');
+      expect(OsdKeys.compose(LogicalKeyboardKey.enter), 'enter');
+      expect(OsdKeys.compose(LogicalKeyboardKey.numpadEnter), 'enter');
     });
 
     test('maps letters, digits and function keys', () {
-      expect(OsdKeys.compose('Key J'), 'j');
-      expect(OsdKeys.compose('Key A'), 'a');
-      expect(OsdKeys.compose('Key Z'), 'z');
-      expect(OsdKeys.compose('Digit 1'), '1');
-      expect(OsdKeys.compose('Digit 9'), '9');
-      expect(OsdKeys.compose('F7'), 'f7');
-      expect(OsdKeys.compose('F11'), 'f11');
+      expect(OsdKeys.compose(LogicalKeyboardKey.keyJ), 'j');
+      expect(OsdKeys.compose(LogicalKeyboardKey.keyA), 'a');
+      expect(OsdKeys.compose(LogicalKeyboardKey.keyZ), 'z');
+      expect(OsdKeys.compose(LogicalKeyboardKey.digit1), '1');
+      expect(OsdKeys.compose(LogicalKeyboardKey.digit9), '9');
+      expect(OsdKeys.compose(LogicalKeyboardKey.f7), 'f7');
+      expect(OsdKeys.compose(LogicalKeyboardKey.f11), 'f11');
     });
 
     test('maps punctuation that drives speed and frame stepping', () {
-      expect(OsdKeys.compose('Bracket Left'), '[');
-      expect(OsdKeys.compose('Bracket Right'), ']');
-      expect(OsdKeys.compose('Comma'), 'comma');
-      expect(OsdKeys.compose('Period'), 'period');
-      expect(OsdKeys.compose('Minus'), '-');
+      expect(OsdKeys.compose(LogicalKeyboardKey.bracketLeft), '[');
+      expect(OsdKeys.compose(LogicalKeyboardKey.bracketRight), ']');
+      expect(OsdKeys.compose(LogicalKeyboardKey.comma), 'comma');
+      expect(OsdKeys.compose(LogicalKeyboardKey.period), 'period');
+      expect(OsdKeys.compose(LogicalKeyboardKey.minus), '-');
     });
 
     test('prefixes modifiers in the order the Lua parser expects', () {
-      expect(OsdKeys.compose('Arrow Left', shift: true), 'shift+left');
-      expect(OsdKeys.compose('Key N', alt: true), 'alt+n');
-      expect(OsdKeys.compose('Key S', shift: true), 'shift+s');
-      expect(OsdKeys.compose('Key O', alt: true, shift: true), 'alt+shift+o');
+      expect(
+        OsdKeys.compose(LogicalKeyboardKey.arrowLeft, shift: true),
+        'shift+left',
+      );
+      expect(OsdKeys.compose(LogicalKeyboardKey.keyN, alt: true), 'alt+n');
+      expect(OsdKeys.compose(LogicalKeyboardKey.keyS, shift: true), 'shift+s');
+      expect(
+        OsdKeys.compose(LogicalKeyboardKey.keyO, alt: true, shift: true),
+        'alt+shift+o',
+      );
       // Unmodified keys must not grow a dangling prefix.
-      expect(OsdKeys.compose('Space', shift: false, alt: false), 'space');
+      expect(
+        OsdKeys.compose(LogicalKeyboardKey.space, shift: false, alt: false),
+        'space',
+      );
     });
 
     test('declines keys the OSD does not bind', () {
-      expect(OsdKeys.compose('Cut'), isNull);
-      expect(OsdKeys.compose('Media Play'), isNull);
-      expect(OsdKeys.compose(null), isNull);
-      expect(OsdKeys.base(''), isNull);
+      expect(OsdKeys.compose(LogicalKeyboardKey.f1), isNull);
+      expect(OsdKeys.compose(LogicalKeyboardKey.controlLeft), isNull);
+      expect(OsdKeys.compose(LogicalKeyboardKey.mediaPlay), isNull);
+      expect(OsdKeys.base(LogicalKeyboardKey.shiftLeft), isNull);
     });
   });
 }

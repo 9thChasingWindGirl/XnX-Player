@@ -340,7 +340,7 @@ class _PlayerPageState extends State<PlayerPage> {
     }
 
     final String? composed = OsdKeys.compose(
-      key.debugName,
+      key,
       shift: keyboard.isShiftPressed,
       alt: keyboard.isAltPressed,
     );
