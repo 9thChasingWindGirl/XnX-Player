@@ -48,6 +48,13 @@ class _PlayerPageState extends State<PlayerPage> {
   StreamSubscription<bool>? _loadedSub;
   Timer? _watchdog;
   Timer? _escFallback;
+  Timer? _health;
+
+  /// Which rung of the fallback ladder the video path is on. 0 means the first
+  /// choice worked; every step down costs quality but saves the picture.
+  int _healthStage = 0;
+  int _healthTicks = 0;
+  String? _healthNote;
 
   String? _error;
   String? _hint;
@@ -66,6 +73,7 @@ class _PlayerPageState extends State<PlayerPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _watchdog?.cancel();
     _escFallback?.cancel();
+    _health?.cancel();
     _loadedSub?.cancel();
     _bridge?.dispose();
     _player?.lastError.removeListener(_onMpvError);
@@ -195,6 +203,7 @@ class _PlayerPageState extends State<PlayerPage> {
         // Reveal only once mpv actually has a frame; before that its child
         // window would just cover the loading state with black.
         _surface?.show();
+        _startHealthWatch();
       });
 
       player.setProperty('volume', '${prefs.volume}');
@@ -247,6 +256,138 @@ class _PlayerPageState extends State<PlayerPage> {
       _error = message;
       _showDiagnostics = true;
     });
+  }
+
+  /// Watches whether mpv actually puts frames on screen, and walks down a
+  /// fallback ladder if it does not.
+  ///
+  /// A 4K HDR10 file can log a perfectly healthy
+  /// `VO: [gpu-next] 3840x2160 d3d11[p010]` and still show nothing, because the
+  /// frame never reaches the screen. There are only a few ways that happens and
+  /// each has a cheap, reversible fix — so instead of guessing, try them in
+  /// order of least damage and stop as soon as a frame is presented:
+  ///
+  /// 1. `video-sync=display-resample` without a working audio output. That mode
+  ///    derives its clock from the audio device; when the AO is dead the first
+  ///    frame sits there forever, which looks exactly like a black screen.
+  /// 2. Hardware decoding (d3d11va) failing to map a 10-bit surface.
+  /// 3. gpu-next with HDR passthrough on a display that cannot take it.
+  ///
+  /// Anything healthy exits on the first tick, so a working file pays nothing.
+  void _startHealthWatch() {
+    _health?.cancel();
+    _healthStage = 0;
+    _healthTicks = 0;
+    _healthNote = null;
+    _health = Timer.periodic(const Duration(milliseconds: 1200), (Timer timer) {
+      final MpvPlayer? player = _player;
+      if (!mounted || player == null || _error != null) {
+        timer.cancel();
+        _health = null;
+        return;
+      }
+      // Paused means "no new frames" is the expected state, not a fault.
+      if (player.getPropertyFlag('paused')) {
+        return;
+      }
+      // Audio-only files have no VO at all; the ladder would be pure noise.
+      if (player.getProperty('video') == 'no') {
+        timer.cancel();
+        _health = null;
+        return;
+      }
+      final String? configuredRaw = player.getProperty('vo-configured');
+      final String? fpsRaw = player.getProperty('estimated-vf-fps');
+      if (configuredRaw == null && fpsRaw == null) {
+        // Neither probe exists in this libmpv build: escalate on nothing and we
+        // would wreck a perfectly good picture. Leave it alone.
+        timer.cancel();
+        _health = null;
+        return;
+      }
+      // `vo-configured` means the VO has a frame size, `estimated-vf-fps` means
+      // frames are actually being presented. A configured-but-zero-fps VO is
+      // precisely the black-screen case, so both must agree.
+      final bool configured = configuredRaw == 'yes';
+      final double fps = double.tryParse(fpsRaw ?? '') ?? 0;
+      if (configured && (fpsRaw == null || fps > 0.01)) {
+        timer.cancel();
+        _health = null;
+        // Only repaint when a rung was actually used.
+        if (_healthStage > 0 && mounted) {
+          setState(() {});
+        }
+        return;
+      }
+
+      // No audio device means display-resample can never get a clock, and that
+      // check is instant, so it does not wait for the grace period.
+      final String sync = player.getProperty('video-sync') ?? 'audio';
+      final String? ao = player.getProperty('ao');
+      final bool noAudio = ao == null || ao.isEmpty || ao == 'null';
+      if (_healthStage == 0 && noAudio) {
+        // A dead AO also means bitstream passthrough was refused (exclusive
+        // mode), which is the only thing that can take out every audio device
+        // at once. Clearing it lets mpv retry with a plain shared-mode device,
+        // and this can never hurt a working setup because the AO is already
+        // gone at this point.
+        player.setProperty('audio-spdif', '');
+        if (sync == 'display-resample') {
+          player.setProperty('video-sync', 'audio');
+        }
+        _healthStage = 1;
+        _healthTicks = 0;
+        _healthNote = '没有可用的音频输出：已关闭音频直通，同步基准改用音频时钟';
+        if (mounted) {
+          setState(() {});
+        }
+        return;
+      }
+
+      // Roughly 3.6s per rung: long enough for a 4K file to spin up.
+      if (++_healthTicks < 3) {
+        return;
+      }
+      _healthTicks = 0;
+
+      if (_healthStage == 0) {
+        player.setProperty('video-sync', 'audio');
+        _healthStage = 1;
+        _healthNote = '画面没有出现，已从 display-resample 切到音频时钟';
+      } else if (_healthStage == 1) {
+        player.setProperty('hwdec', 'no');
+        _healthStage = 2;
+        _healthNote = '画面仍未出现，已关闭硬件解码，改用软件解码';
+      } else if (_healthStage == 2) {
+        // Last rung: the HDR path is the remaining suspect, so turn both the
+        // hint and the VO down to the most compatible combination.
+        player.setProperty('target-colorspace-hint', 'no');
+        player.setProperty('vo', 'gpu');
+        _healthStage = 3;
+        _healthNote = '画面仍未出现，已关闭 HDR 直通并退回 gpu VO';
+      } else {
+        timer.cancel();
+        _health = null;
+        if (mounted) {
+          setState(() {
+            _showDiagnostics = true;
+            _hint = '三级回退都没有出画面。按 F1 打开诊断，点「复制日志」把内容发我。';
+          });
+        }
+        return;
+      }
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  /// One line for the diagnostics panel: which rung we are on and why.
+  String get _healthText {
+    if (_healthStage == 0) {
+      return _healthNote ?? '首选项（gpu-next · 硬解 · HDR 直通）';
+    }
+    return '第 $_healthStage 级回退 · ${_healthNote ?? ''}';
   }
 
   /// Opens a file dialog for an external subtitle and hands it to mpv.
@@ -390,6 +531,18 @@ class _PlayerPageState extends State<PlayerPage> {
                   logPath: '${Directory.systemTemp.path}${Platform.pathSeparator}xnx_player_mpv.log',
                   lines: player.logs,
                   surfaceInfo: _surface?.diagnostics ?? '未枚举到子窗口',
+                  health: _healthText,
+                  facts: <String>[
+                    'vo=${player.getProperty('vo') ?? '—'}'
+                        ' 已配置=${player.getProperty('vo-configured') ?? '—'}'
+                        ' 实测帧率=${player.getProperty('estimated-vf-fps') ?? '—'}',
+                    '解码=${player.getProperty('hwdec-current') ?? '—'}'
+                        ' 同步=${player.getProperty('video-sync') ?? '—'}'
+                        ' 音频=${player.getProperty('ao') ?? '无'}',
+                    '画质=${player.getProperty('video-params/pixelformat') ?? '—'}'
+                        ' 色域=${player.getProperty('video-params/primaries') ?? '—'}'
+                        ' 峰值=${player.getProperty('target-peak') ?? '—'}',
+                  ],
                 ),
               ),
           ],
@@ -477,21 +630,56 @@ class _ErrorPanel extends StatelessWidget {
 /// Bottom-sheet style dump of the mpv log and window discovery result.
 ///
 /// This exists because a native child window cannot be inspected from Flutter:
-/// when video does not appear, the only truth is mpv's own log.
-class _DiagnosticsPanel extends StatelessWidget {
+/// when video does not appear, the only truth is mpv's own log. The copy button
+/// exists because that log is long, lives in %TEMP%, and every black-screen
+/// report so far needed its tail verbatim.
+class _DiagnosticsPanel extends StatefulWidget {
   const _DiagnosticsPanel({
     required this.logPath,
     required this.lines,
     required this.surfaceInfo,
+    required this.health,
+    required this.facts,
   });
 
   final String logPath;
   final List<String> lines;
   final String surfaceInfo;
+  final String health;
+  final List<String> facts;
+
+  @override
+  State<_DiagnosticsPanel> createState() => _DiagnosticsPanelState();
+}
+
+class _DiagnosticsPanelState extends State<_DiagnosticsPanel> {
+  bool _copied = false;
+
+  Future<void> _copy() async {
+    // The in-memory ring buffer is the fallback: it is always populated, while
+    // the file only exists when mpv managed to open its log.
+    String text = widget.lines.join('\n');
+    try {
+      final File file = File(widget.logPath);
+      if (file.existsSync()) {
+        final String full = await file.readAsString();
+        if (full.trim().isNotEmpty) {
+          text = full;
+        }
+      }
+    } catch (_) {
+      // Keep the ring buffer version.
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) {
+      setState(() => _copied = true);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final List<String> tail = lines.length > 14 ? lines.sublist(lines.length - 14) : lines;
+    final List<String> tail =
+        widget.lines.length > 14 ? widget.lines.sublist(widget.lines.length - 14) : widget.lines;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xE60E1018),
@@ -503,13 +691,29 @@ class _DiagnosticsPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(
-              '诊断信息 · F1 开关',
-              style: PsType.micro.copyWith(letterSpacing: 1.2, color: PsColor.text),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    '诊断信息 · F1 开关',
+                    style: PsType.micro.copyWith(letterSpacing: 1.2, color: PsColor.text),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: _copy,
+                  child: Text(
+                    _copied ? '已复制' : '复制日志',
+                    style: PsType.micro.copyWith(color: PsColor.text),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: PsSpace.xs),
-            Text('子窗口：$surfaceInfo', style: _mono.copyWith(color: PsColor.textDim)),
-            Text('日志：$logPath', style: _mono.copyWith(color: PsColor.textDim)),
+            Text('画面：${widget.health}', style: _mono.copyWith(color: PsColor.text)),
+            Text('子窗口：${widget.surfaceInfo}', style: _mono.copyWith(color: PsColor.textDim)),
+            for (final String fact in widget.facts)
+              Text(fact, style: _mono.copyWith(color: PsColor.textDim)),
+            Text('日志：${widget.logPath}', style: _mono.copyWith(color: PsColor.textDim)),
             const SizedBox(height: PsSpace.xs),
             if (tail.isEmpty)
               Text('（mpv 尚未输出日志）', style: _mono.copyWith(color: PsColor.textDim))

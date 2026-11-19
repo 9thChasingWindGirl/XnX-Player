@@ -347,6 +347,18 @@ class Win32 {
     return moved;
   }
 
+  /// Puts [hwnd] above its siblings without touching size, position or focus.
+  ///
+  /// Child windows are siblings of the Flutter view; whichever came last owns
+  /// the pixels. Re-raising on every poll is cheap and idempotent, and it
+  /// removes a whole class of "the app is running but the picture is black".
+  static void raise(int hwnd) {
+    if (hwnd == 0 || _isWindow(hwnd) == 0) {
+      return;
+    }
+    _setWindowPos(hwnd, _hwndTop, 0, 0, 0, 0, _swpNoSize | _swpNoMove | _swpNoActivate);
+  }
+
   static void setVisible(int hwnd, {required bool visible}) {
     if (hwnd == 0 || _isWindow(hwnd) == 0) {
       return;

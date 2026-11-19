@@ -15,7 +15,7 @@ class MpvSettings {
     this.hwdec = 'auto-safe',
     this.hdrPassthrough = true,
     this.smoothMotion = true,
-    this.audioPassthrough = AudioPassthrough.all,
+    this.audioPassthrough = AudioPassthrough.off,
     this.deband = false,
     this.volume = 80,
   });

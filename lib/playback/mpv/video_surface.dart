@@ -123,6 +123,11 @@ class VideoSurface {
         _videoBox = inner;
       }
     }
+
+    // Z-order does not survive a fullscreen transition or a Flutter view
+    // rebuild: the container can end up under FLUTTERVIEW, which renders as a
+    // perfectly black screen with a healthy mpv log behind it. Raising is free.
+    Win32.raise(host);
   }
 
   void hide() {

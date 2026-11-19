@@ -481,6 +481,42 @@ class MpvPlayer {
     }
   }
 
+  /// Reads a property synchronously and returns it as a string.
+  ///
+  /// Only meant for the few checks that decide whether the video path is alive
+  /// (`vo-configured`, `estimated-vf-fps`, `ao`...). These are cached values, so
+  /// the call does not block on the playback thread.
+  String? getProperty(String name) {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null) {
+      return null;
+    }
+    final Pointer<Utf8> namePtr = name.toNativeUtf8();
+    Pointer<Utf8> value = nullptr;
+    try {
+      value = _mpv.getPropertyString(handle, namePtr);
+      if (value == nullptr) {
+        return null;
+      }
+      final String text = value.toDartString();
+      return text.isEmpty ? null : text;
+    } finally {
+      if (value != nullptr) {
+        _mpv.free(value.cast<Void>());
+      }
+      calloc.free(namePtr);
+    }
+  }
+
+  /// Convenience wrapper for the numeric properties the health check needs.
+  double? getPropertyNumber(String name) {
+    final String? raw = getProperty(name);
+    return raw == null ? null : double.tryParse(raw);
+  }
+
+  /// Convenience wrapper for boolean properties (`yes` / `no`).
+  bool getPropertyFlag(String name) => getProperty(name) == 'yes';
+
   void load(String path, {Duration startAt = Duration.zero}) {
     final String options =
         'start=${(startAt.inMilliseconds / 1000).toStringAsFixed(3)}';

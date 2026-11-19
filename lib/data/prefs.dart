@@ -10,7 +10,11 @@ enum PassthroughPref { all, dolby, dts, off }
 class PlaybackPrefs {
   const PlaybackPrefs({
     this.quality = QualityPref.balanced,
-    this.passthrough = PassthroughPref.all,
+    // Bitstream passthrough needs a receiver that accepts the format and an
+    // exclusive-mode audio device. Forcing it by default made WASAPI fail to
+    // initialise on ordinary desktop outputs, which costs all audio, so it is
+    // opt-in from 设置 → 播放.
+    this.passthrough = PassthroughPref.off,
     this.hdrPassthrough = true,
     this.smoothMotion = true,
     this.volume = 80,
@@ -79,7 +83,7 @@ class PlaybackPrefs {
       ),
       passthrough: PassthroughPref.values.firstWhere(
         (PassthroughPref value) => value.name == json['passthrough'],
-        orElse: () => PassthroughPref.all,
+        orElse: () => PassthroughPref.off,
       ),
       hdrPassthrough: json['hdrPassthrough'] as bool? ?? true,
       smoothMotion: json['smoothMotion'] as bool? ?? true,

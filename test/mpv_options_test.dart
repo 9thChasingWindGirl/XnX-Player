@@ -30,6 +30,15 @@ void main() {
       expect(options['tone-mapping'], 'spline');
     });
 
+    test('does not force bitstream passthrough by default', () {
+      // Passthrough needs WASAPI exclusive mode, and a refused request takes
+      // out the audio device entirely ("Failed to initialize audio driver
+      // 'wasapi'"). Decoding everything is the safe default.
+      final Map<String, String> options = buildMpvOptions(osdScriptPath: 'x');
+      expect(options['audio-spdif'], '');
+      expect(options['audio-device'], 'auto');
+    });
+
     test('disables HDR passthrough on request', () {
       final Map<String, String> options = buildMpvOptions(
         osdScriptPath: 'x',
