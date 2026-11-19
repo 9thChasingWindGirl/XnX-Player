@@ -337,7 +337,7 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
             _last = clock.time;
             if (_focus >= 0) {
               const double pitch = _cardWidth + _gap;
-              final double anchor = PsSpace.safeX + pitch * 1.5;
+              const double anchor = PsSpace.safeX + pitch * 1.5;
               final double left = PsSpace.safeX + _focus * pitch;
               final double contentRight = PsSpace.safeX + widget.items.length * pitch;
               final double maxScroll = math.max(0.0, contentRight + PsSpace.safeX - 1920);

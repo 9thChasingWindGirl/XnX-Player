@@ -63,7 +63,6 @@ final class _Rect extends Struct {
 // crash at runtime.
 
 typedef _EnumProcNative = Int32 Function(IntPtr hwnd, IntPtr param);
-typedef _EnumProcDart = int Function(int hwnd, int param);
 
 typedef _FindWindowNative = IntPtr Function(Pointer<Utf16>, Pointer<Utf16>);
 typedef _FindWindowDart = int Function(Pointer<Utf16>, Pointer<Utf16>);
