@@ -1,0 +1,27 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.vscode/
+
+# Generated windows scaffolding is created in CI (flutter create)
+windows/
+
+# Local mpv runtime binaries (fetched by tool/fetch_libmpv.dart)
+third_party/mpv/*.dll
+third_party/mpv/*.7z
+third_party/mpv/*.zip
+.tmp_scaffold/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Workspace-local notes
+.workbuddy/

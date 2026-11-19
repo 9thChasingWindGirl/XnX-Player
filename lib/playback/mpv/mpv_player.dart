@@ -1,0 +1,455 @@
+import 'dart:async';
+import 'dart:ffi';
+
+import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
+
+import 'libmpv.dart';
+
+class MpvTrack {
+  const MpvTrack({
+    required this.id,
+    required this.type,
+    this.title,
+    this.lang,
+    this.codec,
+    this.selected = false,
+  });
+
+  final int id;
+
+  /// `video` / `audio` / `sub`.
+  final String type;
+  final String? title;
+  final String? lang;
+  final String? codec;
+  final bool selected;
+}
+
+/// A message sent by the Lua OSD through `script-message`.
+class MpvClientEvent {
+  const MpvClientEvent(this.name, this.args);
+
+  final String name;
+  final List<String> args;
+
+  String? get payload => args.isEmpty ? null : args.first;
+}
+
+class MpvViewState {
+  const MpvViewState({
+    this.position = 0,
+    this.duration = 0,
+    this.paused = false,
+    this.buffering = false,
+    this.seeking = false,
+    this.eof = false,
+    this.volume = 80,
+    this.muted = false,
+    this.tracks = const <MpvTrack>[],
+    this.videoCodec,
+    this.hwdec,
+    this.containerFps,
+  });
+
+  final double position;
+  final double duration;
+  final bool paused;
+  final bool buffering;
+  final bool seeking;
+  final bool eof;
+  final double volume;
+  final bool muted;
+  final List<MpvTrack> tracks;
+  final String? videoCodec;
+  final String? hwdec;
+  final double? containerFps;
+
+  bool get hasDuration => duration > 0;
+
+  MpvViewState copyWith({
+    double? position,
+    double? duration,
+    bool? paused,
+    bool? buffering,
+    bool? seeking,
+    bool? eof,
+    double? volume,
+    bool? muted,
+    List<MpvTrack>? tracks,
+    String? videoCodec,
+    String? hwdec,
+    double? containerFps,
+  }) {
+    return MpvViewState(
+      position: position ?? this.position,
+      duration: duration ?? this.duration,
+      paused: paused ?? this.paused,
+      buffering: buffering ?? this.buffering,
+      seeking: seeking ?? this.seeking,
+      eof: eof ?? this.eof,
+      volume: volume ?? this.volume,
+      muted: muted ?? this.muted,
+      tracks: tracks ?? this.tracks,
+      videoCodec: videoCodec ?? this.videoCodec,
+      hwdec: hwdec ?? this.hwdec,
+      containerFps: containerFps ?? this.containerFps,
+    );
+  }
+}
+
+/// High-level wrapper around one libmpv instance.
+///
+/// The native handle is created on the platform thread; events are pumped back
+/// into the Dart isolate through `mpv_set_wakeup_callback` +
+/// `NativeCallable.listener`, so there is no polling thread and no manual
+/// message port bookkeeping.
+class MpvPlayer {
+  MpvPlayer();
+
+  static const Map<String, int> _observedProperties = <String, int>{
+    'time-pos': mpvFormatDouble,
+    'duration': mpvFormatDouble,
+    'pause': mpvFormatFlag,
+    'seeking': mpvFormatFlag,
+    'paused-for-cache': mpvFormatFlag,
+    'eof-reached': mpvFormatFlag,
+    'volume': mpvFormatDouble,
+    'mute': mpvFormatFlag,
+    'track-list': mpvFormatNode,
+    'video-codec': mpvFormatString,
+    'hwdec-current': mpvFormatString,
+    'container-fps': mpvFormatDouble,
+  };
+
+  final ValueNotifier<MpvViewState> state = ValueNotifier<MpvViewState>(const MpvViewState());
+  final StreamController<MpvClientEvent> _clientEvents = StreamController<MpvClientEvent>.broadcast();
+  final StreamController<bool> _fileLoaded = StreamController<bool>.broadcast();
+
+  Pointer<Void>? _handle;
+  NativeCallable<Void Function(Pointer<Void>)>? _wakeup;
+  bool _disposed = false;
+  bool _initialized = false;
+
+  Stream<MpvClientEvent> get clientEvents => _clientEvents.stream;
+
+  Stream<bool> get onFileLoaded => _fileLoaded.stream;
+
+  bool get isInitialized => _initialized;
+
+  LibMpv get _mpv => LibMpv.instance;
+
+  void start({required Map<String, String> options, String? logFile}) {
+    if (_handle != null) {
+      throw StateError('mpv already started');
+    }
+    final Pointer<Void> handle = _mpv.create();
+    if (handle.address == 0) {
+      throw StateError('mpv_create() 失败：libmpv 版本不匹配或内存不足。');
+    }
+    _handle = handle;
+
+    try {
+      if (logFile != null) {
+        _setOption('log-file', logFile);
+      }
+      options.forEach(_setOption);
+      final int rc = _mpv.initialize(handle);
+      if (rc < 0) {
+        throw StateError('mpv_initialize 失败：${_mpv.errorText(rc)}');
+      }
+      _initialized = true;
+    } catch (_) {
+      _mpv.terminateDestroy(handle);
+      _handle = null;
+      _initialized = false;
+      rethrow;
+    }
+
+    _mpv.setWakeupCallback(handle, _listener().nativeFunction, nullptr);
+    _observe();
+  }
+
+  NativeCallable<Void Function(Pointer<Void>)> _listener() {
+    return _wakeup ??= NativeCallable<Void Function(Pointer<Void>)>.listener(_onWakeup);
+  }
+
+  void _onWakeup(Pointer<Void> context) {
+    _drain();
+  }
+
+  void _setOption(String name, String value) {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null) {
+      return;
+    }
+    final Pointer<Utf8> namePtr = name.toNativeUtf8();
+    final Pointer<Utf8> valuePtr = value.toNativeUtf8();
+    try {
+      _mpv.setOptionString(handle, namePtr, valuePtr);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(valuePtr);
+    }
+  }
+
+  void _observe() {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null) {
+      return;
+    }
+    _observedProperties.forEach((String name, int format) {
+      final Pointer<Utf8> namePtr = name.toNativeUtf8();
+      try {
+        _mpv.observeProperty(handle, 0, namePtr, format);
+      } finally {
+        calloc.free(namePtr);
+      }
+    });
+  }
+
+  void _drain() {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null || _disposed) {
+      return;
+    }
+    for (int guard = 0; guard < 512; guard++) {
+      final Pointer<MpvEvent> event = _mpv.waitEvent(handle, 0);
+      if (event.address == 0) {
+        return;
+      }
+      final MpvEvent value = event.ref;
+      if (value.eventId == mpvEventNone) {
+        return;
+      }
+      _handleEvent(value);
+    }
+  }
+
+  void _handleEvent(MpvEvent event) {
+    switch (event.eventId) {
+      case mpvEventPropertyChange:
+        _handlePropertyChange(event);
+        break;
+      case mpvEventFileLoaded:
+        if (!_fileLoaded.isClosed) {
+          _fileLoaded.add(true);
+        }
+        break;
+      case mpvEventEndFile:
+        state.value = state.value.copyWith(eof: true, buffering: false);
+        break;
+      case mpvEventClientMessage:
+        _handleClientMessage(event);
+        break;
+      case mpvEventShutdown:
+        break;
+      default:
+        break;
+    }
+  }
+
+  void _handlePropertyChange(MpvEvent event) {
+    if (event.data.address == 0) {
+      return;
+    }
+    final MpvEventProperty property = event.data.cast<MpvEventProperty>().ref;
+    if (property.name.address == 0) {
+      return;
+    }
+    _applyProperty(property.name.toDartString(), LibMpv.readProperty(property));
+  }
+
+  void _handleClientMessage(MpvEvent event) {
+    if (event.data.address == 0) {
+      return;
+    }
+    final MpvEventClientMessage message = event.data.cast<MpvEventClientMessage>().ref;
+    final List<String> args = <String>[];
+    for (int i = 0; i < message.numArgs; i++) {
+      final Pointer<Utf8> arg = message.args[i];
+      if (arg.address == 0) {
+        continue;
+      }
+      args.add(arg.toDartString());
+    }
+    if (args.isEmpty || _clientEvents.isClosed) {
+      return;
+    }
+    _clientEvents.add(MpvClientEvent(args.first, args.sublist(1)));
+  }
+
+  void _applyProperty(String name, Object? value) {
+    final MpvViewState current = state.value;
+    switch (name) {
+      case 'time-pos':
+        if (value is num) {
+          state.value = current.copyWith(position: value.toDouble());
+        }
+        break;
+      case 'duration':
+        if (value is num) {
+          state.value = current.copyWith(duration: value.toDouble());
+        }
+        break;
+      case 'pause':
+        if (value is bool) {
+          state.value = current.copyWith(paused: value);
+        }
+        break;
+      case 'seeking':
+        if (value is bool) {
+          state.value = current.copyWith(seeking: value);
+        }
+        break;
+      case 'paused-for-cache':
+        if (value is bool) {
+          state.value = current.copyWith(buffering: value);
+        }
+        break;
+      case 'eof-reached':
+        if (value is bool) {
+          state.value = current.copyWith(eof: value);
+        }
+        break;
+      case 'volume':
+        if (value is num) {
+          state.value = current.copyWith(volume: value.toDouble());
+        }
+        break;
+      case 'mute':
+        if (value is bool) {
+          state.value = current.copyWith(muted: value);
+        }
+        break;
+      case 'container-fps':
+        if (value is num) {
+          state.value = current.copyWith(containerFps: value.toDouble());
+        }
+        break;
+      case 'video-codec':
+        if (value is String) {
+          state.value = current.copyWith(videoCodec: value);
+        }
+        break;
+      case 'hwdec-current':
+        if (value is String) {
+          state.value = current.copyWith(hwdec: value);
+        }
+        break;
+      case 'track-list':
+        state.value = current.copyWith(tracks: _parseTracks(value));
+        break;
+      default:
+        break;
+    }
+  }
+
+  List<MpvTrack> _parseTracks(Object? value) {
+    if (value is! List) {
+      return const <MpvTrack>[];
+    }
+    final List<MpvTrack> tracks = <MpvTrack>[];
+    for (final Object? entry in value) {
+      if (entry is! Map) {
+        continue;
+      }
+      final Object? id = entry['id'];
+      final Object? type = entry['type'];
+      if (id is! int || type is! String) {
+        continue;
+      }
+      tracks.add(MpvTrack(
+        id: id,
+        type: type,
+        title: entry['title'] is String ? entry['title'] as String : null,
+        lang: entry['lang'] is String ? entry['lang'] as String : null,
+        codec: entry['codec'] is String ? entry['codec'] as String : null,
+        selected: entry['selected'] == true,
+      ));
+    }
+    return tracks;
+  }
+
+  int command(List<String> args, {bool async = false}) {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null) {
+      return -1;
+    }
+    final Pointer<Pointer<Utf8>> argv = calloc<Pointer<Utf8>>(args.length + 1);
+    final List<Pointer<Utf8>> allocated = <Pointer<Utf8>>[];
+    try {
+      for (int i = 0; i < args.length; i++) {
+        final Pointer<Utf8> arg = args[i].toNativeUtf8();
+        allocated.add(arg);
+        argv[i] = arg;
+      }
+      argv[args.length] = nullptr.cast<Utf8>();
+      return async ? _mpv.commandAsync(handle, 0, argv) : _mpv.command(handle, argv);
+    } finally {
+      for (final Pointer<Utf8> arg in allocated) {
+        calloc.free(arg);
+      }
+      calloc.free(argv);
+    }
+  }
+
+  void setProperty(String name, String value) {
+    final Pointer<Void>? handle = _handle;
+    if (handle == null) {
+      return;
+    }
+    final Pointer<Utf8> namePtr = name.toNativeUtf8();
+    final Pointer<Utf8> valuePtr = value.toNativeUtf8();
+    try {
+      _mpv.setPropertyString(handle, namePtr, valuePtr);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(valuePtr);
+    }
+  }
+
+  void load(String path, {Duration startAt = Duration.zero}) {
+    final String options = startAt > Duration.zero ? 'start=${(startAt.inMilliseconds / 1000).toStringAsFixed(3)}' : 'start=0';
+    command(<String>['loadfile', path, 'replace', '-1', options], async: true);
+  }
+
+  void togglePause() {
+    command(<String>['cycle', 'pause']);
+  }
+
+  void seekBy(double seconds) {
+    command(<String>['seek', seconds.toStringAsFixed(2), 'relative']);
+  }
+
+  void seekTo(double seconds) {
+    command(<String>['seek', seconds.toStringAsFixed(2), 'absolute']);
+  }
+
+  void setVolume(double volume) {
+    command(<String>['set', 'volume', volume.clamp(0, 130).toStringAsFixed(1)]);
+  }
+
+  void stop() {
+    command(<String>['stop']);
+  }
+
+  void dispose() {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
+    final Pointer<Void>? handle = _handle;
+    _handle = null;
+    _initialized = false;
+    if (handle != null) {
+      _mpv.setWakeupCallback(handle, nullptr, nullptr);
+      _mpv.terminateDestroy(handle);
+    }
+    _wakeup?.close();
+    _wakeup = null;
+    _clientEvents.close();
+    _fileLoaded.close();
+    state.dispose();
+  }
+}

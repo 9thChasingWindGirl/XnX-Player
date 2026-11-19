@@ -1,0 +1,80 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      # The Windows runner is generated here on purpose: the template is
+      # version-specific and is never hand-edited, so CI always produces a
+      # scaffold that matches the Flutter SDK building it.
+      - name: Bootstrap Windows runner
+        shell: pwsh
+        run: |
+          flutter create --platforms=windows --project-name xnx_player --org com.xnx --no-pub .tmp_scaffold
+          if (Test-Path windows) { Remove-Item -Recurse -Force windows }
+          Copy-Item -Recurse .tmp_scaffold/windows ./windows
+          Remove-Item -Recurse -Force .tmp_scaffold
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze (gate)
+        run: flutter analyze --fatal-warnings
+
+      - name: Unit tests
+        run: flutter test --reporter expanded
+
+      - name: Fetch libmpv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MPV_TAG: ${{ vars.MPV_TAG }}
+        run: dart run tool/fetch_libmpv.dart
+
+      - name: Build release
+        run: flutter build windows --release --no-tree-shake-icons
+
+      - name: Bundle libmpv and verify
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build -Recurse -Filter "xnx_player.exe" | Where-Object { $_.FullName -like "*Release*" } | Select-Object -First 1
+          if (-not $exe) { throw "xnx_player.exe not found" }
+          $rel = $exe.Directory.FullName
+          Write-Host "Release dir: $rel"
+          Copy-Item third_party/mpv/libmpv-2.dll "$rel/libmpv-2.dll" -Force
+          if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/xnx_osd.lua")) { throw "OSD lua missing from bundle" }
+          if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
+          "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XnX-Player-windows-x64
+          path: ${{ env.REL_DIR }}
+          if-no-files-found: error
+          retention-days: 14
