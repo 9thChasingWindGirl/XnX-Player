@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/poster_image.dart';
 import '../../ui/widgets/ps_button.dart';
 
 /// The hero panel: key art top-right, copy on the left, one action.
@@ -219,10 +220,10 @@ class _HeroArt extends StatelessWidget {
               ),
             ),
             if (url != null && url.isNotEmpty)
-              Image.network(
+              posterImage(
                 url,
                 fit: BoxFit.cover,
-                gaplessPlayback: true,
+                gapless: true,
                 errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
                     const SizedBox.shrink(),
               ),

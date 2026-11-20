@@ -28,6 +28,7 @@ class LocalSource extends MediaSource {
     }
 
     final List<MediaItem> out = <MediaItem>[];
+    final Map<String, List<String>> siblingCache = <String, List<String>>{};
     try {
       await for (final FileSystemEntity entity
           in directory.list(recursive: true, followLinks: false)) {
@@ -59,6 +60,10 @@ class LocalSource extends MediaSource {
             path: entity.path,
             meta: _sizeLabel(stat.size),
             badge: _resolutionBadge(name),
+            // Scrapers (tinyMediaManager, Emby for Windows, …) drop a
+            // poster/folder image next to the video — pick it up so the
+            // library shows real artwork instead of a letter tile.
+            posterUrl: _posterFor(parent, name, siblingCache),
           ),
         );
       }
@@ -77,6 +82,48 @@ class LocalSource extends MediaSource {
       throw const SourceException('文件已被移动或删除');
     }
     return path;
+  }
+
+  /// Finds scraped artwork for a video among its directory siblings.
+  ///
+  /// Priority: `<video-stem>-poster.*` / `<video-stem>.*` (per-movie artwork)
+  /// first, then the fixed `poster` / `folder` / `cover` conventions. The
+  /// directory listing is cached per folder — movies rarely live alone.
+  static String? _posterFor(String parent, String videoName, Map<String, List<String>> cache) {
+    final List<String> siblings = cache.putIfAbsent(
+      parent,
+      () => Directory(parent)
+          .listSync(recursive: false, followLinks: false)
+          .whereType<File>()
+          .map((File file) => file.path.toLowerCase())
+          .toList(growable: false),
+    );
+    if (siblings.isEmpty) {
+      return null;
+    }
+    final String lower = videoName.toLowerCase();
+    final String stem = lower.contains('.') ? lower.substring(0, lower.lastIndexOf('.')) : lower;
+    const List<String> fixed = <String>['poster', 'folder', 'cover'];
+    String? best;
+    for (final String path in siblings) {
+      final String name = path.replaceAll('\\', '/').split('/').last;
+      final int dot = name.lastIndexOf('.');
+      if (dot <= 0) {
+        continue;
+      }
+      final String stemName = name.substring(0, dot);
+      final String ext = name.substring(dot + 1);
+      if (ext != 'jpg' && ext != 'jpeg' && ext != 'png' && ext != 'webp') {
+        continue;
+      }
+      if (stemName == stem || stemName == '$stem-poster') {
+        return path;
+      }
+      if (best == null && fixed.contains(stemName)) {
+        best = path;
+      }
+    }
+    return best;
   }
 
   static String _resolutionBadge(String name) {

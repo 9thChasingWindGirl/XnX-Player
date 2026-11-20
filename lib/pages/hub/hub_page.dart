@@ -9,6 +9,7 @@ import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/motion_clock.dart';
+import '../../ui/core/poster_image.dart';
 import '../../ui/core/tv_focusable.dart';
 import '../../ui/widgets/ps_button.dart';
 import '../../ui/widgets/ps_page.dart';
@@ -277,7 +278,7 @@ class _KeyArt extends StatelessWidget {
           ),
         ),
         if (url != null && url.isNotEmpty)
-          Image.network(
+          posterImage(
             url,
             fit: BoxFit.cover,
             alignment: Alignment.topRight,

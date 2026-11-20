@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/poster_image.dart';
 
 /// Artwork card used by every shelf.
 ///
@@ -54,10 +55,10 @@ class PosterCard extends StatelessWidget {
                 ),
               ),
               if (item.hasPoster)
-                Image.network(
+                posterImage(
                   item.posterUrl!,
                   fit: BoxFit.cover,
-                  gaplessPlayback: true,
+                  gapless: true,
                   errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
                       _ArtFallback(item: item),
                 )
@@ -239,7 +240,7 @@ class ChannelCard extends StatelessWidget {
                   padding: const EdgeInsets.only(left: 16, top: 16, bottom: 56, right: 16),
                   child: Align(
                     alignment: Alignment.centerLeft,
-                    child: Image.network(
+                    child: posterImage(
                       item.posterUrl!,
                       width: 64,
                       height: 64,
