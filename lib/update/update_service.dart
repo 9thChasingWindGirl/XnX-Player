@@ -56,8 +56,7 @@ class UpdateService {
     if (channel == UpdateChannel.dev) {
       return _fetchNightly();
     }
-    final List<dynamic> releases =
-        await Http.getJson(releasesUri) as List<dynamic>;
+    final List<dynamic> releases = await Http.getJsonList(releasesUri);
     final List<UpdateCandidate> parsed = releases.map((Object? entry) {
       final Map<String, dynamic> release = entry! as Map<String, dynamic>;
       return _releaseCandidate(release);
@@ -90,8 +89,7 @@ class UpdateService {
   /// successful beta push; the version is the tag minus its prefix, and the
   /// zip rides as an ordinary release asset — anonymous-downloadable.
   Future<UpdateCandidate?> _fetchNightly() async {
-    final List<dynamic> releases =
-        await Http.getJson(releasesUri) as List<dynamic>;
+    final List<dynamic> releases = await Http.getJsonList(releasesUri);
     UpdateCandidate? best;
     for (final Object? entry in releases) {
       final Map<String, dynamic> release = entry! as Map<String, dynamic>;

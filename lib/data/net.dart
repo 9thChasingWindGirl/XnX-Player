@@ -16,6 +16,11 @@ class HttpResult {
 
   bool get ok => status >= 200 && status < 300;
 
+  Object? get json {
+    final Object? decoded = jsonDecode(body);
+    return decoded;
+  }
+
   Map<String, dynamic> get jsonMap {
     final Object? decoded = body.isEmpty ? null : jsonDecode(body);
     if (decoded is Map<String, dynamic>) {
@@ -118,6 +123,27 @@ abstract final class Http {
       throw HttpFailure('请求失败', status: result.status);
     }
     return result.jsonMap;
+  }
+
+  /// Same contract as [getJson] for endpoints that answer a JSON *array* —
+  /// GitHub's /releases does, and the update checker used to hit a
+  /// FormatException on every stable/beta/dev check because of it.
+  static Future<List<dynamic>> getJsonList(
+    Uri uri, {
+    Map<String, String>? headers,
+  }) async {
+    final HttpResult result = await get(uri, headers: headers);
+    if (!result.ok) {
+      throw HttpFailure('请求失败', status: result.status);
+    }
+    final Object? decoded = result.json;
+    if (decoded is List<dynamic>) {
+      return decoded;
+    }
+    if (decoded is Map<String, dynamic>) {
+      return <Map<String, dynamic>>[decoded];
+    }
+    throw const FormatException('响应不是 JSON 列表');
   }
 
   static void close() => _client.close(force: true);

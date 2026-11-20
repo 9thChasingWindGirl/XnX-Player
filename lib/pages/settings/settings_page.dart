@@ -371,10 +371,10 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-/// A settings row whose value is picked from an expanding list instead of a
-/// cycle arrow. Expanded options render inline under the row — TV focus
-/// navigation can reach them without any overlay plumbing, and picking one
-/// collapses the list again.
+/// A settings row whose value is picked from a small confirm card. The
+/// inline expansion made the whole section jump every time it opened; the
+/// card floats over everything instead, shows the three channels at once,
+/// and closes on pick or on tap-outside.
 class _DropdownRow extends StatefulWidget {
   const _DropdownRow({
     required this.label,
@@ -397,6 +397,20 @@ class _DropdownRow extends StatefulWidget {
 class _DropdownRowState extends State<_DropdownRow> {
   bool _open = false;
 
+  Future<void> _openPicker() async {
+    final int? picked = await showDialog<int>(
+      context: context,
+      barrierColor: const Color(0x88000000),
+      builder: (BuildContext context) => _ChannelPicker(
+        options: widget.options,
+        selectedIndex: widget.selectedIndex,
+      ),
+    );
+    if (picked != null && picked != widget.selectedIndex) {
+      widget.onPick(picked);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -406,7 +420,7 @@ class _DropdownRowState extends State<_DropdownRow> {
         children: <Widget>[
           TvFocusable(
             radius: 16,
-            onSelect: () => setState(() => _open = !_open),
+            onSelect: _openPicker,
             child: Container(
               height: 96,
               padding: const EdgeInsets.symmetric(horizontal: 28),
@@ -454,69 +468,79 @@ class _DropdownRowState extends State<_DropdownRow> {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  AnimatedRotation(
-                    turns: _open ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: Icon(
-                      Icons.expand_more_rounded,
-                      size: 26,
-                      color: PsColor.text.withValues(alpha: 0.6),
-                    ),
+                  Icon(
+                    Icons.expand_more_rounded,
+                    size: 26,
+                    color: PsColor.text.withValues(alpha: 0.6),
                   ),
                 ],
               ),
             ),
           ),
-          if (_open)
-            Container(
-              margin: const EdgeInsets.only(top: 6),
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              decoration: BoxDecoration(
-                color: PsColor.text.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: PsColor.text.withValues(alpha: 0.09)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  for (int i = 0; i < widget.options.length; i++)
-                    TvFocusable(
-                      radius: 12,
-                      onSelect: () {
-                        setState(() => _open = false);
-                        widget.onPick(i);
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
-                        child: Row(
-                          children: <Widget>[
-                            Icon(
-                              i == widget.selectedIndex
-                                  ? Icons.radio_button_checked_rounded
-                                  : Icons.radio_button_off_rounded,
-                              size: 20,
-                              color: i == widget.selectedIndex
-                                  ? PsColor.accent
-                                  : PsColor.text.withValues(alpha: 0.45),
-                            ),
-                            const SizedBox(width: 14),
-                            Text(
-                              widget.options[i],
-                              style: PsType.label.copyWith(
-                                fontSize: 20,
-                                color: PsColor.text.withValues(
-                                  alpha: i == widget.selectedIndex ? 1 : 0.72,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
         ],
+      ),
+    );
+  }
+}
+/// The floating confirm card: one column of options, the picked one ringed.
+class _ChannelPicker extends StatelessWidget {
+  const _ChannelPicker({required this.options, required this.selectedIndex});
+
+  final List<String> options;
+  final int selectedIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Material(
+        color: const Color(0xEE141821),
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          width: 460,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              for (int i = 0; i < options.length; i++)
+                TvFocusable(
+                  radius: 12,
+                  autofocus: i == selectedIndex,
+                  onSelect: () => Navigator.of(context).pop(i),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 16),
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          i == selectedIndex
+                              ? Icons.radio_button_checked_rounded
+                              : Icons.radio_button_off_rounded,
+                          size: 20,
+                          color: i == selectedIndex
+                              ? PsColor.accent
+                              : PsColor.text.withValues(alpha: 0.45),
+                        ),
+                        const SizedBox(width: 16),
+                        Text(
+                          options[i],
+                          style: PsType.label.copyWith(
+                            fontSize: 21,
+                            color: PsColor.text.withValues(
+                              alpha: i == selectedIndex ? 1 : 0.74,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

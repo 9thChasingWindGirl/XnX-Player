@@ -130,7 +130,7 @@ class EmbySource extends MediaSource {
   }
 
   static const String _fields =
-      'Overview,RunTimeTicks,ProductionYear,CommunityRating,ImageTags,'
+      'Overview,RunTimeTicks,ProductionYear,CommunityRating,ImageTags,Genres,'
       'BackdropImageTags,UserData,SeriesName,IndexNumber,ParentIndexNumber,'
       'PrimaryImageAspectRatio,'
       // Inheritance: an episode carries only a still, and names its series as
@@ -378,6 +378,7 @@ class EmbySource extends MediaSource {
       title: name,
       subtitle: series,
       overview: json['Overview'] as String?,
+      genres: _strings(json['Genres']),
       meta: <String>[
         if (year != null) '$year',
         if (ticks > 0) _runtime(Duration(microseconds: ticks ~/ 10)),

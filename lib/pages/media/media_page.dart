@@ -34,6 +34,9 @@ class MediaPage extends StatefulWidget {
 }
 
 class MediaPageState extends State<MediaPage> {
+  /// Active genre chip, null = everything. Derived from the items' own
+  /// Genres field, so local folders and Emby behave the same.
+  String? _genre;
   String? _filter;
   bool _dialogOpen = false;
   double _age = 0;
@@ -140,20 +143,12 @@ class MediaPageState extends State<MediaPage> {
                       onAdd: () => setState(() => _dialogOpen = true),
                       onOpenFile: widget.onOpenFile,
                     )
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.only(bottom: 60, right: 20),
-                      child: Wrap(
-                        spacing: PsSpace.cardGap,
-                        runSpacing: PsSpace.cardGap,
-                        children: <Widget>[
-                          for (final MediaItem item in items)
-                            _GridCard(
-                              item: item,
-                              onPlay: widget.onPlay,
-                              onOpen: widget.onOpenItem,
-                            ),
-                        ],
-                      ),
+                  : _LibraryGrid(
+                      items: _visible,
+                      pickedGenre: _genre,
+                      onPickGenre: (String? value) => setState(() => _genre = value),
+                      onPlay: widget.onPlay,
+                      onOpen: widget.onOpenItem,
                     ),
             ),
             if (_dialogOpen)
@@ -402,6 +397,127 @@ class _EmptyLibrary extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+
+/// The library grid, Plex-style: a genre bar on top, then a lazy grid.
+///
+/// The eager `Wrap` built one card per title on every rebuild — a 2000-title
+/// library paid for all of them whether they were on screen or not.
+/// `GridView.builder` builds what is visible; the genre bar narrows the list
+/// before that even happens.
+class _LibraryGrid extends StatelessWidget {
+  const _LibraryGrid({
+    required this.items,
+    required this.pickedGenre,
+    required this.onPickGenre,
+    required this.onPlay,
+    required this.onOpen,
+  });
+
+  final List<MediaItem> items;
+  final String? pickedGenre;
+  final ValueChanged<String?> onPickGenre;
+  final ValueChanged<MediaItem> onPlay;
+  final ValueChanged<MediaItem> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, int> counts = <String, int>{};
+    for (final MediaItem item in items) {
+      for (final String genre in item.genres) {
+        counts[genre] = (counts[genre] ?? 0) + 1;
+      }
+    }
+    final List<String> genres = counts.keys.toList()..sort();
+    final List<MediaItem> shown = pickedGenre == null
+        ? items
+        : items.where((MediaItem item) => item.genres.contains(pickedGenre)).toList(growable: false);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (genres.isNotEmpty)
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: <Widget>[
+                _GenreChip(
+                  label: '全部',
+                  selected: pickedGenre == null,
+                  onPick: () => onPickGenre(null),
+                ),
+                for (final String genre in genres)
+                  _GenreChip(
+                    label: genre,
+                    selected: pickedGenre == genre,
+                    onPick: () => onPickGenre(genre),
+                  ),
+              ],
+            ),
+          ),
+        if (genres.isNotEmpty) const SizedBox(height: 14),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.only(bottom: 60, right: 20),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 220,
+              mainAxisSpacing: PsSpace.cardGap,
+              crossAxisSpacing: PsSpace.cardGap,
+              childAspectRatio: 0.72,
+            ),
+            itemCount: shown.length,
+            itemBuilder: (BuildContext context, int index) => _GridCard(
+              item: shown[index],
+              onPlay: onPlay,
+              onOpen: onOpen,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One category chip. A count next to the name keeps the bar honest about
+/// how much each filter actually holds.
+class _GenreChip extends StatelessWidget {
+  const _GenreChip({required this.label, required this.selected, required this.onPick});
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 10),
+      child: TvFocusable(
+        radius: PsRadius.pill,
+        onSelect: onPick,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(PsRadius.pill),
+            color: selected
+                ? PsColor.accent.withValues(alpha: 0.24)
+                : PsColor.text.withValues(alpha: 0.07),
+            border: Border.all(
+              color: selected ? PsColor.accent : PsColor.text.withValues(alpha: 0.14),
+            ),
+          ),
+          child: Text(
+            label,
+            style: PsType.label.copyWith(
+              fontSize: 17,
+              color: PsColor.text.withValues(alpha: selected ? 1 : 0.72),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
