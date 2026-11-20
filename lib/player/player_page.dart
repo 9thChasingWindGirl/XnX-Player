@@ -19,6 +19,7 @@ import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
 import '../playback/mpv/mpv_window.dart';
+import '../osd/osd_overlay.dart';
 import '../playback/mpv/video_surface.dart';
 import '../ui/core/tv_scale.dart';
 import 'osd_bridge.dart';
@@ -50,6 +51,10 @@ class _PlayerPageState extends State<PlayerPage> {
   MpvPlayer? _player;
   OsdBridge? _bridge;
   VideoSurface? _surface;
+
+  /// The independent chrome layer. Null off Windows or when creation failed,
+  /// in which case the Lua OSD keeps drawing everything as before.
+  OsdOverlay? _osd;
   StreamSubscription<bool>? _loadedSub;
   Timer? _watchdog;
   Timer? _escFallback;
@@ -108,6 +113,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _health?.cancel();
     _loadedSub?.cancel();
     _bridge?.dispose();
+    _osd?.dispose();
     _player?.lastError.removeListener(_onMpvError);
     // Capture the position while mpv is still alive: resume state is what makes
     // "继续观看" real instead of decorative.
@@ -313,6 +319,16 @@ class _PlayerPageState extends State<PlayerPage> {
         }
         ..attach();
 
+      // The chrome moves out of mpv's colour pipeline when the independent
+      // layer is available: its pixels are composited by DWM as 8-bit SDR, so
+      // HDR passthrough can no longer darken the OSD. The Lua OSD is told
+      // which engine owns the bottom band; menus and toasts stay there.
+      final OsdOverlay? osd = OsdOverlay.create(player);
+      if (osd != null) {
+        _osd = osd;
+        player.setProperty('user-data/player/osd-engine', 'window');
+      }
+
       _loadedSub = player.onFileLoaded.listen((bool _) {
         if (!mounted) {
           return;
@@ -321,6 +337,9 @@ class _PlayerPageState extends State<PlayerPage> {
         // Reveal only once mpv actually has a frame; before that its child
         // window would just cover the loading state with black.
         _surface?.show();
+        _osd
+          ?..poke()
+          ..startSizeWatch();
         _startHealthWatch();
         _probeCapabilities();
       });
@@ -814,6 +833,8 @@ class _PlayerPageState extends State<PlayerPage> {
     if (action == InputAction.back) {
       _armEscFallback();
     }
+    // Any control activity brings the chrome up, whichever engine is drawing.
+    _osd?.poke();
     player.sendKey(name);
     return true;
   }
@@ -871,6 +892,12 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     InputRouter.instance.notePointer();
+    final OsdOverlay? osd = _osd;
+    if (osd != null) {
+      osd
+        ..poke()
+        ..setSeekHover(osd.inSeekZone(unit.dx, unit.dy));
+    }
     _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
   }
 
@@ -884,6 +911,20 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     InputRouter.instance.notePointer();
+    final OsdOverlay? osd = _osd;
+    if (osd != null && osd.inSeekZone(unit.dx, unit.dy)) {
+      // The chrome owns this press: scrub locally, seek once on release, and
+      // never let the Lua side act on a pointer the bar has already claimed.
+      if (down) {
+        osd
+          ..poke()
+          ..scrub(unit.dx);
+      } else {
+        osd.endScrub();
+      }
+      _pendingMouse = null;
+      return;
+    }
     _pendingMouse = null;
     player.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
     player.sendMouse(
@@ -901,6 +942,14 @@ class _PlayerPageState extends State<PlayerPage> {
     final Offset? unit = _normalized(event.localPosition);
     final double dy = event.scrollDelta.dy;
     if (unit == null || dy == 0) {
+      return;
+    }
+    final OsdOverlay? osd = _osd;
+    if (osd != null && osd.inChromeZone(unit.dx, unit.dy)) {
+      // Over the chrome band the wheel is the volume, handled locally.
+      osd
+        ..poke()
+        ..adjustVolume(dy < 0 ? 5 : -5);
       return;
     }
     // One notch per message regardless of the platform's scroll step; the Lua

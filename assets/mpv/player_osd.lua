@@ -1840,10 +1840,20 @@ function render()
 
   local parts = {}
 
+  -- When the Dart side owns the chrome (user-data/player/osd-engine ==
+  -- 'window'), the bottom band is not drawn here at all: the independent
+  -- layered window composites it as plain 8-bit SDR, which a PQ swapchain
+  -- cannot darken. Menus, stats, help and toasts are centre/overlay surfaces
+  -- that stay in mpv so the whole interaction model does not have to move.
+  -- Audio-only files keep the full Lua stage: there is no picture to protect,
+  -- and the audio stage carries its own controls.
+  local dart_chrome = not state.audio_mode
+    and mp.get_property('user-data/player/osd-engine') == 'window'
+
   if state.audio_mode then
     -- No video: paint our own stage, but keep the transport bar usable.
     draw_audio_stage(parts)
-  else
+  elseif not dart_chrome then
     draw_scrim(parts)
     draw_chrome(parts)
   end
@@ -1852,8 +1862,10 @@ function render()
     draw_stats(parts)
   end
 
-  draw_progress(parts)
-  draw_controls(parts)
+  if not dart_chrome then
+    draw_progress(parts)
+    draw_controls(parts)
+  end
 
   if state.menu then
     draw_menu(parts)
@@ -2656,6 +2668,13 @@ mp.observe_property('aid', 'string', function(_, value)
   refresh_menu()
   mark_dirty()
   watch_audio_recovery(value)
+end)
+
+-- The Dart side flips this to 'window' when the independent OSD layer takes
+-- over the bottom chrome, and back to 'mpv' when that layer is unavailable.
+mp.observe_property('user-data/player/osd-engine', 'string', function()
+  refresh_menu()
+  mark_dirty()
 end)
 
 mp.observe_property('sid', 'string', function()

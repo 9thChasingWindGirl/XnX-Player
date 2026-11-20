@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+import 'osd_layer.dart';
+
 /// A plain rectangle in device pixels. Kept free of Flutter types so the whole
 /// window layer can be unit-tested without a renderer.
 class WindowBox {
@@ -301,13 +303,17 @@ class Win32 {
   ///
   /// If mpv created a child under our container we return the widest one; if it
   /// painted into the container itself we return null and the caller keeps using
-  /// the container rectangle. Flutter's own view is always excluded.
+  /// the container rectangle. Flutter's own view is always excluded, and so is
+  /// the independent OSD layer — it is wider than the video child and would
+  /// otherwise win the "largest child" contest.
   static int? videoChild(int parent) {
     int best = 0;
     int bestArea = 0;
     int fallback = 0;
     for (final ChildWindow child in children(parent)) {
-      if (child.className == flutterViewClass || child.className == runnerClass) {
+      if (child.className == flutterViewClass ||
+          child.className == runnerClass ||
+          child.className == OsdLayer.className) {
         continue;
       }
       if (fallback == 0) {
