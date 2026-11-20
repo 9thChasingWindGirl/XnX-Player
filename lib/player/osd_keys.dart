@@ -32,6 +32,7 @@ abstract final class OsdKeys {
     LogicalKeyboardKey.period.keyId: 'period',
     LogicalKeyboardKey.minus.keyId: '-',
     LogicalKeyboardKey.equal.keyId: '=',
+    LogicalKeyboardKey.f6.keyId: 'f6',
     LogicalKeyboardKey.f7.keyId: 'f7',
     LogicalKeyboardKey.f8.keyId: 'f8',
     LogicalKeyboardKey.f9.keyId: 'f9',

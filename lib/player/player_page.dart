@@ -63,6 +63,9 @@ class _PlayerPageState extends State<PlayerPage> {
   String? _hint;
   bool _fileLoaded = false;
   bool _showDiagnostics = false;
+  /// Window state on entry, so leaving the player does not quietly exit a
+  /// fullscreen shell.
+  bool _fullScreenAtEntry = false;
 
   /// Whether mpv accepted the OSD Lua. This is the whole player UI, so it is
   /// worth a line in the diagnostics panel.
@@ -117,17 +120,43 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   Future<void> _restoreWindow() async {
-    await _setFullScreen(false);
+    // Restore what the app looked like on entry instead of always dropping to
+    // windowed: the shell may itself be running fullscreen.
+    await _setFullScreen(_fullScreenAtEntry);
+  }
+
+  /// F11 and the OSD's「全屏」row both land here.
+  ///
+  /// Flutter owns the real window and mpv only paints into a child of it, so
+  /// "fullscreen" is a window-manager state change followed by an immediate
+  /// re-fit instead of a resize mpv has to discover on its own.
+  Future<void> _toggleFullScreen() async {
+    try {
+      final bool next = !await windowManager.isFullScreen();
+      await windowManager.setFullScreen(next);
+    } catch (_) {
+      // Window manager unavailable: the picture keeps playing unchanged.
+      return;
+    }
+    _surface?.refit();
+    _player?.showUi();
   }
 
   Future<void> _boot() async {
     try {
-      // Fullscreen must happen *before* mpv creates its window: mpv sizes the
-      // child from the parent's client rect once, at creation time. Going
-      // fullscreen afterwards leaves the video stuck at the windowed size,
-      // which reads as "black screen with a small picture" or just black.
-      await _setFullScreen(true);
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final PlaybackPrefs prefs = AppStore.instance.prefs;
+      try {
+        _fullScreenAtEntry = await windowManager.isFullScreen();
+      } catch (_) {
+        // No window manager (headless): leave the window as it is.
+      }
+      // Fullscreen is opt-in (设置 → 播放 → 进入播放时全屏). Forcing it on every
+      // play stranded the user inside a native surface that has no window
+      // chrome, with Esc only able to leave the player entirely.
+      if (prefs.startFullscreen) {
+        await _setFullScreen(true);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
 
       final int? parent = Win32.appWindow();
       if (parent == null) {
@@ -193,8 +222,6 @@ class _PlayerPageState extends State<PlayerPage> {
         }
       }
 
-      final PlaybackPrefs prefs = AppStore.instance.prefs;
-
       final MpvPlayer player = MpvPlayer();
       // Passthrough/HDR start from what the last probe proved about this
       // machine: a proven bitstream-capable endpoint enables passthrough right
@@ -248,6 +275,7 @@ class _PlayerPageState extends State<PlayerPage> {
         ..onTogglePause = player.togglePause
         ..onSeekRequest = player.seekTo
         ..onLoadSubtitle = _loadSubtitle
+        ..onFullscreen = _toggleFullScreen
         // Lua answered, so the optimistic Esc handling is not needed. A block
         // body is required: `?.` on a void member cannot be used as a value.
         ..onEvent = (Map<Object?, Object?> _) {

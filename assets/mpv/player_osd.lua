@@ -241,6 +241,7 @@ local outro_skipped = false
 -- Forward declarations. Lua locals are not hoisted: the menu section above the
 -- render section calls back into it, so these names must exist first.
 local mark_dirty, render, show_ui, schedule_hide, send_back, close_menu
+local send_fullscreen
 
 local function now()
   return mp.get_time()
@@ -909,6 +910,14 @@ local function build_menu(id)
       loop_label = '列表'
     end
     table.insert(rows, {
+      label = '全屏',
+      value = 'F11',
+      kind = 'item',
+      act = function()
+        send_fullscreen()
+      end,
+    })
+    table.insert(rows, {
       label = '循环模式',
       value = loop_label,
       kind = 'adjust',
@@ -1208,7 +1217,7 @@ local function draw_progress(parts)
       parts[#parts + 1] = rect(
         x + w * ratio - knob / 2,
         y + BAR_H / 2 - knob / 2,
-        knob, knob, knob / 2, WHITE, 0x00
+        knob, knob, knob / 2, WHITE, 0xFF
       )
     end
 
@@ -1242,7 +1251,7 @@ local function draw_progress(parts)
     parts[#parts + 1] = rect(px - 1, top - 8, 2, thickness + 16, 1, WHITE, 0xFF)
     local label = fmt_time(target)
     local bw = measure(label, 20) + 24
-    parts[#parts + 1] = rect(px - bw / 2, top - 46, bw, 32, 8, BLACK, 0xA0)
+    parts[#parts + 1] = rect(px - bw / 2, top - 46, bw, 32, 8, BLACK, 0xE8)
     parts[#parts + 1] = text(px, top - 42, 20, WHITE, 0x00, label, 8, false)
   end
 
@@ -1267,12 +1276,14 @@ local function draw_toast(parts)
   local tw = measure(label, 26)
   local bw = math.min(W - SAFE * 2, tw + 72)
   local bx = (W - bw) / 2
-  parts[#parts + 1] = rect(bx, 66, bw, 60, 30, BLACK, 0xA8)
+  parts[#parts + 1] = rect(bx, 66, bw, 60, 30, BLACK, 0xEC)
   parts[#parts + 1] = text(W / 2, 81, 26, WHITE, alpha, clip(label, 46), 8, false)
 end
 
 local function draw_scrim(parts)
-  local alphas = { 0x0C, 0x1C, 0x30, 0x48, 0x62, 0x7E, 0x9C, 0xBC }
+  -- Darkest at the bottom, so the controls sit on a solid band and the picture
+  -- fades into it instead of keeping a hard edge halfway up the frame.
+  local alphas = { 0x2E, 0x46, 0x60, 0x7C, 0x96, 0xB2, 0xCC, 0xE4 }
   local y0 = 620
   local band = (H - y0) / #alphas
   for i, alpha in ipairs(alphas) do
@@ -1346,7 +1357,7 @@ local function draw_stats(parts)
   local pw = col_w * 2 + 56
   local ph = 34 + per_col * 40 + 24
   local px, py = SAFE, MENU_BOTTOM - ph
-  parts[#parts + 1] = rect(px, py, pw, ph, 26, BLACK, 0xC8)
+  parts[#parts + 1] = rect(px, py, pw, ph, 26, BLACK, 0xF2)
   parts[#parts + 1] = text(px + 28, py + 20, 20, DIM, 0x00, '统计信息 · I 关闭', 7, true)
   for i, row in ipairs(rows) do
     local col = i <= per_col and 0 or 1
@@ -1378,14 +1389,15 @@ local function draw_help(parts)
     { 'L', '循环模式' },
     { 'Alt + N', '标记片头 / 片尾' },
     { 'F7 / F8', '播放列表 / 章节' },
-    { 'F10 / F11', '音轨 / 字幕' },
+    { 'F10 / F6', '音轨 / 字幕' },
+    { 'F11', '全屏切换' },
     { 'Tab', '显示 / 隐藏界面' },
     { 'Esc', '关闭菜单 / 返回' },
     { '1 – 9', '跳转到 10% – 90%' },
   }
   local pw, ph = 1180, 120 + math.ceil(#lines / 2) * 44
   local px, py = (W - pw) / 2, (H - ph) / 2
-  parts[#parts + 1] = rect(px, py, pw, ph, 30, BLACK, 0xE4)
+  parts[#parts + 1] = rect(px, py, pw, ph, 30, BLACK, 0xF4)
   parts[#parts + 1] = text(px + 40, py + 32, 34, WHITE, 0x00, '键盘快捷键', 7, true)
   parts[#parts + 1] = text(px + pw - 40, py + 40, 20, DIM, 0x00, '任意键关闭', 9, false)
   local half = math.ceil(#lines / 2)
@@ -1430,7 +1442,7 @@ local function draw_menu(parts)
   local left = RIGHT - MENU_W
   local top = MENU_BOTTOM - height
 
-  parts[#parts + 1] = rect(left, top, MENU_W, height, 26, BLACK, 0xC6)
+  parts[#parts + 1] = rect(left, top, MENU_W, height, 26, BLACK, 0xF2)
   parts[#parts + 1] = rect(left + 24, top + 46, MENU_W - 48, 1, 0, WHITE, 0x1E)
   parts[#parts + 1] = text(left + 28, top + 18, 22, DIM, 0x00, menu.title, 7, true)
   local count = 0
@@ -1586,7 +1598,7 @@ function render()
   if state.help then
     local parts = {}
     draw_help(parts)
-    osd.data = table.concat(parts, '\\N')
+    osd.data = table.concat(parts, '\n')
     osd:update()
     return
   end
@@ -1596,7 +1608,7 @@ function render()
     if state.toast then
       local parts = {}
       draw_toast(parts)
-      osd.data = table.concat(parts, '\\N')
+      osd.data = table.concat(parts, '\n')
       osd:update()
     else
       osd.data = ''
@@ -1628,7 +1640,7 @@ function render()
 
   draw_toast(parts)
 
-  osd.data = table.concat(parts, '\\N')
+  osd.data = table.concat(parts, '\n')
   osd:update()
 end
 
@@ -1684,6 +1696,13 @@ end
 function send_back()
   seq = seq + 1
   mp.commandv('script-message', 'player-event', utils.format_json({ type = 'back', seq = seq }))
+end
+
+-- Flutter owns the real window, so this is a request rather than a command:
+-- the host toggles the window state and re-fits the native surface afterwards.
+function send_fullscreen()
+  seq = seq + 1
+  mp.commandv('script-message', 'player-event', utils.format_json({ type = 'fullscreen', seq = seq }))
 end
 
 -- ==== INPUT ================================================================
@@ -1825,8 +1844,10 @@ local function handle_key(raw)
     open_menu('video')
   elseif name == 'f10' then
     open_menu('audio')
-  elseif name == 'f11' then
+  elseif name == 'f6' then
     open_menu('subtitle')
+  elseif name == 'f11' then
+    send_fullscreen()
   elseif name == 'h' then
     state.help = true
     mark_dirty()
@@ -1855,7 +1876,7 @@ local BINDINGS = {
   { 'PGUP', 'pageup' }, { 'PGDWN', 'pagedown' }, { 'BS', 'bs' },
   { '[', '[' }, { ']', ']' }, { ',', 'comma' }, { '.', 'period' },
   { 'F7', 'f7' }, { 'F8', 'f8' }, { 'F9', 'f9' },
-  { 'F10', 'f10' }, { 'F11', 'f11' },
+  { 'F6', 'f6' }, { 'F10', 'f10' }, { 'F11', 'f11' },
   { 'Alt+n', 'alt+n' },
   { 'Alt+o', 'alt+o' },
   { '1', '1' }, { '2', '2' }, { '3', '3' }, { '4', '4' }, { '5', '5' },

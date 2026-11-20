@@ -23,6 +23,13 @@ on:
         type: boolean
         default: false
 
+# 权限必须显式声明：仓库默认给 GITHUB_TOKEN 的是只读权限，于是
+# `gh api -X DELETE .../artifacts/<id>` 会以
+# "Resource not accessible by integration (HTTP 403)" 失败。
+# 这里只给默认的读，写权限按 job 单独追加。
+permissions:
+  contents: read
+
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: true
@@ -53,6 +60,10 @@ jobs:
     if: needs.gate.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 45
+    # 只有它需要删旧产物。
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
@@ -144,12 +155,42 @@ jobs:
         shell: pwsh
         run: |
           $keep = if ('${{ github.ref_name }}' -eq 'beta') { 10 } else { 3 }
-          $all = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" | ForEach-Object { ($_ | ConvertFrom-Json).artifacts } | Sort-Object created_at -Descending
-          Write-Host "artifacts total: $($all.Count), keeping newest $keep"
-          $all | Select-Object -Skip $keep | ForEach-Object {
+          # --paginate 输出的是多份 JSON 文档首尾相接，整体 ConvertFrom-Json
+          # 会直接抛错（旧写法因此永远得到 total: 0）。用 --jq 先把每页拍平成
+          # 一行一条，再在本地排序。
+          $rows = @()
+          try {
+            $rows = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '.artifacts[] | [.id, .name, .created_at] | @tsv'
+          } catch {
+            # 清理是收尾动作：列不出来（权限、限流、网络）只警告，不能让一次
+            # 构建成功的运行变成红色。
+            Write-Host "::warning::cannot list artifacts: $($_.Exception.Message)"
+            exit 0
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::cannot list artifacts (exit $LASTEXITCODE); skipping cleanup"
+            exit 0
+          }
+          $items = @($rows | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object {
+            $parts = $_ -split "`t"
+            [pscustomobject]@{ id = $parts[0]; name = $parts[1]; created = $parts[2] }
+          } | Sort-Object created -Descending)
+          Write-Host "artifacts total: $($items.Count), keeping newest $keep"
+          if ($items.Count -le $keep) {
+            Write-Host "nothing to delete"
+            exit 0
+          }
+          $failed = 0
+          $items | Select-Object -Skip $keep | ForEach-Object {
             Write-Host "deleting $($_.name) ($($_.id))"
             gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$($_.id)"
+            if ($LASTEXITCODE -ne 0) {
+              # 清理是收尾动作，失败不该把一次成功的构建标成红色。
+              Write-Host "::warning::failed to delete $($_.name) (exit $LASTEXITCODE)"
+              $failed++
+            }
           }
+          Write-Host "cleanup finished, $failed failure(s)"
 
   release:
     # Release 只出手动触发：发布人负责把 dev 序号换成正式版本号后填入
@@ -157,6 +198,10 @@ jobs:
     needs: build
     if: github.event_name == 'workflow_dispatch' && inputs.publish == true
     runs-on: ubuntu-latest
+    # 建 Release 要写内容；下载本工作流的产物只读即可。
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Require version
         shell: bash

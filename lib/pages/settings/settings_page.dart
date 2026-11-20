@@ -263,6 +263,13 @@ class _SettingsPageState extends State<SettingsPage> {
                         toggle: prefs.skipIntro,
                         onSelect: () => _apply(prefs.copyWith(skipIntro: !prefs.skipIntro)),
                       ),
+                      _Row(
+                        label: '进入播放时全屏',
+                        hint: '关闭后以当前窗口播放，播放中可按 F11 切换',
+                        toggle: prefs.startFullscreen,
+                        onSelect: () =>
+                            _apply(prefs.copyWith(startFullscreen: !prefs.startFullscreen)),
+                      ),
                       _section('软件更新'),
                       _Row(
                         label: '更新通道',

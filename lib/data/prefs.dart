@@ -25,6 +25,10 @@ class PlaybackPrefs {
     this.subtitleSize = 42,
     this.skipIntro = false,
     this.hardwareDecoding = true,
+    // Off by default: dropping straight into fullscreen on every play is
+    // jarring when the user only wanted a window, and there was previously no
+    // way back out except leaving the player entirely.
+    this.startFullscreen = false,
   });
 
   final QualityPref quality;
@@ -37,6 +41,7 @@ class PlaybackPrefs {
   final int subtitleSize;
   final bool skipIntro;
   final bool hardwareDecoding;
+  final bool startFullscreen;
 
   PlaybackPrefs copyWith({
     QualityPref? quality,
@@ -49,6 +54,7 @@ class PlaybackPrefs {
     int? subtitleSize,
     bool? skipIntro,
     bool? hardwareDecoding,
+    bool? startFullscreen,
   }) {
     return PlaybackPrefs(
       quality: quality ?? this.quality,
@@ -60,6 +66,7 @@ class PlaybackPrefs {
       reduceMotion: reduceMotion ?? this.reduceMotion,
       subtitleSize: subtitleSize ?? this.subtitleSize,
       skipIntro: skipIntro ?? this.skipIntro,
+      startFullscreen: startFullscreen ?? this.startFullscreen,
       hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
     );
   }
@@ -74,6 +81,7 @@ class PlaybackPrefs {
         'reduceMotion': reduceMotion,
         'subtitleSize': subtitleSize,
         'skipIntro': skipIntro,
+        'startFullscreen': startFullscreen,
         'hardwareDecoding': hardwareDecoding,
       };
 
@@ -94,6 +102,7 @@ class PlaybackPrefs {
       reduceMotion: json['reduceMotion'] as bool? ?? false,
       subtitleSize: (json['subtitleSize'] as num?)?.toInt() ?? 42,
       skipIntro: json['skipIntro'] as bool? ?? false,
+      startFullscreen: json['startFullscreen'] as bool? ?? false,
       hardwareDecoding: json['hardwareDecoding'] as bool? ?? true,
     );
   }

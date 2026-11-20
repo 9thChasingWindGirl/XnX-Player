@@ -22,6 +22,28 @@ class UpdateService {
 
   Uri get _apiBase => Uri.parse('https://api.github.com/repos/$repository');
 
+  /// GitHub REST endpoint under this repo, built from path *segments*.
+  ///
+  /// `Uri.replace(path: ...)` takes a path, not a URL: interpolating
+  /// `$_apiBase` into it produced `.../repos/x/yhttps://api.github.com/...`,
+  /// and putting `?per_page=` inside the path got the `?` percent-encoded to
+  /// `%3F`. Both shapes hit the API as a path that does not exist, which is
+  /// exactly the HTTP 404 更新检查 was reporting.
+  Uri _endpoint(List<String> segments, [Map<String, String>? query]) =>
+      _apiBase.replace(
+        pathSegments: <String>[..._apiBase.pathSegments, ...segments],
+        queryParameters: query,
+      );
+
+  /// The exact URL [fetchLatest] calls for the stable/beta channels.
+  ///
+  /// Public so a test can assert the shape: this path silently produced a 404
+  /// for every user, and a unit test is the only place that can catch the next
+  /// time someone "tidies up" the URL.
+  @visibleForTesting
+  Uri get releasesUri =>
+      _endpoint(<String>['releases'], <String, String>{'per_page': '30'});
+
   /// Asks GitHub what the newest build on [channel] is.
   ///
   /// stable/beta read Releases (beta = prerelease); dev reads the newest
@@ -31,9 +53,8 @@ class UpdateService {
     if (channel == UpdateChannel.dev) {
       return _fetchDevArtifact();
     }
-    final List<dynamic> releases = await Http.getJson(
-      _apiBase.replace(path: '$_apiBase/releases?per_page=30'),
-    ) as List<dynamic>;
+    final List<dynamic> releases =
+        await Http.getJson(releasesUri) as List<dynamic>;
     final List<UpdateCandidate> parsed = releases.map((Object? entry) {
       final Map<String, dynamic> release = entry! as Map<String, dynamic>;
       return _releaseCandidate(release);
@@ -64,9 +85,9 @@ class UpdateService {
 
   Future<UpdateCandidate?> _fetchDevArtifact() async {
     final Map<String, dynamic> payload = await Http.getJson(
-      _apiBase.replace(
-        path: '$_apiBase/actions/artifacts',
-        queryParameters: <String, String>{
+      _endpoint(
+        <String>['actions', 'artifacts'],
+        <String, String>{
           'branch': 'beta',
           'status': 'success',
           'per_page': '30',

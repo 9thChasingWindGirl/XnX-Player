@@ -145,6 +145,16 @@ class VideoSurface {
     sync();
   }
 
+  /// Forgets the cached rectangles and re-fits immediately.
+  ///
+  /// Used after a fullscreen toggle: waiting for the next poll would leave the
+  /// picture at the old size for up to 400ms, which reads as a stuck frame.
+  void refit() {
+    _hostBox = null;
+    _videoBox = null;
+    sync();
+  }
+
   void dispose() {
     stop();
     final int? host = _host;
