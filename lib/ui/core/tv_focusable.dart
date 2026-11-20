@@ -334,7 +334,13 @@ class _TvFocusableState extends State<TvFocusable> {
       },
       child: MouseRegion(
         cursor: widget.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-        onEnter: (PointerEnterEvent event) {
+        // Focus follows *movement*, not presence. `onEnter` also fires when a
+        // scrolling rail carries a new card under a stationary cursor — the
+        // scroll moves focus, focus moves the scroll, and the shelf runs away
+        // by itself. `onHover` only fires for real pointer motion, which cuts
+        // that loop: the rail scrolls under the cursor until it settles, and
+        // the cursor has to actually move to change the focus again.
+        onHover: (PointerHoverEvent event) {
           // The pointer is now the device in use, which turns off the ring's
           // glide (see _publish) until a key or a pad is touched again.
           InputRouter.instance.notePointer();
