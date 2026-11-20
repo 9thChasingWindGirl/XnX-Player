@@ -1,5 +1,10 @@
 name: windows
 
+# 版本号规则：第一位=大型迭代，第二位=轻版本迭代，第三位=hotfix。
+# 核心工作完成前固定为 0.00.00；之后随 Release 起版（main=正式版）。
+env:
+  APP_VERSION: 0.00.00
+
 on:
   push:
     branches: [main]
@@ -69,12 +74,27 @@ jobs:
           Copy-Item third_party/mpv/libmpv-2.dll "$rel/libmpv-2.dll" -Force
           if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/player_osd.lua")) { throw "OSD lua missing from bundle" }
           if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
+          "$env:APP_VERSION" | Out-File -FilePath "$rel/version.txt" -Encoding utf8
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XnX-Player-windows-x64
+          name: XnX-Player-windows-x64-${{ env.APP_VERSION }}
           path: ${{ env.REL_DIR }}
           if-no-files-found: error
           retention-days: 14
+
+      # 产物会一直堆积在 Actions 里：每次成功构建后只保留最新的 3 个。
+      - name: Clean old artifacts
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $all = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" | ForEach-Object { ($_ | ConvertFrom-Json).artifacts } | Sort-Object created_at -Descending
+          Write-Host "artifacts total: $($all.Count)"
+          $all | Select-Object -Skip 3 | ForEach-Object {
+            Write-Host "deleting $($_.name) ($($_.id))"
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$($_.id)"
+          }

@@ -101,6 +101,15 @@ class _SettingsPageState extends State<SettingsPage> {
         });
         return;
       }
+      // 同版本且同通道类型不重复安装；正式版/beta 与 dev 之间允许换轨。
+      if (!candidate.isPrerelease &&
+          !isInstallable(candidate, S.appVersion) &&
+          _channel == UpdateChannel.stable) {
+        setState(() {
+          _updateStatus = '已是最新：${candidate.version}';
+        });
+        return;
+      }
       setState(() {
         _updateStatus = '${_channelLabel(_channel)}最新：${candidate.version}，再按一次安装';
         _pending = candidate;
@@ -257,7 +266,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       _section('软件更新'),
                       _Row(
                         label: '更新通道',
-                        hint: '正式版 / Beta（预留）/ Dev（beta 分支未验证构建）',
+                        hint: '当前版本 ${S.appVersion} · 正式版 / Beta（预留）/ Dev（beta 分支未验证构建）',
                         value: _channelLabel(_channel),
                         onAdjust: _cycleChannel,
                         onSelect: () => _cycleChannel(1),

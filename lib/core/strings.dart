@@ -3,6 +3,10 @@
 abstract final class S {
   static const String appTitle = 'XnX Player';
 
+  /// 与 CI 的 `APP_VERSION` 保持一致（第一位=大型迭代，第二位=轻版本迭代，
+  /// 第三位=hotfix）。0.00.00 表示核心工作尚未完成、只有 Actions 产物。
+  static const String appVersion = '0.00.00';
+
   // Tabs
   static const String tabHome = '主页';
   static const String tabLibrary = '媒体库';
