@@ -54,8 +54,13 @@ class _Row {
 }
 
 class _HomePageState extends State<HomePage> {
-  final Spring _rowPosition = Spring(value: 0, frequency: 11);
   final List<int> _columns = <int>[];
+
+  /// Which source the shelves show, or null for everything. The top bar's
+  /// source pill writes here; this page only reads.
+  final ValueNotifier<String?> _sourceFilter = shellSourceFilter;
+
+  final ScrollController _flow = ScrollController();
 
   List<_Row> _rows = <_Row>[];
   int _row = 0;
@@ -74,6 +79,7 @@ class _HomePageState extends State<HomePage> {
     _shown = _firstItem();
     _publishedId = _shown?.id;
     AppStore.instance.addListener(_onStore);
+    _sourceFilter.addListener(_onFilter);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         widget.heroItem.value = _shown;
@@ -117,13 +123,27 @@ class _HomePageState extends State<HomePage> {
       if (store.channels.isNotEmpty)
         _Row('live', S.liveChannels, store.channels),
     ];
+    final String? filter = _sourceFilter.value;
+    List<_Row> rows = filter == null
+        ? all
+        : all
+            .map((_Row row) => _Row(
+                  row.id,
+                  row.title,
+                  row.items
+                      .where((MediaItem item) => item.sourceId == filter)
+                      .toList(growable: false),
+                  wide: row.wide,
+                ))
+            .where((_Row row) => row.items.isNotEmpty)
+            .toList(growable: false);
     final List<String> order = store.prefs.shelfOrder;
     if (order.isEmpty) {
-      return all;
+      return rows;
     }
     bool known(_Row row) => order.contains(row.id);
     int rank(_Row row) => known(row) ? order.indexOf(row.id) : order.length;
-    return all.toList()..sort(( _Row a, _Row b) => rank(a).compareTo(rank(b)));
+    return rows.toList()..sort((_Row a, _Row b) => rank(a).compareTo(rank(b)));
   }
 
   /// Series with any progress are "正在追剧"; a finished or untouched series
@@ -186,8 +206,6 @@ class _HomePageState extends State<HomePage> {
         if (clock.time != _last) {
           _last = clock.time;
           _age += clock.scaled(dt);
-          _rowPosition.target = _row.toDouble();
-          _rowPosition.update(dt);
           _transition = (_transition + clock.scaled(dt) / PsMotion.heroCrossFade)
               .clamp(0.0, 1.0)
               .toDouble();
@@ -220,45 +238,72 @@ class _HomePageState extends State<HomePage> {
         final double arrive = ((t - 0.25) / 0.75).clamp(0.0, 1.0).toDouble();
         final double leave =
             (1 - Ease.smoothstep((t * 2.2).clamp(0.0, 1.0).toDouble())).clamp(0.0, 1.0).toDouble();
+        final double band = _heroBand();
 
         return Stack(
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: <Widget>[
-            if (_previous != null && t < 1)
-              HeroPanel(
-                item: _previous!,
-                opacity: leave,
-                slide: -36 * Ease.cubicIn(t),
-                time: clock.time,
-              ),
-            HeroPanel(
-              item: _shown ?? focused,
-              opacity: Ease.smoothstep(arrive),
-              slide: 44 * (1 - Ease.quintOut(arrive)),
-              time: clock.time,
-              onPlay: () => widget.onPlay(_shown ?? focused),
-              onFavorite: () => AppStore.instance.toggleFavorite(_shown ?? focused),
-              onDetails: () => widget.onOpenItem(_shown ?? focused),
-              carousel: HeroCarousel(
-                items: items,
-                activeId: (_shown ?? focused).id,
-                onPick: (MediaItem picked) {
-                  final int index = items.indexOf(picked);
-                  if (index >= 0) {
-                    _focusAt(row, index);
-                  }
-                },
+            // The hero owns a fixed top band. Its backdrop bleeds a little
+            // below the band so the flow arrives on the picture's own shadow.
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: band + 90,
+              child: Stack(
+                fit: StackFit.expand,
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  if (_previous != null && t < 1)
+                    HeroPanel(
+                      item: _previous!,
+                      opacity: leave,
+                      slide: -36 * Ease.cubicIn(t),
+                      time: clock.time,
+                    ),
+                  HeroPanel(
+                    item: _shown ?? focused,
+                    opacity: Ease.smoothstep(arrive),
+                    slide: 44 * (1 - Ease.quintOut(arrive)),
+                    time: clock.time,
+                    onPlay: () => widget.onPlay(_shown ?? focused),
+                    onFavorite: () => AppStore.instance.toggleFavorite(_shown ?? focused),
+                    onDetails: () => widget.onOpenItem(_shown ?? focused),
+                    carousel: HeroCarousel(
+                      items: items,
+                      activeId: (_shown ?? focused).id,
+                      onPick: (MediaItem picked) {
+                        final int index = items.indexOf(picked);
+                        if (index >= 0) {
+                          _focusAt(row, index);
+                        }
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
-            for (int i = 0; i < _rows.length; i++)
-              ..._shelf(
-                index: i,
-                row: _rows[i],
-                active: i == row,
-                column: _columns.length > i ? _columns[i] : 0,
-                age: _age,
+            // The shelf flow, Plex style: rows of normal-brightness posters
+            // scrolling under a fixed hero, the row you focus gliding into
+            // view. Replaces the console dim-and-swap shelves, which fought
+            // the flow layout and left the bottom of tall windows empty.
+            Positioned(
+              left: 0,
+              right: 0,
+              top: band,
+              bottom: 0,
+              child: SingleChildScrollView(
+                controller: _flow,
+                padding: const EdgeInsets.only(top: 64, bottom: 120),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    for (int i = 0; i < _rows.length; i++) _shelfRow(i),
+                  ],
+                ),
               ),
+            ),
           ],
         );
       },
@@ -268,69 +313,41 @@ class _HomePageState extends State<HomePage> {
   /// The vertical band the hero owns, derived from the stage's design height:
   /// 16:9 stages get the tuned constant, taller stages give the hero a little
   /// more room so the shelves still start on clean ground.
+  /// The vertical band the hero owns, derived from the stage's design height.
+  /// 16:9 stages get the tuned constant; taller stages give the hero a little
+  /// more room so the copy never crowds the band edge.
   double _heroBand() {
     final double height = TvScale.heightOf(context);
-    return (height * 0.60).clamp(560.0, 760.0).toDouble();
+    return (height * 0.62).clamp(640.0, 780.0).toDouble();
   }
 
-  List<Widget> _shelf({
-    required int index,
-    required _Row row,
-    required bool active,
-    required int column,
-    required double age,
-  }) {
-    final double distance = index - _rowPosition.value;
-    final double presence = rowPresence(distance) * stagger(age, 3 + index, offset: 0.09);
-    if (presence <= 0.012) {
-      return const <Widget>[];
-    }
+  /// One row of the flow. Every row is a normal-brightness shelf — focus
+  /// grows its card, the rail scrolls to keep the focused card in the anchor
+  /// slot, and the flow scrolls the row into view. That is the Plex grammar;
+  /// the console's dim-and-swap shelves fought it at every step.
+  Widget _shelfRow(int index) {
+    final _Row row = _rows[index];
+    final bool active = index == _row;
+    final int column =
+        (_columns.length > index ? _columns[index] : 0).clamp(0, row.items.length - 1).toInt();
     final double cardHeight = row.wide ? 180.0 : PsSpace.tileSize;
-    final double cardWidth = row.wide ? 320.0 : PsSpace.tileSize;
-    final double cardTop = _heroBand() + 60 + distance * PsSpace.shelfPitch;
-    final double railTop =
-        cardTop - (cardHeight * PsSpace.cardGrow - cardHeight);
+    final double cardWidth = row.wide ? 320.0 : null;
 
-    return <Widget>[
-      Positioned(
-        left: 0,
-        top: railTop,
-        width: TvScale.widthOf(context),
-        height: cardHeight * PsSpace.cardGrow + 40,
-        child: Opacity(
-          opacity: presence,
-          child: FocusZone(
-            id: 'home-row-$index',
-            child: HomeRail(
-              items: row.items,
-              focusedIndex: active ? column.clamp(0, row.items.length - 1).toInt() : -1,
-              active: active,
-              cardSize: cardHeight,
-              cardWidth: row.wide ? cardWidth : null,
-              onFocus: (int value) => _focusAt(index, value),
-              onSelect: widget.onOpenItem,
-              onLongSelect: widget.onPlay,
-            ),
-          ),
-        ),
-      ),
-      // Title with the order controls. The arrows are small and always there —
-      // a hidden edit mode is one more thing to discover — but they read as
-      // quiet chrome until hovered.
-      Positioned(
-        left: PsSpace.safeX,
-        top: cardTop - 78,
-        child: Opacity(
-          opacity: presence,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.only(left: PsSpace.safeX, bottom: 16),
           child: Row(
             children: <Widget>[
               Text(
                 row.title,
                 style: PsType.section.copyWith(
-                  color: PsColor.text.withValues(alpha: active ? 0.96 : 0.6),
+                  color: PsColor.text.withValues(alpha: active ? 0.96 : 0.62),
                 ),
               ),
               const SizedBox(width: 16),
+              // Order controls, quiet until wanted.
               TvFocusable(
                 radius: 10,
                 showRing: false,
@@ -339,8 +356,8 @@ class _HomePageState extends State<HomePage> {
                   Icons.arrow_upward_rounded,
                   size: 20,
                   color: index == 0
-                      ? PsColor.text.withValues(alpha: 0.18)
-                      : PsColor.text.withValues(alpha: 0.45),
+                      ? PsColor.text.withValues(alpha: 0.16)
+                      : PsColor.text.withValues(alpha: 0.42),
                 ),
               ),
               const SizedBox(width: 6),
@@ -352,15 +369,61 @@ class _HomePageState extends State<HomePage> {
                   Icons.arrow_downward_rounded,
                   size: 20,
                   color: index == _rows.length - 1
-                      ? PsColor.text.withValues(alpha: 0.18)
-                      : PsColor.text.withValues(alpha: 0.45),
+                      ? PsColor.text.withValues(alpha: 0.16)
+                      : PsColor.text.withValues(alpha: 0.42),
                 ),
               ),
             ],
           ),
         ),
-      ),
-    ];
+        SizedBox(
+          height: cardHeight * PsSpace.cardGrow + 30,
+          child: HomeRail(
+            items: row.items,
+            focusedIndex: active ? column : -1,
+            active: true,
+            cardSize: cardHeight,
+            cardWidth: cardWidth,
+            onFocus: (int value) {
+              _focusAt(index, value);
+              _ensureRowVisible(index);
+            },
+            onSelect: widget.onOpenItem,
+            onLongSelect: widget.onPlay,
+          ),
+        ),
+        const SizedBox(height: 30),
+      ],
+    );
+  }
+
+  /// Scrolls the flow so row [index] is fully on screen. Row geometry is
+  /// fixed and known — title block, grown card, gap — so the offset is
+  /// computed, not measured: no need to keep per-row contexts alive.
+  void _ensureRowVisible(int index) {
+    if (!_flow.hasClients) {
+      return;
+    }
+    double top = 64; // flow padding
+    for (int i = 0; i < index; i++) {
+      final double card = _rows[i].wide ? 180.0 : PsSpace.tileSize;
+      top += 44 + card * PsSpace.cardGrow + 30 + 30;
+    }
+    final double card = _rows[index].wide ? 180.0 : PsSpace.tileSize;
+    final double bottom = top + 44 + card * PsSpace.cardGrow + 30;
+    final double viewport = _flow.position.viewportDimension;
+    double target = _flow.offset;
+    if (top - 48 < target) {
+      target = top - 48;
+    }
+    if (bottom + 48 > target + viewport) {
+      target = bottom + 48 - viewport;
+    }
+    _flow.animateTo(
+      target.clamp(0.0, _flow.position.maxScrollExtent).toDouble(),
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   /// Moves shelf [index] by [delta] rows and persists the new order.

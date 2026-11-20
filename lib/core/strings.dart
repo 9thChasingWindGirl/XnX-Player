@@ -49,6 +49,7 @@ abstract final class S {
   static const String restoreDown = '向下还原';
   static const String close = '关闭';
   static const String sourcesTitle = '媒体源';
+  static const String allSources = '全部来源';
   static const String favoritesShelf = '我的收藏';
   static const String watchingShelf = '正在追剧';
   static const String historyShelf = '观看历史';

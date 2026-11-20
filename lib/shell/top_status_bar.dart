@@ -20,20 +20,27 @@ class TopStatusBar extends StatefulWidget {
     required this.tabIndex,
     required this.onTabSelected,
     required this.onSearch,
-    required this.onOpenSources,
     required this.onMinimize,
     required this.onToggleMaximize,
     required this.onClose,
+    required this.sources,
+    required this.currentSourceId,
+    required this.onPickSource,
     this.maximized = false,
   });
 
   final int tabIndex;
   final ValueChanged<int> onTabSelected;
   final VoidCallback onSearch;
-  final VoidCallback onOpenSources;
   final VoidCallback onMinimize;
   final VoidCallback onToggleMaximize;
   final VoidCallback onClose;
+
+  /// The registered sources, for the switcher pill. Switching filters the
+  /// home shelves to one source; managing them stays in the dock panel.
+  final List<SourceOption> sources;
+  final String? currentSourceId;
+  final ValueChanged<String?> onPickSource;
   final bool maximized;
 
   @override
@@ -45,6 +52,24 @@ class _TopStatusBarState extends State<TopStatusBar> {
 
   Timer? _clock;
   DateTime _now = DateTime.now();
+  bool _pickerOpen = false;
+
+  String _currentLabel() {
+    if (widget.currentSourceId == null) {
+      return S.allSources;
+    }
+    for (final SourceOption option in widget.sources) {
+      if (option.id == widget.currentSourceId) {
+        return option.label;
+      }
+    }
+    return S.sourcesTitle;
+  }
+
+  void _pick(String? id) {
+    setState(() => _pickerOpen = false);
+    widget.onPickSource(id);
+  }
 
   @override
   void initState() {
@@ -93,30 +118,75 @@ class _TopStatusBarState extends State<TopStatusBar> {
               ),
             ),
           ),
-          // Left: the media-source entry. One pill, one job.
+          // Left: the source switcher. The pill names what the shelves
+          // currently show; opening it lists every source plus "all".
+          // Managing sources (add/edit/delete) stays in the dock panel.
           Positioned(
             left: PsSpace.safeX,
             top: 30,
-            child: TvFocusable(
-              radius: PsRadius.pill,
-              showRing: false,
-              onSelect: widget.onOpenSources,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(PsRadius.pill),
-                  color: PsColor.text.withValues(alpha: 0.10),
-                  border: Border.all(color: PsColor.text.withValues(alpha: 0.18)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                TvFocusable(
+                  radius: PsRadius.pill,
+                  showRing: false,
+                  onSelect: () => setState(() => _pickerOpen = !_pickerOpen),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(PsRadius.pill),
+                      color: PsColor.text.withValues(
+                        alpha: _pickerOpen ? 0.18 : 0.10,
+                      ),
+                      border: Border.all(color: PsColor.text.withValues(alpha: 0.18)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const Icon(Icons.source_rounded, size: 20, color: PsColor.text),
+                        const SizedBox(width: 10),
+                        Text(_currentLabel(), style: PsType.label.copyWith(fontSize: 19)),
+                        const SizedBox(width: 8),
+                        AnimatedRotation(
+                          turns: _pickerOpen ? 0.5 : 0,
+                          duration: const Duration(milliseconds: 160),
+                          child: Icon(
+                            Icons.expand_more_rounded,
+                            size: 18,
+                            color: PsColor.text.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    const Icon(Icons.source_rounded, size: 20, color: PsColor.text),
-                    const SizedBox(width: 10),
-                    Text(S.sourcesTitle, style: PsType.label.copyWith(fontSize: 19)),
-                  ],
-                ),
-              ),
+                if (_pickerOpen)
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xE6111420),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: PsColor.text.withValues(alpha: 0.14)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        _SourceOptionRow(
+                          label: S.allSources,
+                          selected: widget.currentSourceId == null,
+                          onPick: () => _pick(null),
+                        ),
+                        for (final SourceOption option in widget.sources)
+                          _SourceOptionRow(
+                            label: option.label,
+                            selected: widget.currentSourceId == option.id,
+                            onPick: () => _pick(option.id),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
           // Centre: navigation plus search, one cluster.
@@ -224,6 +294,56 @@ class _WindowIcon extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(8),
         child: Icon(icon, size: 22, color: PsColor.text.withValues(alpha: 0.82)),
+      ),
+    );
+  }
+}
+
+
+/// One selectable source in the switcher.
+class SourceOption {
+  const SourceOption(this.id, this.label);
+
+  final String id;
+  final String label;
+}
+
+class _SourceOptionRow extends StatelessWidget {
+  const _SourceOptionRow({
+    required this.label,
+    required this.selected,
+    required this.onPick,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      radius: 10,
+      onSelect: onPick,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+              size: 18,
+              color: selected ? PsColor.accent : PsColor.text.withValues(alpha: 0.4),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: PsType.label.copyWith(
+                fontSize: 18,
+                color: PsColor.text.withValues(alpha: selected ? 1 : 0.72),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

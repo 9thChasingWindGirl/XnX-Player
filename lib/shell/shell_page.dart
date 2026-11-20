@@ -126,6 +126,11 @@ class _ShellPageState extends State<ShellPage> {
   /// Keeps the restore/maximize glyph honest without polling.
   final WindowListener _windowEvents = _MaximizeListener();
 
+  /// The switcher pill lists registered sources by display name.
+  List<SourceOption> store_sources() => AppStore.instance.sources
+      .map((SourceConfig config) => SourceOption(config.id, config.label))
+      .toList(growable: false);
+
   /// One handler per screen, fed by [InputRouter]. The shell only sees intents
   /// that no route above it claimed.
   bool _onIntent(InputIntent intent) {
@@ -633,15 +638,23 @@ class _ShellPageState extends State<ShellPage> {
                       left: 0,
                       right: 0,
                       top: 0,
-                      child: TopStatusBar(
-                        tabIndex: _tab,
-                        onTabSelected: _selectTab,
-                        onSearch: _openSearch,
-                        onOpenSources: () => _setDock(true, panel: CcPanelId.sources),
-                        onMinimize: () => unawaited(_minimize()),
-                        onToggleMaximize: () => unawaited(_toggleMaximize()),
-                        onClose: () => unawaited(_quitApp()),
-                        maximized: _maximized,
+                      child: AnimatedBuilder(
+                        animation: Listenable.merge(<Listenable>[
+                          AppStore.instance,
+                          shellSourceFilter,
+                        ]),
+                        builder: (BuildContext context, Widget? _) => TopStatusBar(
+                          tabIndex: _tab,
+                          onTabSelected: _selectTab,
+                          onSearch: _openSearch,
+                          sources: store_sources(),
+                          currentSourceId: shellSourceFilter.value,
+                          onPickSource: (String? id) => shellSourceFilter.value = id,
+                          onMinimize: () => unawaited(_minimize()),
+                          onToggleMaximize: () => unawaited(_toggleMaximize()),
+                          onClose: () => unawaited(_quitApp()),
+                          maximized: _maximized,
+                        ),
                       ),
                     ),
                     if (_searchOpen)
@@ -748,3 +761,9 @@ class WindowMaximizeState {
 
   final ValueNotifier<bool> value = ValueNotifier<bool>(false);
 }
+
+/// Which media source the home shelves show (null = every source). A global
+/// notifier because the writer (top bar pill) and the reader (HomePage) live
+/// in different subtrees, and a one-slot filter has no reason to become a
+/// store field.
+final ValueNotifier<String?> shellSourceFilter = ValueNotifier<String?>(null);

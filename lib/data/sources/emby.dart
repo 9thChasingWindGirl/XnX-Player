@@ -78,19 +78,37 @@ class EmbySource extends MediaSource {
   @override
   Future<List<MediaItem>> browse() async {
     await _ensureAuth();
-    final Map<String, dynamic> data = await Http.getJson(
-      _uri('/Users/$_userId/Items', <String, String>{
-        'Recursive': 'true',
-        'IncludeItemTypes': 'Movie,Series',
-        'Fields': _fields,
-        'SortBy': 'DateCreated',
-        'SortOrder': 'Descending',
-        'Limit': '80',
-        'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
-      }),
-      headers: _headers,
-    );
-    return _items(data);
+    // Page through the whole library. A single Limit=80 request silently
+    // truncated servers with more films — the reported "未能全部显示影片" —
+    // so walk StartIndex until TotalRecordCount is exhausted. 300 per page
+    // keeps each response light while a 2000-title library costs seven
+    // round-trips, not one enormous one.
+    const int pageSize = 300;
+    final List<MediaItem> out = <MediaItem>[];
+    int start = 0;
+    while (true) {
+      final Map<String, dynamic> data = await Http.getJson(
+        _uri('/Users/$_userId/Items', <String, String>{
+          'Recursive': 'true',
+          'IncludeItemTypes': 'Movie,Series',
+          'Fields': _fields,
+          'SortBy': 'DateCreated',
+          'SortOrder': 'Descending',
+          'Limit': '$pageSize',
+          'StartIndex': '$start',
+          'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
+        }),
+        headers: _headers,
+      );
+      final List<MediaItem> page = _items(data);
+      out.addAll(page);
+      final int total = (data['TotalRecordCount'] as num?)?.toInt() ?? out.length;
+      start += page.length;
+      if (page.isEmpty || start >= total || page.length < pageSize) {
+        break;
+      }
+    }
+    return out;
   }
 
   /// "Continue watching": the server already knows where you stopped, which is
