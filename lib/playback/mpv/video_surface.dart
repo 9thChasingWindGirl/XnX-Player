@@ -26,6 +26,19 @@ class VideoSurface {
   bool visible;
   String _diagnostics = '未创建容器';
 
+  /// Whether the container is currently on screen. Separate from [visible]
+  /// because "the host asked for the picture" and "the picture is ready to be
+  /// shown" are two different moments.
+  bool _revealed = false;
+
+  /// When [show] was called, used to give up waiting for a child window that is
+  /// never going to appear (audio-only files, or a build that paints straight
+  /// into the container).
+  DateTime? _visibleSince;
+
+  /// How long [sync] waits for mpv's child to exist before revealing anyway.
+  static const Duration _revealGrace = Duration(milliseconds: 900);
+
   /// The container handle. This is what mpv gets as `wid`.
   int? get handle => _host;
 
@@ -101,17 +114,27 @@ class VideoSurface {
 
     if (!visible) {
       // Nothing may be laid out while hidden: fitting calls SetWindowPos with
-      // SWP_SHOWWINDOW (`MoveWindow` repaints too), which would flash an opaque
-      // window over Flutter's loading panel every poll.
+      // SWP_SHOWWINDOW, which would flash an opaque window over Flutter's
+      // loading panel every poll.
       Win32.setVisible(host, visible: false);
+      _revealed = false;
       _hostBox = null;
       _videoBox = null;
       return;
     }
 
+    // Order matters. The container is moved first *without* being shown, then
+    // mpv's child is fitted to the container's client area, and only when both
+    // rectangles agree does the container become visible.
+    //
+    // Showing inside the move (the old behaviour) left one painted frame where
+    // the container was already on screen at its new size while mpv's child
+    // still had its own — a wrongly sized window containing a strip of picture
+    // and the OSD at the wrong scale. That is the window that flashes on
+    // startup, caught mid-resize.
     final WindowBox? outer = Win32.clientBox(parent);
     if (outer != null && !outer.isEmpty && outer != _hostBox) {
-      Win32.fit(host, outer);
+      Win32.fit(host, outer, reveal: _revealed);
       _hostBox = outer;
       _videoBox = null;
     }
@@ -124,6 +147,23 @@ class VideoSurface {
       }
     }
 
+    if (!_revealed) {
+      final WindowBox? hostClient = Win32.clientBox(host);
+      final WindowBox? videoClient = video == null ? null : Win32.clientBox(video);
+      final bool aligned = hostClient != null && videoClient != null && hostClient == videoClient;
+      final DateTime? since = _visibleSince;
+      final bool graceOver =
+          since != null && DateTime.now().difference(since) > _revealGrace;
+      // No child, or one that refuses to take the container's size, would
+      // otherwise leave a black screen up forever; the grace period is the
+      // escape hatch. Before it expires the alignment test is what keeps a
+      // half-sized window from being shown.
+      if (aligned || graceOver) {
+        Win32.setVisible(host, visible: true);
+        _revealed = true;
+      }
+    }
+
     // Z-order does not survive a fullscreen transition or a Flutter view
     // rebuild: the container can end up under FLUTTERVIEW, which renders as a
     // perfectly black screen with a healthy mpv log behind it. Raising is free.
@@ -132,6 +172,8 @@ class VideoSurface {
 
   void hide() {
     visible = false;
+    _revealed = false;
+    _visibleSince = null;
     final int? host = _host;
     if (host != null) {
       Win32.setVisible(host, visible: false);
@@ -140,9 +182,19 @@ class VideoSurface {
 
   void show() {
     visible = true;
+    _visibleSince = DateTime.now();
     _hostBox = null;
     _videoBox = null;
     sync();
+    // `sync` may have to wait for mpv's child to appear before it dares reveal
+    // the container; check again shortly instead of waiting for the next poll.
+    if (!_revealed) {
+      Timer(const Duration(milliseconds: 120), () {
+        if (visible) {
+          sync();
+        }
+      });
+    }
   }
 
   /// Forgets the cached rectangles and re-fits immediately.

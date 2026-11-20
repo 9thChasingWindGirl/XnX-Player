@@ -101,12 +101,26 @@ Map<String, String> buildMpvOptions({
     'osd-level': '1',
     'osd-bar': 'no',
     'osd-on-seek': 'no',
-    // Keys are handled by Flutter (and by our Lua OSD), so mpv's built-in
-    // bindings must not fight the focus engine for arrows and space.
+    // Input ownership, decided once and stated explicitly:
+    //
+    //   * Flutter receives every key and pointer event (it owns the real
+    //     window), and forwards them to the OSD as `player-cmd` messages.
+    //   * mpv must therefore not process any input of its own. `input-vo-keyboard=yes`
+    //     was the actual cause of the "keyboard and mouse fight each other"
+    //     symptom: the first click gave focus to mpv's child window, after which
+    //     mpv's own bindings ran *instead of* the forwarded ones, so space and
+    //     the arrows behaved differently depending on whether the mouse had been
+    //     used.
+    //   * `input-cursor=no` stops mpv's cursor state machine from fighting the
+    //     host. `cursor-autohide=no` is the important one: mpv hides the cursor
+    //     after 1000ms of *its own* input, and since it never receives any, the
+    //     pointer vanished over the picture and only came back when the window
+    //     was re-entered — the "cursor drifts and stops matching the mouse" bug.
     'input-default-bindings': 'no',
-    'input-vo-keyboard': 'yes',
+    'input-vo-keyboard': 'no',
+    'input-cursor': 'no',
     'input-gamepad': 'no',
-    'cursor-autohide': '1000',
+    'cursor-autohide': 'no',
     'idle': 'yes',
     // keep-open keeps the last frame and the video window alive after EOF;
     // without it the surface is torn down and the app flashes black.

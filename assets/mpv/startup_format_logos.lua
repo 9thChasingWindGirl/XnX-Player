@@ -8,8 +8,30 @@
 local msg = require 'mp.msg'
 local options = require 'mp.options'
 local utils = require 'mp.utils'
-local logo_bounds = dofile(utils.join_path(
-    mp.get_script_directory() or '.', 'startup-logo-bounds.lua'))
+
+-- `mp.get_script_directory()` only exists in newer mpv builds; on older ones it
+-- returns nil and the `or '.'` fallback resolves against mpv's *working*
+-- directory, not the script's, so the companion module is never found and the
+-- whole script dies at load time with
+--   Lua error: cannot open ./startup-logo-bounds.lua
+-- `mp.get_script_file()` has been there all along, so derive the folder from it
+-- and only use `get_script_directory` when it actually answers.
+local function script_dir()
+    local direct = mp.get_script_directory and mp.get_script_directory()
+    if type(direct) == 'string' and direct ~= '' then
+        return direct
+    end
+    local file = mp.get_script_file and mp.get_script_file()
+    if type(file) == 'string' and file ~= '' then
+        local dir = utils.split_path(file)
+        if type(dir) == 'string' and dir ~= '' then
+            return dir
+        end
+    end
+    return '.'
+end
+
+local logo_bounds = dofile(utils.join_path(script_dir(), 'startup-logo-bounds.lua'))
 
 local o = {
     enabled = true,

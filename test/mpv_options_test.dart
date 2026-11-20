@@ -78,6 +78,19 @@ void main() {
     test('omits script-opts when no badge folder was resolved', () {
       expect(buildMpvOptions().containsKey('script-opts'), isFalse);
     });
+
+    test('leaves every kind of input to the host', () {
+      // mpv cannot see the mouse in this embedding (no `[input]` line appears in
+      // a whole session log), and letting it own the keyboard made the same key
+      // behave differently depending on whether the mouse had been clicked.
+      // All three settings are load-bearing; the cursor one is what stops the
+      // pointer from vanishing over the picture.
+      final Map<String, String> options = buildMpvOptions();
+      expect(options['input-vo-keyboard'], 'no');
+      expect(options['input-cursor'], 'no');
+      expect(options['cursor-autohide'], 'no');
+      expect(options['input-default-bindings'], 'no');
+    });
   });
 
   group('audio passthrough', () {

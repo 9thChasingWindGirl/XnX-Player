@@ -63,17 +63,19 @@ overlays = []
 
 
 def make_overlay(fmt):
-    ov = {'format': fmt, 'data': '', 'res_x': 0, 'res_y': 0, 'z': 0,
-          'updates': 0, 'removes': 0}
-
-    def update(self=None):
-        ov['updates'] += 1
-
-    def remove(self=None):
-        ov['removes'] += 1
-
-    ov['update'] = update
-    ov['remove'] = remove
+    # A pure Lua table, not a Python dict: `osd:update()` on a Python object
+    # crosses the lupa boundary and produced a bogus "'dict' object is not
+    # callable" from inside render(), which looks exactly like a script bug.
+    ov = lua.table()
+    ov['format'] = fmt
+    ov['data'] = ''
+    ov['res_x'] = 0
+    ov['res_y'] = 0
+    ov['z'] = 0
+    ov['updates'] = 0
+    ov['removes'] = 0
+    ov['update'] = lua.eval('function(self) self.updates = self.updates + 1 end')
+    ov['remove'] = lua.eval('function(self) self.removes = self.removes + 1 end')
     overlays.append(ov)
     return ov
 
@@ -103,16 +105,42 @@ def observe(name, kind, fn):
 mp_tbl = lua.table()
 
 
+# mpv hands Lua real tables, where a missing key is simply nil. A Python dict
+# proxied by lupa is stricter and raises KeyError instead — which showed up as
+# bogus "'w'" / "'dict' object is not callable" errors from code that is correct
+# on a real player. Convert every nested map up front so the mock behaves like
+# the thing it stands in for.
+def _to_lua(value):
+    if isinstance(value, dict):
+        return lua.table_from({k: _to_lua(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return lua.table_from([_to_lua(v) for v in value])
+    return value
+
+
+props = {k: _to_lua(v) for k, v in props.items()}
+
+_MISSING = object()
+
+
+def _index(table, part):
+    try:
+        value = table[part]
+    except Exception:  # noqa: BLE001 - a proxy that refuses the key means "absent"
+        return _MISSING
+    return _MISSING if value is None else value
+
+
 def resolve(name):
     """mpv offers `video-params/w` as a path into a native map; mirror that."""
     if name in props:
         return props[name]
     cur = props
     for part in name.split('/'):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        else:
+        nxt = _index(cur, part)
+        if nxt is _MISSING:
             return None
+        cur = nxt
     return cur
 
 
@@ -127,7 +155,11 @@ mp_tbl['get_property_bool'] = lambda name, default=False: (
 mp_tbl['set_property'] = lambda *a: None
 mp_tbl['set_property_number'] = lambda *a: None
 mp_tbl['set_property_native'] = lambda *a: None
-mp_tbl['commandv'] = lambda *a: None
+# Record what the script asks mpv to do: the forwarded-pointer path can only be
+# verified by watching for the seek / volume / pause command it produces.
+commands = []
+mp_tbl['commandv'] = lambda *a: commands.append(a)
+mp_tbl['command'] = lambda *a: commands.append(a)
 mp_tbl['create_osd_overlay'] = make_overlay
 mp_tbl['add_timeout'] = add_timeout
 periodic = []
@@ -207,11 +239,26 @@ for fn in periodic:
     fn()
 
 
+_pcall = lua.eval('''
+function(fn, ...)
+  local ok, err = xpcall(fn, function(e) return tostring(e) .. "\\n" .. debug.traceback("", 2) end, ...)
+  if not ok then return err end
+end''')
+
+
 def send(payload):
+    # pcall so a bug surfaces as "player_osd.lua:1234: attempt to ..." instead of
+    # a Python traceback in lupa's guts with no Lua line number. The `...` is not
+    # optional: `pcall(fn)` alone calls the handler with no payload, which parse
+    # as a malformed command and silently does nothing.
     for fn in handlers.get('msg-player-cmd', []):
-        fn(payload)
+        err = _pcall(fn, payload)
+        if err:
+            print('LUA ERROR in player-cmd:', err)
     for fn in periodic:
-        fn()
+        err = _pcall(fn)
+        if err:
+            print('LUA ERROR in timer:', err)
 
 
 # Every menu, the stats panel and the help sheet draw through different code
@@ -264,3 +311,41 @@ for line in chrome:
         print('  ', line[line.find('}') + 1:][:40])
 open('_osd_chrome.txt', 'w', encoding='utf-8').write(overlays[0]['data'])
 print('wrote _osd_chrome.txt')
+
+# ---- forwarded pointer -----------------------------------------------------
+#
+# mpv never sees the mouse in this embedding, so the only pointer path that can
+# matter is `{"cmd":"mouse"}` from Flutter. Exercise it end to end: move onto the
+# seekbar, press, drag, release, and check that mpv is actually asked to seek.
+print('---')
+commands.clear()
+bar_y = 884  # BAR_Y in the design space
+dim = props['osd-dimensions']
+sy = dim['h'] / 1080.0
+ny = (bar_y * sy + dim['mt']) / (dim['h'] + dim['mt'] + dim['mb'])
+
+send('{"cmd":"mouse","ev":"move","nx":0.5,"ny":%.5f}' % ny)
+send('{"cmd":"mouse","ev":"down","nx":0.5,"ny":%.5f,"button":"left"}' % ny)
+print('after press on bar:', commands[-1] if commands else 'NO COMMAND')
+
+commands.clear()
+send('{"cmd":"mouse","ev":"move","nx":0.75,"ny":%.5f}' % ny)
+print('after drag to 75%:', commands[-1] if commands else 'NO COMMAND')
+
+commands.clear()
+send('{"cmd":"mouse","ev":"up","nx":0.75,"ny":%.5f,"button":"left"}' % ny)
+print('after release:', commands[-1] if commands else 'NO COMMAND')
+
+commands.clear()
+send('{"cmd":"mouse","ev":"move","nx":0.5,"ny":0.5}')
+send('{"cmd":"mouse","ev":"wheel","nx":0.5,"ny":0.5,"delta":1}')
+print('after wheel up:', commands[-1] if commands else 'NO COMMAND')
+
+# The hover path must highlight the control it is over, otherwise nothing looks
+# clickable even though clicking works.
+send('{"cmd":"show"}')
+hover_note = []
+for line in overlays[0]['data'].splitlines():
+    if 'fs20' in line or 'fs17' in line:
+        hover_note.append(line[line.find('}') + 1:][:18])
+print('chrome still renders:', len(overlays[0]['data'].splitlines()), 'events')

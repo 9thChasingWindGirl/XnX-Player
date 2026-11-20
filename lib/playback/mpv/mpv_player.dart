@@ -579,6 +579,32 @@ class MpvPlayer {
     sendScriptMessage(<String, Object?>{'cmd': 'key', 'key': name});
   }
 
+  /// Forwards one pointer event to the OSD.
+  ///
+  /// This exists because mpv cannot see the mouse here at all: the picture is a
+  /// native child window owned by us, and Windows delivers the messages to the
+  /// Flutter view. A session log contains no `[input]` line, so `mouse-pos`
+  /// never changes and every hitbox the OSD draws is unreachable. Coordinates
+  /// are normalized against the video area, leaving the 1920x1080 design space
+  /// entirely to the Lua side — two places that both "know" the layout is one
+  /// place too many.
+  void sendMouse({
+    required String ev,
+    double? nx,
+    double? ny,
+    String? button,
+    int? delta,
+  }) {
+    sendScriptMessage(<String, Object?>{
+      'cmd': 'mouse',
+      'ev': ev,
+      if (nx != null) 'nx': nx,
+      if (ny != null) 'ny': ny,
+      if (button != null) 'button': button,
+      if (delta != null) 'delta': delta,
+    });
+  }
+
   void showUi() {
     sendScriptMessage(<String, Object?>{'cmd': 'show'});
   }

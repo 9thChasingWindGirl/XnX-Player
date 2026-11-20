@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
@@ -51,7 +52,16 @@ class _PlayerPageState extends State<PlayerPage> {
   Timer? _watchdog;
   Timer? _escFallback;
   Timer? _health;
-  Timer? _uiHoverThrottle;
+
+  /// Pointer → OSD forwarding. mpv never sees the mouse in this embedding, so
+  /// every hover, click, drag and wheel notch has to travel from Flutter to the
+  /// Lua OSD as a `mouse` command. Moves are coalesced to one message per
+  /// [_mouseInterval]: a 1000Hz mouse would otherwise produce a thousand JSON
+  /// commands per second, each triggering a full OSD re-render.
+  static const Duration _mouseInterval = Duration(milliseconds: 12);
+  final GlobalKey _inputKey = GlobalKey(debugLabel: 'player-input');
+  Timer? _mouseTimer;
+  Offset? _pendingMouse;
 
   /// Which rung of the fallback ladder the video path is on. 0 means the first
   /// choice worked; every step down costs quality but saves the picture.
@@ -88,7 +98,7 @@ class _PlayerPageState extends State<PlayerPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _watchdog?.cancel();
     _escFallback?.cancel();
-    _uiHoverThrottle?.cancel();
+    _mouseTimer?.cancel();
     _health?.cancel();
     _loadedSub?.cancel();
     _bridge?.dispose();
@@ -742,6 +752,94 @@ class _PlayerPageState extends State<PlayerPage> {
     return true;
   }
 
+  // ---- Pointer forwarding -------------------------------------------------
+  //
+  // The OSD draws its own controls, but mpv cannot receive a single mouse event
+  // here: the picture is a native child window and Windows delivers the
+  // messages to the Flutter view. So Flutter is the only place that knows where
+  // the pointer is, and it sends normalized coordinates to the Lua side.
+
+  /// Win32's MK_RBUTTON bit. Spelled out so the file does not depend on which
+  /// gesture constants the UI package re-exports.
+  static const int _secondaryButton = 0x02;
+
+  /// Which button started the current press. Needed on release: by then
+  /// `PointerUpEvent.buttons` is already 0 and the button is unrecoverable.
+  String? _pressedButton;
+
+  /// Normalized (0..1) pointer position inside the player, or null when the
+  /// widget has not been laid out yet.
+  ///
+  /// `BuildContext.size` rather than a `RenderBox` cast: the page might be
+  /// driven by a different Material package than the one this file imports, and
+  /// naming the render type would tie the two together for no benefit.
+  Offset? _normalized(Offset local) {
+    final Size? size = _inputKey.currentContext?.size;
+    if (size == null || size.isEmpty) {
+      return null;
+    }
+    return Offset(
+      (local.dx / size.width).clamp(0.0, 1.0).toDouble(),
+      (local.dy / size.height).clamp(0.0, 1.0).toDouble(),
+    );
+  }
+
+  /// Queues a move, coalescing bursts into one message per [_mouseInterval].
+  void _queueMove(Offset local) {
+    final Offset? unit = _normalized(local);
+    if (unit == null) {
+      return;
+    }
+    _pendingMouse = unit;
+    if (_mouseTimer?.isActive ?? false) {
+      return;
+    }
+    _flushMove();
+    _mouseTimer = Timer(_mouseInterval, _flushMove);
+  }
+
+  void _flushMove() {
+    final Offset? unit = _pendingMouse;
+    _pendingMouse = null;
+    if (unit == null) {
+      return;
+    }
+    _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
+  }
+
+  /// Press or release. The move goes first: the OSD resolves the click against
+  /// the pointer position it has stored, so a click somewhere new would
+  /// otherwise be judged against wherever the pointer was last seen.
+  void _forwardButton(PointerEvent event, {required bool down}) {
+    final Offset? unit = _normalized(event.localPosition);
+    final MpvPlayer? player = _player;
+    if (unit == null || player == null) {
+      return;
+    }
+    _pendingMouse = null;
+    player.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
+    player.sendMouse(
+      ev: down ? 'down' : 'up',
+      nx: unit.dx,
+      ny: unit.dy,
+      button: _pressedButton ?? 'left',
+    );
+  }
+
+  void _forwardScroll(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) {
+      return;
+    }
+    final Offset? unit = _normalized(event.localPosition);
+    final double dy = event.scrollDelta.dy;
+    if (unit == null || dy == 0) {
+      return;
+    }
+    // One notch per message regardless of the platform's scroll step; the Lua
+    // side decides whether a notch means ±5% volume or a menu row.
+    _player?.sendMouse(ev: 'wheel', nx: unit.dx, ny: unit.dy, delta: dy < 0 ? 1 : -1);
+  }
+
   @override
   Widget build(BuildContext context) {
     final MpvPlayer? player = _player;
@@ -750,52 +848,65 @@ class _PlayerPageState extends State<PlayerPage> {
     return TvScale(
       child: Scaffold(
         backgroundColor: const Color(0xFF000000),
-        body: MouseRegion(
-          // The native mpv child window stops receiving mouse events once
-          // fullscreen re-arranges the z-order (probe logs show zero
-          // `mouse-pos` updates there), so the OSD's show-on-mouse-move path
-          // would never fire. The Flutter view still sees the moves: forward
-          // them to the OSD's `show` command, throttled to one hit per hide
-          // cycle.
-          onHover: (_) {
-            if (_uiHoverThrottle?.isActive ?? false) {
-              return;
-            }
-            _uiHoverThrottle = Timer(const Duration(milliseconds: 300), () {});
-            _player?.showUi();
+        body: Listener(
+          key: _inputKey,
+          // Opaque: the picture is a native window underneath, so Flutter only
+          // receives pointer events because this subtree claims them. A
+          // transparent listener would let every click fall through to nothing.
+          behavior: HitTestBehavior.opaque,
+          onPointerHover: (PointerHoverEvent event) => _queueMove(event.localPosition),
+          onPointerMove: (PointerMoveEvent event) => _queueMove(event.localPosition),
+          onPointerDown: (PointerDownEvent event) {
+            _pressedButton =
+                (event.buttons & _secondaryButton) != 0 ? 'right' : 'left';
+            _forwardButton(event, down: true);
           },
-          child: Stack(
-            children: <Widget>[
-              if (_error != null)
-                Positioned.fill(child: _ErrorPanel(message: _error!, hint: _hint, onBack: _close))
-              else if (showVideoState)
-                Positioned.fill(child: _LoadingPanel(title: widget.item.title, hint: _hint)),
-              if (_showDiagnostics && player != null)
-                Positioned(
-                  left: PsSpace.safeX,
-                  right: PsSpace.safeX,
-                  bottom: PsSpace.lg,
-                  child: _DiagnosticsPanel(
-                    logPath: _logPath,
-                    lines: player.logs,
-                    surfaceInfo: _surface?.diagnostics ?? '未枚举到子窗口',
-                    health: _healthText,
-                    scriptNote: _scriptNote,
-                    capsNote: _capsNote,
-                    facts: <String>[
-                      'vo=${player.getProperty('vo') ?? '—'}'
-                          ' 已配置=${player.getProperty('vo-configured') ?? '—'}'
-                          ' 实测帧率=${player.getProperty('estimated-vf-fps') ?? '—'}',
-                      '解码=${player.getProperty('hwdec-current') ?? '—'}'
-                          ' 同步=${player.getProperty('video-sync') ?? '—'}'
-                          ' 音频=${player.getProperty('ao') ?? '无'}',
-                      '画质=${player.getProperty('video-params/pixelformat') ?? '—'}'
-                          ' 色域=${player.getProperty('video-params/primaries') ?? '—'}'
-                          ' 峰值=${player.getProperty('target-peak') ?? '—'}',
-                    ],
+          onPointerUp: (PointerUpEvent event) {
+            _forwardButton(event, down: false);
+            _pressedButton = null;
+          },
+          onPointerCancel: (PointerCancelEvent event) {
+            _forwardButton(event, down: false);
+            _pressedButton = null;
+          },
+          onPointerSignal: _forwardScroll,
+          child: MouseRegion(
+            // mpv is told not to touch the cursor (`cursor-autohide=no`,
+            // `input-cursor=no`); the pointer the user sees is this one.
+            cursor: SystemMouseCursors.basic,
+            child: Stack(
+              children: <Widget>[
+                if (_error != null)
+                  Positioned.fill(child: _ErrorPanel(message: _error!, hint: _hint, onBack: _close))
+                else if (showVideoState)
+                  Positioned.fill(child: _LoadingPanel(title: widget.item.title, hint: _hint)),
+                if (_showDiagnostics && player != null)
+                  Positioned(
+                    left: PsSpace.safeX,
+                    right: PsSpace.safeX,
+                    bottom: PsSpace.lg,
+                    child: _DiagnosticsPanel(
+                      logPath: _logPath,
+                      lines: player.logs,
+                      surfaceInfo: _surface?.diagnostics ?? '未枚举到子窗口',
+                      health: _healthText,
+                      scriptNote: _scriptNote,
+                      capsNote: _capsNote,
+                      facts: <String>[
+                        'vo=${player.getProperty('vo') ?? '—'}'
+                            ' 已配置=${player.getProperty('vo-configured') ?? '—'}'
+                            ' 实测帧率=${player.getProperty('estimated-vf-fps') ?? '—'}',
+                        '解码=${player.getProperty('hwdec-current') ?? '—'}'
+                            ' 同步=${player.getProperty('video-sync') ?? '—'}'
+                            ' 音频=${player.getProperty('ao') ?? '无'}',
+                        '画质=${player.getProperty('video-params/pixelformat') ?? '—'}'
+                            ' 色域=${player.getProperty('video-params/primaries') ?? '—'}'
+                            ' 峰值=${player.getProperty('target-peak') ?? '—'}',
+                      ],
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

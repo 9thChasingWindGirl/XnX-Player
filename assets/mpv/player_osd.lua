@@ -262,6 +262,11 @@ local state = {
   help = false,
   toast = nil,
   mouse_seen = false,
+  -- True once the host starts forwarding pointer events. mpv's own `mouse-pos`
+  -- never updates in this embedding, so this flag is what tells the observer
+  -- to stop waiting for something that will never arrive.
+  external_pointer = false,
+  mouse_events = 0,
   audio_mode = false,
   has_video = true,
   ui_scale = 1,
@@ -1458,6 +1463,9 @@ local function draw_stats(parts)
   -- pointer event, or it saw one and the hitboxes were wrong. This line tells
   -- them apart without a debugger attached.
   local mouse_note = state.mouse_seen and '  ·  鼠标已连接' or '  ·  鼠标未收到事件'
+  if state.external_pointer then
+    mouse_note = mouse_note .. string.format('（宿主转发 %d 次）', state.mouse_events)
+  end
   parts[#parts + 1] = text(px + 28, py + 20, 20, DIM, 0x00, '统计信息 · I 关闭' .. mouse_note, 7, true)
   for i, row in ipairs(rows) do
     local col = i <= per_col and 0 or 1
@@ -2038,21 +2046,44 @@ end
 -- ==== MOUSE ================================================================
 
 --- Maps window pixels into the 1920x1080 design space.
+---
+--- Both axes are scaled independently on purpose. libass maps PlayRes onto the
+--- *video* rectangle, so a 2.39:1 film in a 16:9 window stretches the design
+--- space vertically as well — using one scale derived from the width put the
+--- seekbar's hitbox roughly ten percent off at the bottom of the frame, which
+--- reads as "the bar only responds if you aim above it".
 local function to_design(mx, my)
   local dim = mp.get_property_native('osd-dimensions')
   if dim and dim.w and dim.w > 0 and dim.h and dim.h > 0 then
     local ox = dim.ml or 0
     local oy = dim.mt or 0
-    local scale = dim.w / W
-    if scale > 0.0001 then
-      return (mx - ox) / scale, (my - oy) / scale
+    local sx = dim.w / W
+    local sy = dim.h / H
+    if sx > 0.0001 and sy > 0.0001 then
+      return (mx - ox) / sx, (my - oy) / sy
     end
   end
   return mx, my
 end
 
---- Current pointer position in design space, or nil when mpv has no fix.
+--- Current pointer position in design space, or nil when nobody knows it.
+---
+--- Two sources, and the forwarded one wins. mpv's own `mouse-pos` never updates
+--- in this embedding: the picture is a native child window owned by the host,
+--- and Windows delivers the mouse messages to the Flutter view instead (the mpv
+--- log contains no `[input]` line at all for a whole session). The host
+--- therefore forwards normalized coordinates over `player-cmd`, and this is the
+--- single place both paths converge — every hit test and every drag reads the
+--- same numbers, no matter which side produced them.
+---
+--- Returns two values, so callers must use multiple assignment. Assigning the
+--- result to one variable silently kept only `x`, and the very first real click
+--- would have died on `attempt to index a number value`.
 local function pointer_design()
+  local forwarded = state.pointer
+  if state.external_pointer and forwarded then
+    return forwarded.x, forwarded.y
+  end
   local pos = mp.get_property_native('mouse-pos')
   if not pos or not pos.x then
     return nil
@@ -2087,6 +2118,11 @@ local function update_hover(x, y)
 end
 
 mp.observe_property('mouse-pos', 'native', function(_, value)
+  -- The host owns pointer input here; anything mpv might report on its own is
+  -- stale by definition and would fight the forwarded position.
+  if state.external_pointer then
+    return
+  end
   if not value or not value.x then
     state.pointer = nil
     state.hover = nil
@@ -2130,8 +2166,8 @@ end)
 -- this the same way — bind `mbtn_left`, read `mouse-pos` on press, and resolve
 -- the hitboxes recorded by the last render.
 local function on_primary_down()
-  local p = pointer_design()
-  if not p then
+  local px, py = pointer_design()
+  if not px then
     return
   end
   -- Remembered before `show()`: a click on a hidden UI must only bring the
@@ -2139,17 +2175,24 @@ local function on_primary_down()
   -- (or toggle it straight back off).
   local was_visible = state.visible
   show()
-  local hit = update_hover(p[1], p[2])
+  local hit = update_hover(px, py)
+  -- The comment above is a promise the code has to keep: when the chrome was
+  -- hidden, the press only reveals it. Without this the first click on an empty
+  -- patch of video still armed whichever button happened to be under the
+  -- pointer, and released it a moment later.
+  if not was_visible then
+    hit = nil
+  end
   state.press = {
     id = hit and hit.id or nil,
-    x = p[1],
-    y = p[2],
+    x = px,
+    y = py,
     at = now(),
     was_visible = was_visible,
   }
   if hit and hit.id == 'bar' then
     drag_bar = true
-    bar_seek(p[1])
+    bar_seek(px)
   end
 end
 
@@ -2158,9 +2201,9 @@ local function on_primary_up()
   state.press = nil
   if drag_bar then
     drag_bar = false
-    local p = pointer_design()
-    if p then
-      bar_seek(p[1])
+    local px = pointer_design()
+    if px then
+      bar_seek(px)
     end
     return
   end
@@ -2180,9 +2223,10 @@ local function on_primary_up()
   -- went down on, so a press-and-slide off a button does not fire it. The test
   -- is made against where the pointer *is now* — testing the press position
   -- would make press-then-drag-away-release still fire the button.
-  local up = pointer_design()
-  local ux = up and up[1] or press.x
-  local uy = up and up[2] or press.y
+  local ux, uy = pointer_design()
+  if not ux then
+    ux, uy = press.x, press.y
+  end
   local hit = hit_at(ux, uy)
   if hit and hit.id == press.id and hit.onClick and (now() - press.at) < 1.2 then
     hit.onClick()
@@ -2205,39 +2249,115 @@ local function on_secondary_down()
   end
 end
 
+--- Window-normalized coordinates (0..1) into the 1920x1080 design space.
+---
+--- The exact inverse of [to_design], and it exists because the host only knows
+--- where the pointer is *inside its own widget* — it has no idea how libass
+--- decided to letterbox the OSD. Reconstructing the window size from
+--- `osd-dimensions` plus its margins keeps both input paths landing on the same
+--- numbers, so a click forwarded by the host hits the same button a real
+--- `mouse-pos` event would have hit.
+local function unit_to_design(nx, ny)
+  local dim = mp.get_property_native('osd-dimensions')
+  if dim and dim.w and dim.w > 0 and dim.h and dim.h > 0 then
+    local ml, mt = dim.ml or 0, dim.mt or 0
+    local win_w = dim.w + ml + (dim.mr or 0)
+    local win_h = dim.h + mt + (dim.mb or 0)
+    local sx = dim.w / W
+    local sy = dim.h / H
+    if sx > 0.0001 and sy > 0.0001 then
+      return (nx * win_w - ml) / sx, (ny * win_h - mt) / sy
+    end
+  end
+  return nx * W, ny * H
+end
+
+--- Pointer events forwarded by the host.
+---
+--- `ev` is `move`, `down`, `up` or `wheel`; `button` is `left`/`right`; `delta`
+--- is +1/-1 for wheels. Coordinates arrive normalized against the video area so
+--- the host never has to model the 1920x1080 design space — the moment two
+--- places both "know" the layout they start disagreeing, and the symptom is
+--- controls that highlight one place and act in another.
+local function handle_mouse(payload)
+  state.external_pointer = true
+  state.mouse_seen = true
+  state.mouse_events = state.mouse_events + 1
+
+  local nx = tonumber(payload.nx)
+  local ny = tonumber(payload.ny)
+  if nx and ny then
+    local x, y = unit_to_design(nx, ny)
+    state.pointer = { x = x, y = y }
+  end
+
+  local ev = payload.ev
+  if ev == 'move' then
+    if drag_bar then
+      -- Dragging is still "using" the bar, so the auto-hide clock restarts; a
+      -- slow scrub would otherwise pop the chrome away under the pointer.
+      local x = pointer_design()
+      if x then
+        bar_seek(x)
+      end
+      schedule_hide()
+      return
+    end
+    local x, y = pointer_design()
+    if not x then
+      return
+    end
+    update_hover(x, y)
+    if state.visible then
+      schedule_hide()
+    else
+      show()
+    end
+  elseif ev == 'down' then
+    if payload.button == 'right' then
+      on_secondary_down()
+    else
+      on_primary_down()
+    end
+  elseif ev == 'up' then
+    -- Only the left button has a press/release pair here. A right-click opens
+    -- the menu on press, so forwarding its release would land in
+    -- `on_primary_up` and close the menu that was just opened.
+    if payload.button ~= 'right' then
+      on_primary_up()
+    end
+  elseif ev == 'wheel' then
+    local delta = tonumber(payload.delta) or 0
+    if delta ~= 0 then
+      if state.menu then
+        menu_move(delta > 0 and -1 or 1)
+      else
+        add_volume(delta > 0 and 5 or -5)
+      end
+    end
+  end
+end
+
+-- No `mbtn_*` bindings here on purpose.
+--
+-- Two reasons, both observed rather than assumed:
+--
+--   1. mpv never delivers mouse events in this embedding. A whole session's log
+--      has no `[input]` line: the picture is a native child window owned by the
+--      host, and Windows hands the mouse messages to the Flutter view.
+--   2. Even when it does, a binding cannot express "button released" in a way
+--      this mpv build reports — the section it generates contains a single
+--      `mbtn_left script-binding` line and no release counterpart. A seekbar
+--      press would therefore start a drag that never ends, pinning the playhead
+--      to the pointer.
+--
+-- So the host owns pointer input and sends `mouse` commands; the observer above
+-- is only a fallback for running this script in a plain mpv.
 mp.set_key_bindings({
-  { 'mbtn_left', on_primary_down, on_primary_up },
   -- Double click must not reach mpv: it would toggle fullscreen behind our back.
   { 'mbtn_left_dbl', 'ignore' },
-  { 'mbtn_right', on_secondary_down },
 }, 'xnx-mouse', 'force')
--- No `allow-vo-dragging`: mpv paints into a child window, so letting it drag on
--- a left-press would fight the host window instead of moving anything useful.
-mp.enable_key_bindings('xnx-mouse', 'allow-hide-cursor')
-
-mp.set_key_bindings({
-  {
-    'wheel_up',
-    function()
-      if state.menu then
-        menu_move(-1)
-      else
-        add_volume(5)
-      end
-    end,
-  },
-  {
-    'wheel_down',
-    function()
-      if state.menu then
-        menu_move(1)
-      else
-        add_volume(-5)
-      end
-    end,
-  },
-}, 'xnx-wheel', 'force')
-mp.enable_key_bindings('xnx-wheel')
+mp.enable_key_bindings('xnx-mouse')
 
 -- ==== IPC ==================================================================
 
@@ -2262,6 +2382,8 @@ mp.register_script_message('player-cmd', function(json)
     toast(payload.text or '')
   elseif cmd == 'menu' and payload.id then
     open_menu(payload.id)
+  elseif cmd == 'mouse' then
+    handle_mouse(payload)
   end
 end)
 

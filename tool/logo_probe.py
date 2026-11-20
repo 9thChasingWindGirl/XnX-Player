@@ -118,7 +118,12 @@ def observe(name, kind, fn):
 
 mp_tbl['observe_property'] = observe
 mp_tbl['osd_message'] = lambda text, *a: osd_messages.append(str(text))
-mp_tbl['get_script_directory'] = lambda: ASSET_DIR
+# The bundled mpv build does NOT provide `mp.get_script_directory()`; the real
+# log said `Lua error: cannot open ./startup-logo-bounds.lua`, i.e. the fallback
+# resolved against mpv's working directory and the badge script died at load.
+# Deliberately absent here so a regression fails this probe instead of the user's
+# player: `get_script_file()` is the API that has always existed.
+mp_tbl['get_script_file'] = lambda: os.path.join(ASSET_DIR, 'startup_format_logos.lua')
 mp_tbl['get_time'] = lambda: 100.0
 
 
@@ -168,6 +173,15 @@ mp_tbl['msg'] = msg_tbl
 
 utils_tbl = lua.table()
 utils_tbl['join_path'] = lambda a, b: os.path.join(str(a), str(b))
+
+
+def split_path(p):
+    p = str(p).replace('\\', '/')
+    i = p.rfind('/')
+    return ('', p) if i < 0 else (p[:i + 1], p[i + 1:])
+
+
+utils_tbl['split_path'] = split_path
 utils_tbl['read_file'] = lambda p, *a: open(p, 'rb').read().decode('utf-8', 'replace')
 utils_tbl['parse_json'] = lambda s: lua.table_from(__import__('json').loads(s))
 mp_tbl['utils'] = utils_tbl

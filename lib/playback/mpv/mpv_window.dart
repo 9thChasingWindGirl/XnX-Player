@@ -325,8 +325,14 @@ class Win32 {
     return best != 0 ? best : (fallback == 0 ? null : fallback);
   }
 
-  /// Fits [hwnd] to [box] and raises it above the Flutter view.
-  static bool fit(int hwnd, WindowBox box) {
+  /// Fits [hwnd] to [box] and, when [reveal] is true, shows it above the
+  /// Flutter view.
+  ///
+  /// [reveal] exists because showing and resizing must not be one step: the
+  /// container used to become visible inside the same call that moved it, so
+  /// Windows could paint it for a frame while mpv's child still had its own
+  /// size. That frame is the mysterious window that flashes on startup.
+  static bool fit(int hwnd, WindowBox box, {bool reveal = true}) {
     if (hwnd == 0 || box.isEmpty || _isWindow(hwnd) == 0) {
       return false;
     }
@@ -342,7 +348,7 @@ class Win32 {
       0,
       0,
       0,
-      _swpNoSize | _swpNoMove | _swpNoActivate | _swpShowWindow,
+      _swpNoSize | _swpNoMove | _swpNoActivate | (reveal ? _swpShowWindow : 0),
     );
     return moved;
   }
