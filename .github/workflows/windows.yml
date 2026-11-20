@@ -1,22 +1,56 @@
+# 版本号规则（见 VERSION 文件）：第一位=大型迭代，第二位=轻版本迭代，第三位=hotfix。
+#
+# 触发与发布策略：
+# - main：VERSION == 0.00.00（核心工作未完成）时 push 自动构建，产物仅进
+#   Actions artifact；核心工作完成后 push 不再触发，改为手动 workflow_dispatch
+#   记录版本号后构建/发布。
+# - beta：push 自动构建，产物只进 Actions（dev 版本），永不进 Release。
+# - Release 只能通过手动 workflow_dispatch（publish=true + version）发布；
+#   beta 发布时必须把 dev 序号换成正式 beta 版本号，此变更由发布人手动完成。
 name: windows
-
-# 版本号规则：第一位=大型迭代，第二位=轻版本迭代，第三位=hotfix。
-# 核心工作完成前固定为 0.00.00；之后随 Release 起版（main=正式版）。
-env:
-  APP_VERSION: 0.00.00
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [main, beta]
   workflow_dispatch:
+    inputs:
+      version:
+        description: '本次构建的版本号（大迭代.轻迭代.hotfix），发布 Release 时必填'
+        required: false
+        default: ''
+      publish:
+        description: '构建后发布到 Release'
+        type: boolean
+        default: false
 
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide auto-build
+        id: check
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          skip=false
+          # 核心工作完成后，main 的 push 不再自动构建：版本号必须手动记录
+          # （workflow_dispatch），避免无版本号的正式构建。
+          if [ "$version" != "0.00.00" ] && [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" = "main" ]; then
+            skip=true
+          fi
+          echo "version=$version event=${{ github.event_name }} ref=${{ github.ref_name }} skip=$skip"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -64,6 +98,21 @@ jobs:
       - name: Build release
         run: flutter build windows --release --no-tree-shake-icons
 
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.version }}') {
+            $version = '${{ inputs.version }}'
+          }
+          # beta 分支的 push 产物是 dev 版本：dev-<基准版本>.<构建号>
+          if ('${{ github.ref_name }}' -eq 'beta' -and '${{ github.event_name }}' -eq 'push') {
+            $version = "dev-$version.$($env:GITHUB_RUN_NUMBER)"
+          }
+          Write-Host "resolved version: $version"
+          "RESOLVED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Bundle libmpv and verify
         shell: pwsh
         run: |
@@ -74,27 +123,60 @@ jobs:
           Copy-Item third_party/mpv/libmpv-2.dll "$rel/libmpv-2.dll" -Force
           if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/player_osd.lua")) { throw "OSD lua missing from bundle" }
           if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
-          "$env:APP_VERSION" | Out-File -FilePath "$rel/version.txt" -Encoding utf8
+          "$env:RESOLVED_VERSION" | Out-File -FilePath "$rel/version.txt" -Encoding utf8
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XnX-Player-windows-x64-${{ env.APP_VERSION }}
+          name: XnX-Player-windows-x64-${{ env.RESOLVED_VERSION }}
           path: ${{ env.REL_DIR }}
           if-no-files-found: error
-          retention-days: 14
+          # main 正式产物收敛保留（14 天）；beta 的 dev 产物保留更宽（30 天）。
+          retention-days: ${{ github.ref_name == 'beta' && 30 || 14 }}
 
-      # 产物会一直堆积在 Actions 里：每次成功构建后只保留最新的 3 个。
+      # 产物会一直堆积在 Actions 里：构建成功后按分支清理旧 artifact
+      # （beta 保留更宽：10 个；main 保留 3 个）。
       - name: Clean old artifacts
         if: success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
+          $keep = if ('${{ github.ref_name }}' -eq 'beta') { 10 } else { 3 }
           $all = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" | ForEach-Object { ($_ | ConvertFrom-Json).artifacts } | Sort-Object created_at -Descending
-          Write-Host "artifacts total: $($all.Count)"
-          $all | Select-Object -Skip 3 | ForEach-Object {
+          Write-Host "artifacts total: $($all.Count), keeping newest $keep"
+          $all | Select-Object -Skip $keep | ForEach-Object {
             Write-Host "deleting $($_.name) ($($_.id))"
             gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$($_.id)"
           }
+
+  release:
+    # Release 只出手动触发：发布人负责把 dev 序号换成正式版本号后填入
+    # version，beta 分支发布为 prerelease。
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require version
+        shell: bash
+        run: |
+          if [ -z "${{ inputs.version }}" ]; then echo "::error::发布 Release 必须填写 version（dev→beta 版本变更由发布人手动完成）"; exit 1; fi
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: XnX-Player-windows-x64-${{ inputs.version }}
+
+      - name: Pack and publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          zip -r "XnX-Player-windows-x64-${{ inputs.version }}.zip" .
+          tag="v${{ inputs.version }}"
+          extra=""
+          if [ "${{ github.ref_name }}" = "beta" ]; then extra="--prerelease"; fi
+          gh release create "$tag" "XnX-Player-windows-x64-${{ inputs.version }}.zip" \
+            --title "XnX Player ${{ inputs.version }}" \
+            --notes "见提交历史与 VERSION 变更记录" $extra
