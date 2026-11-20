@@ -26,3 +26,7 @@ desktop.ini
 # Workspace-local notes
 .workbuddy/
 .atomcode/
+# OSD probe / preview artefacts
+tool/_osd_*.txt
+_osd_chrome.txt
+_osd_render.png

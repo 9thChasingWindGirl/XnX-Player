@@ -29,10 +29,10 @@ local W, H = 1920, 1080
 local SAFE = 96
 local RIGHT = W - SAFE
 
-local TITLE_Y = 790
+local TITLE_Y = 770
 local META_Y = 844
 local BAR_Y = 884
-local BAR_H = 4
+local BAR_H = 3
 local CTRL_Y = 902
 local CTRL_H = 66
 local HINT_Y = 992
@@ -46,6 +46,13 @@ local WHITE = '&HFFFFFF&'
 local GREY = '&HBEBEBE&'
 local DIM = '&H8C8C8C&'
 local BLACK = '&H000000&'
+
+-- Format-badge accents. ASS colours are &HBBGGRR&, not RGB.
+local HDR_GOLD = '&H3CBEFF&' -- RGB 255,190,60
+local DV_PURPLE = '&HFF78A0&' -- RGB 160,120,255
+local HLG_CYAN = '&HDCDC50&' -- RGB 80,220,220
+local DTS_AMBER = '&H4696FF&' -- RGB 255,150,70
+local OK_GREEN = '&H72D96E&' -- RGB 110,217,114
 
 local FONT = 'Microsoft YaHei UI'
 local MONO = 'Consolas'
@@ -141,14 +148,33 @@ end
 -- opposite of ASS's \1a tag. Inverting it once here keeps every call site
 -- readable and stops the classic "I asked for a translucent panel and got a
 -- solid white block" mistake.
-local function rect(x, y, w, h, r, color, alpha)
+-- `blur` (optional) feathers the shape with libass' gaussian. One feathered
+-- plate is the only way to build a gradient here: ASS has no gradient fill, and
+-- stacking flat rectangles in equal steps leaves a visible seam every step,
+-- which on high-contrast footage reads as stripes across the bottom bar.
+local function rect(x, y, w, h, r, color, alpha, blur)
   if w <= 0 or h <= 0 then
     return ''
   end
   local opacity = 0xFF - math.max(0, math.min(0xFF, round(alpha or 0)))
+  local soft = (blur and blur > 0) and string.format('\\blur%.1f', blur) or '\\blur0'
   return string.format(
-    '{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\1a&H%02X&}%s{\\p0}',
-    round(x), round(y), color, opacity, rrect_path(w, h, r)
+    '{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0%s\\1c%s\\1a&H%02X&}%s{\\p0}',
+    round(x), round(y), soft, color, opacity, rrect_path(w, h, r)
+  )
+end
+
+-- Stroke-only rectangle: transparent fill, coloured 1px border. Used for badges
+-- that the pipeline is *not* delivering, so "dim outline" and "lit pill" can sit
+-- in the same row without the dim ones reading as broken.
+local function rect_line(x, y, w, h, r, color, alpha, width)
+  if w <= 0 or h <= 0 then
+    return ''
+  end
+  local a = 0xFF - math.max(0, math.min(0xFF, round(alpha or 0xFF)))
+  return string.format(
+    '{\\an7\\pos(%d,%d)\\p1\\bord%.1f\\shad0\\1a&HFF&\\3c%s\\3a&H%02X&}%s{\\p0}',
+    round(x), round(y), width or 1.3, color, a, rrect_path(w, h, r)
   )
 end
 
@@ -167,9 +193,15 @@ local function triangle(x, y, s, dir, color, alpha)
 end
 
 -- align: 7 = top-left, 9 = top-right, 5 = top-center, 8 = top-middle-center
+--- Draws one line of text.
+---
+--- A hairline black outline is always on, the way uosc does it: the reference
+--- build has no gradient scrim at all and relies on `text_border` so white type
+--- stays readable over a bright frame. Without it, dropping the scrim would
+--- make the bar unreadable on a snowy or desert shot.
 local function text(x, y, size, color, alpha, str, align, bold, font)
   return string.format(
-    '{\\an%d\\pos(%d,%d)\\fn%s\\fs%d\\bord0\\shad0\\%s\\c%s\\1a&H%02X&}%s',
+    '{\\an%d\\pos(%d,%d)\\fn%s\\fs%d\\bord1.2\\shad0\\3c&H000000&\\3a&H88&\\%s\\c%s\\1a&H%02X&}%s',
     align or 7, round(x), round(y), font or FONT, round(size),
     bold and 'b1' or 'b0', color, round(alpha), esc(str)
   )
@@ -310,77 +342,123 @@ local function hwdec_label(v)
   return map[v] or v:upper()
 end
 
-local function hdr_label()
-  local prim = mp.get_property('video-params/primaries') or ''
-  local gamma = mp.get_property('video-params/gamma') or ''
-  local sig = mp.get_property('video-params/sig-peak')
-  local is_hdr = (prim:find('bt.2020') or prim:find('2020')) ~= nil
-    or (gamma:find('pq') or gamma:find('hlg') or gamma:find('st2084')) ~= nil
-    or (tonumber(sig) or 0) > 100
-  if not is_hdr then
-    return nil
-  end
-  if gamma:find('hlg') then
-    return 'HLG'
-  end
-  if prim:find('dolbyvision') then
-    return 'DV'
-  end
-  local peak = tonumber(sig) or 0
-  if peak >= 900 then
-    return 'HDR10 ' .. round(peak) .. 'nits'
-  end
-  return 'HDR'
+--- One pill in the meta row.
+---
+--- `lit` is the whole point: colour means the pipeline *confirmed* the format,
+--- not that the file merely contains it. A DTS-HD MA source played through
+--- software decode shows a dim pill; once WASAPI accepts the bitstream the same
+--- pill turns amber. Same for HDR: `video-out-params` decides, so a tone-mapped
+--- HDR10 film reads as dim instead of pretending.
+local function badge(text, color, lit)
+  return { text = text, color = color, lit = lit == true }
 end
 
-local function video_badges()
-  local out = {}
-  local w = mp.get_property_number('video-params/w') or 0
-  local hgt = mp.get_property_number('video-params/h') or 0
-  if w >= 7600 or hgt >= 4300 then
-    table.insert(out, '8K')
-  elseif w >= 3800 or hgt >= 2100 then
-    table.insert(out, '4K')
-  elseif w >= 1900 or hgt >= 1060 then
-    table.insert(out, '1080p')
-  elseif w > 0 then
-    table.insert(out, tostring(w) .. 'x' .. tostring(hgt))
-  end
-
-  local codec = mp.get_property('video-format')
-  local depth = mp.get_property_number('video-params/plane-depth')
-  if codec then
-    local label = codec:upper()
-    if depth and depth > 8 then
-      label = label .. ' ' .. tostring(round(depth)) .. 'bit'
+local function audio_badge_label()
+  local name = (mp.get_property('audio-codec-name') or ''):lower()
+  local desc = (mp.get_property('audio-codec') or ''):lower()
+  local ch = mp.get_property_number('audio-params/channel-count') or 0
+  local label
+  if name:find('truehd') or name:find('mlp') then
+    label = desc:find('atmos') and 'ATMOS' or 'TRUEHD'
+  elseif name:find('dts') then
+    if desc:find('dts:x') or desc:find('dts%-x') then
+      label = 'DTS:X'
+    elseif desc:find('ma') then
+      label = 'DTS-HD MA'
+    elseif desc:find('hra') then
+      label = 'DTS-HD'
+    else
+      label = 'DTS'
     end
-    table.insert(out, label)
+  elseif name:find('eac3') then
+    label = desc:find('atmos') and 'DD+ ATMOS' or 'DD+'
+  elseif name:find('ac3') then
+    label = 'DD'
+  elseif name ~= '' then
+    label = name:upper()
+  else
+    return ''
+  end
+  if ch >= 7.5 then
+    return label .. ' 7.1'
+  elseif ch >= 5.5 then
+    return label .. ' 5.1'
+  elseif ch == 2 then
+    return label .. ' 2.0'
+  end
+  return label
+end
+
+--- "Is the compressed bitstream really leaving the machine?"
+---
+--- `audio-out-params/format` is the only honest source: asking WASAPI for
+--- passthrough and getting `float` back means it refused and mpv decoded.
+local function audio_is_passthrough()
+  local f = (mp.get_property('audio-out-params/format') or ''):lower()
+  if f == '' then
+    return false
+  end
+  if f:find('float') or f:find('^s%d%d') or f:find('^u%d%d') then
+    return false
+  end
+  return true
+end
+
+local function badge_items()
+  local out = {}
+
+  local w = mp.get_property_number('video-params/w') or 0
+  local h = mp.get_property_number('video-params/h') or 0
+  if w >= 7600 or h >= 4300 then
+    out[#out + 1] = badge('8K', WHITE, true)
+  elseif w >= 3800 or h >= 2100 then
+    out[#out + 1] = badge('4K', WHITE, true)
+  elseif w >= 2500 or h >= 1400 then
+    out[#out + 1] = badge('1440p', WHITE, true)
+  elseif w >= 1900 or h >= 1060 then
+    out[#out + 1] = badge('1080p', WHITE, true)
+  elseif w >= 1260 or h >= 700 then
+    out[#out + 1] = badge('720p', WHITE, true)
+  elseif w > 0 then
+    out[#out + 1] = badge(w .. '×' .. h, WHITE, true)
   end
 
-  local hdr = hdr_label()
-  if hdr then
-    table.insert(out, hdr)
+  local codec = (mp.get_property('video-format') or ''):upper()
+  local depth = mp.get_property_number('video-params/plane-depth') or 0
+  if codec ~= '' then
+    out[#out + 1] = badge(codec .. (depth >= 10 and ' 10BIT' or ''), GREY, true)
   end
 
-  local fps = mp.get_property_number('container-fps')
-  if fps and fps > 0 then
-    table.insert(out, string.format('%.3g fps', fps))
+  local prim = (mp.get_property('video-params/primaries') or ''):lower()
+  local gamma = (mp.get_property('video-params/gamma') or ''):lower()
+  local oprim = (mp.get_property('video-out-params/primaries') or ''):lower()
+  local ogamma = (mp.get_property('video-out-params/gamma') or ''):lower()
+  local out_hdr = ((oprim:find('bt%.2020') or oprim:find('2020')) ~= nil)
+    and (ogamma == 'pq' or ogamma == 'hlg' or ogamma:find('st2084') ~= nil)
+  if prim:find('dolbyvision') then
+    out[#out + 1] = badge('DOLBY VISION', DV_PURPLE, out_hdr)
+  elseif gamma == 'hlg' then
+    out[#out + 1] = badge('HLG', HLG_CYAN, out_hdr)
+  elseif gamma == 'pq' or gamma:find('st2084') then
+    local peak = mp.get_property_number('video-params/sig-peak') or 0
+    out[#out + 1] = badge(peak >= 900 and 'HDR10' or 'HDR', HDR_GOLD, out_hdr)
   end
 
-  table.insert(out, hwdec_label(mp.get_property('hwdec-current')))
-
-  local audio = mp.get_property('audio-codec-name')
-  if audio then
-    table.insert(out, audio:upper())
+  local audio = audio_badge_label()
+  if audio ~= '' then
+    out[#out + 1] = badge(audio, DTS_AMBER, audio_is_passthrough())
   end
 
-  local rate = mp.get_property_number('file-size')
-  local dur = state.duration
-  if rate and dur and dur > 1 and rate > 0 then
-    table.insert(out, string.format('%.1f Mbps', rate * 8 / dur / 1000000))
+  local fps = mp.get_property_number('container-fps') or 0
+  if fps > 0 then
+    out[#out + 1] = badge(string.format('%.3gFPS', fps), DIM, true)
   end
 
-  return table.concat(out, '  ·  ')
+  local hw = mp.get_property('hwdec-current')
+  local hw_on = hw ~= nil and hw ~= '' and hw ~= 'no'
+  out[#out + 1] = badge(hwdec_label(hw), hw_on and GREY or DIM, hw_on)
+
+  return out
 end
 
 -- ==== SEGMENTS =============================================================
@@ -1201,7 +1279,7 @@ local function draw_progress(parts)
 
   local x, y, w = SAFE, BAR_Y, W - SAFE * 2
   local hovered = state.hover == 'bar'
-  local thickness = hovered and 8 or BAR_H
+  local thickness = hovered and 6 or BAR_H
   local top = y - (thickness - BAR_H) / 2
 
   parts[#parts + 1] = rect(x, top, w, thickness, thickness / 2, WHITE, 0x30)
@@ -1281,14 +1359,15 @@ local function draw_toast(parts)
 end
 
 local function draw_scrim(parts)
-  -- Darkest at the bottom, so the controls sit on a solid band and the picture
-  -- fades into it instead of keeping a hard edge halfway up the frame.
-  local alphas = { 0x2E, 0x46, 0x60, 0x7C, 0x96, 0xB2, 0xCC, 0xE4 }
-  local y0 = 620
-  local band = (H - y0) / #alphas
-  for i, alpha in ipairs(alphas) do
-    parts[#parts + 1] = rect(0, y0 + (i - 1) * band, W, band + 1, 0, BLACK, alpha)
-  end
+  -- The reference build (Yaozhi/uosc) draws no scrim at all: the bar floats on
+  -- the picture and a hairline text outline does the legibility work. Eight
+  -- stacked rectangles with rising opacity were the "格行" bug — every step
+  -- boundary is a hard edge, and over metal/snow/sky those edges read as
+  -- stripes. Two heavily feathered plates keep a whisper of contrast without
+  -- any edge to see, and `text()` now carries a black outline as the real
+  -- guarantee.
+  parts[#parts + 1] = rect(0, 700, W, H - 700, 0, BLACK, 0x4E, 42)
+  parts[#parts + 1] = rect(0, 840, W, H - 840, 0, BLACK, 0x62, 24)
 end
 
 local function draw_audio_stage(parts)
@@ -1567,15 +1646,45 @@ local function draw_controls(parts)
   end
 end
 
+--- Badge row: pills, not a dot-separated string.
+---
+--- The reference build lights up the formats it is actually delivering; the
+--- same information as one grey text line reads as a log dump. A lit pill gets
+--- a tinted fill plus a 1px accent ring, a dim one gets an outline only, so
+--- "DTS-HD MA by software decode" is visibly different from "DTS-HD MA out over
+--- HDMI" at a glance.
+local function draw_badges(parts, x, y)
+  local pad, gap, hgt, size = 11, 7, 28, 17
+  local last = nil
+  local seen = {}
+  for _, item in ipairs(badge_items()) do
+    -- `video-format` and `hwdec-current` can both resolve to "D3D11"; showing
+    -- the same pill twice wastes the row.
+    if not seen[item.text] then
+      seen[item.text] = true
+      last = item.text
+      local bw = measure(item.text, size) + pad * 2
+      if item.lit then
+        parts[#parts + 1] = rect(x, y, bw, hgt, hgt / 2, item.color, 0x3C)
+        parts[#parts + 1] = rect_line(x, y, bw, hgt, hgt / 2, item.color, 0x80, 1.2)
+        -- `text()` takes the ASS alpha (0 = opaque), unlike `rect()` which takes
+        -- an opacity. 0x00 here, not 0xFF.
+        parts[#parts + 1] = text(x + pad, y + 6, size, item.color, 0x00, item.text, 7, true, MONO)
+      else
+        parts[#parts + 1] = rect_line(x, y, bw, hgt, hgt / 2, DIM, 0x6E, 1.1)
+        parts[#parts + 1] = text(x + pad, y + 6, size, DIM, 0x00, item.text, 7, false, MONO)
+      end
+      x = x + bw + gap
+    end
+  end
+end
+
 local function draw_chrome(parts)
   local title = state.title ~= '' and state.title or state.fallback_title
   title = clip(title, 56)
   parts[#parts + 1] = text(SAFE, TITLE_Y, 40, WHITE, 0x00, title, 7, true)
 
-  local badges = video_badges()
-  if badges ~= '' then
-    parts[#parts + 1] = text(SAFE, META_Y, 20, GREY, 0x00, badges, 7, false)
-  end
+  draw_badges(parts, SAFE, META_Y - 12)
 
   local chapter_name = nil
   if state.chapter and state.chapters[state.chapter + 1] then
@@ -1892,40 +2001,10 @@ for _, entry in ipairs(BINDINGS) do
   end)
 end
 
-mp.add_key_binding('MBTN_LEFT', 'pp-click', function()
-  local p = state.pointer
-  if not p then
-    return
-  end
-  local hit = hit_at(p.x, p.y)
-  if hit and hit.onClick then
-    hit.onClick()
-  elseif state.menu then
-    close_menu()
-  elseif state.visible then
-    toggle_ui()
-  else
-    show()
-  end
-end)
-
-mp.add_key_binding('MBTN_RIGHT', 'pp-context', function()
-  if not close_menu() then
-    if state.visible then
-      open_menu('more')
-    else
-      show()
-    end
-  end
-end)
-
-mp.add_key_binding('WHEEL_UP', 'pp-wheel-up', function()
-  add_volume(5)
-end)
-
-mp.add_key_binding('WHEEL_DOWN', 'pp-wheel-down', function()
-  add_volume(-5)
-end)
+-- Mouse buttons are bound in the MOUSE section below, as one key-binding
+-- group with proper down/up pairs. Binding MBTN_LEFT here with
+-- `add_key_binding` gave a single press event, so the progress bar could never
+-- be dragged and a click fired even when the pointer had slid off the control.
 
 -- ==== MOUSE ================================================================
 
@@ -1943,6 +2022,41 @@ local function to_design(mx, my)
   return mx, my
 end
 
+--- Current pointer position in design space, or nil when mpv has no fix.
+local function pointer_design()
+  local pos = mp.get_property_native('mouse-pos')
+  if not pos or not pos.x then
+    return nil
+  end
+  return to_design(pos.x, pos.y)
+end
+
+local drag_bar = false
+
+--- Seek by dragging the progress bar. `absolute` (not `exact`) keeps the
+--- preview responsive; the final position is committed on release.
+local function bar_seek(x)
+  if not state.duration or state.duration <= 0 then
+    return
+  end
+  local ratio = math.max(0, math.min(1, (x - SAFE) / (W - SAFE * 2)))
+  command('seek', string.format('%.3f', state.duration * ratio), 'absolute')
+  state.position = state.duration * ratio
+  mark_dirty()
+end
+
+--- Re-runs hit testing and repaints when the hovered control changed.
+local function update_hover(x, y)
+  local hit = hit_at(x, y)
+  local id = hit and hit.id or nil
+  if id ~= state.hover then
+    state.hover = id
+    mark_dirty()
+    render()
+  end
+  return hit
+end
+
 mp.observe_property('mouse-pos', 'native', function(_, value)
   if not value or not value.x then
     state.pointer = nil
@@ -1957,12 +2071,13 @@ mp.observe_property('mouse-pos', 'native', function(_, value)
   end
   local x, y = to_design(value.x, value.y)
   state.pointer = { x = x, y = y }
-  local hit = hit_at(x, y)
-  local id = hit and hit.id or nil
-  if id ~= state.hover then
-    state.hover = id
-    mark_dirty()
+
+  if drag_bar then
+    bar_seek(x)
+    return
   end
+
+  update_hover(x, y)
   if state.visible then
     schedule_hide()
   else
@@ -1971,6 +2086,118 @@ mp.observe_property('mouse-pos', 'native', function(_, value)
     show()
   end
 end)
+
+-- Clicking, dragging and wheeling.
+--
+-- Drawing alone made the bar inert: the script tracked `mouse-pos` for hover
+-- but never bound a mouse button, so every click fell through to mpv's default
+-- bindings (and `input-default-bindings=no` meant there were none). uosc solves
+-- this the same way — bind `mbtn_left`, read `mouse-pos` on press, and resolve
+-- the hitboxes recorded by the last render.
+local function on_primary_down()
+  local p = pointer_design()
+  if not p then
+    return
+  end
+  -- Remembered before `show()`: a click on a hidden UI must only bring the
+  -- chrome back, never reach the control that happened to be under the cursor
+  -- (or toggle it straight back off).
+  local was_visible = state.visible
+  show()
+  local hit = update_hover(p[1], p[2])
+  state.press = {
+    id = hit and hit.id or nil,
+    x = p[1],
+    y = p[2],
+    at = now(),
+    was_visible = was_visible,
+  }
+  if hit and hit.id == 'bar' then
+    drag_bar = true
+    bar_seek(p[1])
+  end
+end
+
+local function on_primary_up()
+  local press = state.press
+  state.press = nil
+  if drag_bar then
+    drag_bar = false
+    local p = pointer_design()
+    if p then
+      bar_seek(p[1])
+    end
+    return
+  end
+  if not press or not press.id then
+    -- Empty space: close a menu; otherwise toggle the chrome — but only if the
+    -- chrome was already up when the button went down.
+    if state.menu then
+      close_menu()
+    elseif press and press.was_visible then
+      toggle_ui()
+    else
+      show()
+    end
+    return
+  end
+  -- A click only counts when the pointer comes up over the same control it
+  -- went down on, so a press-and-slide off a button does not fire it.
+  local hit = hit_at(press.x, press.y)
+  if hit and hit.id == press.id and hit.onClick and (now() - press.at) < 1.2 then
+    hit.onClick()
+    mark_dirty()
+    render()
+    return
+  end
+  if state.menu then
+    close_menu()
+  end
+end
+
+local function on_secondary_down()
+  if not close_menu() then
+    if state.visible then
+      open_menu('more')
+    else
+      show()
+    end
+  end
+end
+
+mp.set_key_bindings({
+  { 'mbtn_left', on_primary_down, on_primary_up },
+  -- Double click must not reach mpv: it would toggle fullscreen behind our back.
+  { 'mbtn_left_dbl', 'ignore' },
+  { 'mbtn_right', on_secondary_down },
+}, 'xnx-mouse', 'force')
+-- No `allow-vo-dragging`: mpv paints into a child window, so letting it drag on
+-- a left-press would fight the host window instead of moving anything useful.
+mp.enable_key_bindings('xnx-mouse', 'allow-hide-cursor')
+
+mp.set_key_bindings({
+  {
+    'wheel_up',
+    function()
+      if state.menu then
+        menu_move(-1)
+      else
+        add_volume(5)
+      end
+    end,
+  },
+  {
+    'wheel_down',
+    function()
+      if state.menu then
+        menu_move(1)
+      else
+        add_volume(-5)
+      end
+    end,
+  },
+}, 'xnx-wheel', 'force')
+mp.enable_key_bindings('xnx-wheel')
 
 -- ==== IPC ==================================================================
 

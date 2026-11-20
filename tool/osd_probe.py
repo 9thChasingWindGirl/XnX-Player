@@ -23,7 +23,12 @@ props = {
     ],
     'video-params': {'w': 3840, 'h': 1608, 'pixelformat': 'd3d11', 'colormatrix': 'bt.2020-ncl',
                      'primaries': 'bt.2020', 'gamma': 'pq', 'sig-peak': 1000.0, 'average-bpp': 40.0},
-    'video-format': 'd3d11',
+    # What the video output settled on. Equal to the source here, which is what
+    # "HDR really got through" looks like; the badges dim when it does not.
+    'video-out-params': {'primaries': 'bt.2020', 'gamma': 'pq', 'sig-peak': 1000.0},
+    'audio-codec': 'E-AC-3 (Dolby Digital Plus)',
+    'video-format': 'hevc',
+    'container-fps': 23.976,
     'hwdec-current': 'd3d11va',
     'video-bitrate': 62000000.0,
     'audio-codec-name': 'eac3',
@@ -85,13 +90,40 @@ def add_timeout(t, fn):
 
 def observe(name, kind, fn):
     handlers.setdefault('observe-' + name, []).append(fn)
+    # mpv fires an observer immediately with the current value. Doing the same
+    # is what makes `duration`, `media-title` and friends non-empty here, which
+    # the preview needs to render a realistic bar.
+    if name in props:
+        try:
+            fn(name, props[name])
+        except Exception:  # noqa: BLE001 - the OSD may not exist yet
+            pass
 
 
 mp_tbl = lua.table()
-mp_tbl['get_property'] = lambda name, default=None: props.get(name, default)
-mp_tbl['get_property_number'] = lambda name, default=0: props.get(name, default)
-mp_tbl['get_property_native'] = lambda name, default=None: props.get(name, default)
-mp_tbl['get_property_bool'] = lambda name, default=False: props.get(name, default)
+
+
+def resolve(name):
+    """mpv offers `video-params/w` as a path into a native map; mirror that."""
+    if name in props:
+        return props[name]
+    cur = props
+    for part in name.split('/'):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+mp_tbl['get_property'] = lambda name, default=None: (
+    resolve(name) if resolve(name) is not None else default)
+mp_tbl['get_property_number'] = lambda name, default=None: (
+    resolve(name) if isinstance(resolve(name), (int, float)) else default)
+mp_tbl['get_property_native'] = lambda name, default=None: (
+    resolve(name) if resolve(name) is not None else default)
+mp_tbl['get_property_bool'] = lambda name, default=False: (
+    resolve(name) if isinstance(resolve(name), bool) else default)
 mp_tbl['set_property'] = lambda *a: None
 mp_tbl['set_property_number'] = lambda *a: None
 mp_tbl['set_property_native'] = lambda *a: None
@@ -111,6 +143,9 @@ mp_tbl['observe_property'] = observe
 mp_tbl['register_event'] = lambda name, fn: events.setdefault(name, []).append(fn)
 mp_tbl['register_script_message'] = lambda name, fn: handlers.setdefault('msg-' + name, []).append(fn)
 mp_tbl['add_key_binding'] = lambda *a, **k: None
+mp_tbl['set_key_bindings'] = lambda *a, **k: None
+mp_tbl['enable_key_bindings'] = lambda *a, **k: None
+mp_tbl['disable_key_bindings'] = lambda *a, **k: None
 mp_tbl['get_time'] = lambda: 100.0
 mp_tbl['get_script_name'] = lambda: 'player_osd'
 mp_tbl['get_script_directory'] = lambda: '.'
@@ -195,3 +230,22 @@ print('---')
 print('first 3 segments:')
 for seg in data.split('\\N')[:3]:
     print('  ', seg[:140])
+
+# Transport-bar state on its own: this is the view the user stares at, so dump
+# it where a human can check the scrim and the badge row by eye.
+send('{"cmd":"key","key":"h"}')  # close the help sheet
+send('{"cmd":"key","key":"i"}')  # close the stats panel
+send('{"cmd":"hide"}')
+send('{"cmd":"show"}')
+chrome = overlays[0]['data'].splitlines()
+print('---')
+print('chrome events:', len(chrome))
+for line in chrome:
+    if '\\blur' in line and '\\1c&H000000&' in line:
+        print('  scrim:', line[:110])
+print('badge pills (text runs at META_Y):')
+for line in chrome:
+    if 'fs17' in line:
+        print('  ', line[line.find('}') + 1:][:40])
+open('_osd_chrome.txt', 'w', encoding='utf-8').write(overlays[0]['data'])
+print('wrote _osd_chrome.txt')
