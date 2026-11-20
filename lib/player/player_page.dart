@@ -11,6 +11,7 @@ import '../data/models/media_item.dart';
 import '../data/prefs.dart';
 import '../data/store.dart';
 import '../playback/mpv/capabilities.dart';
+import '../playback/mpv/hw_profile.dart';
 import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
@@ -193,13 +194,21 @@ class _PlayerPageState extends State<PlayerPage> {
       final PlaybackPrefs prefs = AppStore.instance.prefs;
 
       final MpvPlayer player = MpvPlayer();
+      // Passthrough/HDR start from what the last probe proved about this
+      // machine: a proven bitstream-capable endpoint enables passthrough right
+      // away, anything unknown stays off and is re-probed live.
+      final HardwareProfile hw = AppStore.instance.hw;
+      final AudioPassthrough wantedPassthrough = _settingsFor(prefs).audioPassthrough;
       player.start(
         options: buildMpvOptions(
           wid: host,
           logFile: logPath,
           screenshotDir: shotDir,
-          // 直通永远不在初始选项里请求：等音频端点确认能收码流后再开。
-          settings: _settingsFor(prefs, passthroughOverride: AudioPassthrough.off),
+          settings: _settingsFor(
+            prefs,
+            passthroughOverride: initialPassthrough(hw, wantedPassthrough),
+            hdrOverride: initialHdrPassthrough(hw, prefs.hdrPassthrough),
+          ),
         ),
         logLevel: 'info',
       );
@@ -503,16 +512,20 @@ class _PlayerPageState extends State<PlayerPage> {
     // endpoint accepted the bitstream. Checking after the fact is the only
     // honest test: a device that refuses takes the whole audio output with it.
     final AudioPassthrough wanted = _settingsFor(AppStore.instance.prefs).audioPassthrough;
+    final String? deviceName = player.getProperty('audio-device-name');
     if (wanted == AudioPassthrough.off) {
+      // Nothing to verify live, but the endpoints are still worth recording so
+      // the next start can decide from facts instead of probing blind again.
+      _saveHwProfile(deviceName, passthroughRequested: false, passthroughLive: false, hdrOutput: hdrOutput);
       return;
     }
     // mpv is up now, so the endpoint is knowable: only request passthrough on
     // devices that look like they can take a bitstream (HDMI/SPDIF into an
     // AVR). Starting blind is what made WASAPI exclusive mode fail and drag
     // the whole audio chain down on ordinary speaker endpoints.
-    final String? deviceName = player.getProperty('audio-device-name');
     if (!deviceSupportsBitstream(deviceName)) {
       player.setProperty('audio-spdif', '');
+      _saveHwProfile(deviceName, passthroughRequested: false, passthroughLive: false, hdrOutput: hdrOutput);
       setState(() {
         _capsNote = '$_capsNote · 音频端点非 HDMI/SPDIF 类，未启用直通';
       });
@@ -530,6 +543,9 @@ class _PlayerPageState extends State<PlayerPage> {
       final String? format = live.getProperty('audio-out-params/format');
       final String? ao = live.getProperty('ao');
       final bool passthroughLive = isBitstreamFormat(format);
+      // The format read-back is ground truth: persist what this endpoint
+      // actually did so the next start starts from evidence.
+      _saveHwProfile(deviceName, passthroughRequested: true, passthroughLive: passthroughLive, hdrOutput: hdrOutput);
       if (ao == null || ao.isEmpty || ao == 'null' || !passthroughLive) {
         live.setProperty('audio-spdif', '');
         setState(() {
@@ -541,6 +557,21 @@ class _PlayerPageState extends State<PlayerPage> {
         });
       }
     });
+  }
+
+  /// Persists the capability probe's answer about this machine.
+  void _saveHwProfile(String? deviceName, {required bool passthroughRequested, required bool passthroughLive, required bool hdrOutput}) {
+    unawaited(
+      AppStore.instance.updateHwProfile(
+        profileFromProbe(
+          audioDeviceName: deviceName,
+          passthroughRequested: passthroughRequested,
+          passthroughLive: passthroughLive,
+          hdrOutput: hdrOutput,
+          nowMs: DateTime.now().millisecondsSinceEpoch,
+        ),
+      ),
+    );
   }
 
   /// Opens a file dialog for an external subtitle and hands it to mpv.
@@ -582,12 +613,11 @@ class _PlayerPageState extends State<PlayerPage> {
   /// Maps the persisted preferences onto mpv options.
   ///
   /// `passthroughOverride` exists because bitstream passthrough must never be
-  /// part of the initial option table: at that point mpv has no audio device
-  /// yet, so requesting it is a blind bet that WASAPI exclusive mode succeeds.
-  /// On an ordinary desktop endpoint it does not, and the refusal takes the
-  /// whole audio chain with it. The player starts with passthrough off and the
-  /// capability probe below re-enables it once the endpoint is known.
-  MpvSettings _settingsFor(PlaybackPrefs prefs, {AudioPassthrough? passthroughOverride}) {
+  /// part of the initial option table unless the hardware profile proves the
+  /// endpoint accepts a bitstream: at that point mpv has no audio device yet,
+  /// so requesting it is a blind bet that WASAPI exclusive mode succeeds.
+  /// `hdrOverride` works the same way for displays the probe saw as SDR-only.
+  MpvSettings _settingsFor(PlaybackPrefs prefs, {AudioPassthrough? passthroughOverride, bool? hdrOverride}) {
     return MpvSettings(
       quality: switch (prefs.quality) {
         QualityPref.fast => VideoQuality.fast,
@@ -595,7 +625,7 @@ class _PlayerPageState extends State<PlayerPage> {
         QualityPref.high => VideoQuality.high,
       },
       hwdec: prefs.hardwareDecoding ? 'auto-safe' : 'no',
-      hdrPassthrough: prefs.hdrPassthrough,
+      hdrPassthrough: hdrOverride ?? prefs.hdrPassthrough,
       smoothMotion: prefs.smoothMotion,
       audioPassthrough: passthroughOverride ?? switch (prefs.passthrough) {
         PassthroughPref.all => AudioPassthrough.all,

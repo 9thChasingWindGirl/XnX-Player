@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../playback/mpv/hw_profile.dart';
 import 'models/media_item.dart';
 import 'net.dart';
 import 'prefs.dart';
@@ -30,6 +31,10 @@ class AppStore extends ChangeNotifier {
   final List<String> errors = <String>[];
 
   PlaybackPrefs prefs = const PlaybackPrefs();
+
+  /// Persisted facts about this machine's display and audio endpoints,
+  /// learned by the player's capability probe and reused at next start.
+  HardwareProfile hw = const HardwareProfile();
 
   bool ready = false;
   bool loading = false;
@@ -86,6 +91,10 @@ class AppStore extends ChangeNotifier {
           if (rawPrefs is Map<String, dynamic>) {
             prefs = PlaybackPrefs.fromJson(rawPrefs);
           }
+          final Object? rawHw = decoded['hw'];
+          if (rawHw is Map<String, dynamic>) {
+            hw = HardwareProfile.fromJson(rawHw);
+          }
           final Object? rawResume = decoded['resume'];
           if (rawResume is Map<String, dynamic>) {
             rawResume.forEach((String key, Object? value) {
@@ -116,6 +125,7 @@ class AppStore extends ChangeNotifier {
         'version': 1,
         'sources': sources.map((SourceConfig config) => config.toJson()).toList(),
         'prefs': prefs.toJson(),
+        'hw': hw.toJson(),
         'resume': _resume.map(
           (String key, Duration value) => MapEntry<String, int>(key, value.inMilliseconds),
         ),
@@ -167,6 +177,14 @@ class AppStore extends ChangeNotifier {
 
   Future<void> updatePrefs(PlaybackPrefs value) async {
     prefs = value;
+    await _persist();
+    _notify();
+  }
+
+  /// Records what the capability probe learned about this machine so the next
+  /// start can decide passthrough and HDR handling without probing blind.
+  Future<void> updateHwProfile(HardwareProfile value) async {
+    hw = value;
     await _persist();
     _notify();
   }
