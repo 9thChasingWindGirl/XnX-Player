@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/strings.dart';
@@ -6,6 +8,8 @@ import '../../data/store.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/tv_focusable.dart';
+import '../../update/update_channel.dart';
+import '../../update/update_service.dart';
 
 /// "Control Room": the settings screen.
 ///
@@ -23,6 +27,11 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   double _age = 0;
   double _last = -1;
+
+  UpdateChannel _channel = UpdateService.defaultChannel;
+  String _updateStatus = '检查更新后在此显示结果';
+  UpdateCandidate? _pending;
+  final UpdateService _updater = UpdateService();
 
   AppStore get _store => AppStore.instance;
 
@@ -43,6 +52,85 @@ class _SettingsPageState extends State<SettingsPage> {
     final int index = values.indexOf(_store.prefs.passthrough);
     final int next = (index + direction + values.length) % values.length;
     _apply(_store.prefs.copyWith(passthrough: values[next]));
+  }
+
+  static String _channelLabel(UpdateChannel channel) => switch (channel) {
+        UpdateChannel.stable => '正式版',
+        UpdateChannel.beta => 'Beta',
+        UpdateChannel.dev => 'Dev（未验证构建）',
+      };
+
+  Future<void> _cycleChannel(int direction) async {
+    final List<UpdateChannel> values = UpdateChannel.values;
+    final int index = values.indexOf(_channel);
+    _channel = values[(index + direction + values.length) % values.length];
+    _pending = null;
+    setState(() {
+      _updateStatus = '${_channelLabel(_channel)}：请重新检查更新';
+    });
+  }
+
+  /// One row, two stages: first press checks the channel, the second installs
+  /// what was found (or reports why it can't). Rollback candidates surface
+  /// through the row below.
+  Future<void> _checkOrInstall() async {
+    if (_pending != null) {
+      final UpdateCandidate candidate = _pending!;
+      setState(() {
+        _updateStatus = '正在下载并安装 ${candidate.version}…安装后会自动重启';
+        _pending = null;
+      });
+      try {
+        final String payload = await _updater.prepareInstall(candidate);
+        await _updater.apply(payload);
+      } on Object catch (error) {
+        setState(() {
+          _updateStatus = '安装失败：$error';
+        });
+      }
+      return;
+    }
+    setState(() {
+      _updateStatus = '正在检查 ${_channelLabel(_channel)}…';
+    });
+    try {
+      final UpdateCandidate? candidate = await _updater.fetchLatest(_channel);
+      if (candidate == null || candidate.assetUrl.isEmpty) {
+        setState(() {
+          _updateStatus = '${_channelLabel(_channel)}：暂无可用构建';
+        });
+        return;
+      }
+      setState(() {
+        _updateStatus = '${_channelLabel(_channel)}最新：${candidate.version}，再按一次安装';
+        _pending = candidate;
+      });
+    } on Object catch (error) {
+      setState(() {
+        _updateStatus = '检查失败：$error';
+      });
+    }
+  }
+
+  Future<void> _rollBackTo(String version) async {
+    final String target = _updater.installedVersions().firstWhere(
+          (String v) => v == version,
+          orElse: () => '',
+        );
+    if (target.isEmpty) {
+      return;
+    }
+    setState(() {
+      _updateStatus = '正在回退到 $version…完成后自动重启';
+    });
+    try {
+      final String payload = await _updater.prepareInstalled(target);
+      await _updater.apply(payload);
+    } on Object catch (error) {
+      setState(() {
+        _updateStatus = '回退失败：$error';
+      });
+    }
   }
 
   @override
@@ -166,6 +254,30 @@ class _SettingsPageState extends State<SettingsPage> {
                         toggle: prefs.skipIntro,
                         onSelect: () => _apply(prefs.copyWith(skipIntro: !prefs.skipIntro)),
                       ),
+                      _section('软件更新'),
+                      _Row(
+                        label: '更新通道',
+                        hint: '正式版 / Beta（预留）/ Dev（beta 分支未验证构建）',
+                        value: _channelLabel(_channel),
+                        onAdjust: _cycleChannel,
+                        onSelect: () => _cycleChannel(1),
+                      ),
+                      _Row(
+                        label: _pending == null ? '检查更新' : '安装 ${_pending!.version}',
+                        hint: _updateStatus,
+                        value: _pending == null ? null : '待安装',
+                        onSelect: () => unawaited(_checkOrInstall()),
+                      ),
+                      if (_updater.installedVersions().isNotEmpty)
+                        _Row(
+                          label: '版本回退',
+                          hint: '回退到本机已保留的旧版本，用户配置不受影响',
+                          value: _updater.installedVersions().first,
+                          onAdjust: (int direction) {},
+                          onSelect: () => unawaited(
+                            _rollBackTo(_updater.installedVersions().first),
+                          ),
+                        ),
                     ],
                   ),
                 ),
