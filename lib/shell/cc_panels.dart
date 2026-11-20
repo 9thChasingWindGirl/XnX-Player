@@ -6,6 +6,7 @@ import '../data/prefs.dart';
 import '../data/sources/media_source.dart';
 import '../design/ps_media.dart';
 import '../design/ps_tokens.dart';
+import '../pages/home/home_tile.dart';
 import '../playback/mpv/hw_profile.dart';
 import '../ui/core/focus_zone.dart';
 import '../ui/core/tv_focusable.dart';
@@ -518,78 +519,53 @@ class CcRecentPanel extends StatelessWidget {
   }
 }
 
-class _RecentCard extends StatelessWidget {
+/// One "continue watching" tile.
+///
+/// This used to be a bespoke card that painted a gradient from the item's
+/// palette and nothing else — so the panel showed coloured rectangles for
+/// titles that had a perfectly good poster on the shelf behind it, and it read
+/// as a different product than the rest of the app. It is now the same
+/// [PosterCard] every shelf uses: poster, scrim, badge, watched bar, focus
+/// states. The only local decision left is the 2:3 box, because this panel is
+/// short and wide and a poster is what belongs in it.
+class _RecentCard extends StatefulWidget {
   const _RecentCard({required this.item, required this.onPlay});
 
   final MediaItem item;
   final ValueChanged<MediaItem> onPlay;
 
   @override
+  State<_RecentCard> createState() => _RecentCardState();
+}
+
+class _RecentCardState extends State<_RecentCard> {
+  bool _focused = false;
+
+  @override
   Widget build(BuildContext context) {
-    final List<Color> art = PsColor.artFor(item.id);
-    final double progress = item.progress.clamp(0.0, 1.0).toDouble();
-    return TvFocusable(
-      radius: PsRadius.card,
-      highlightScale: PsCard.focusScale,
-      pressScale: PsCard.pressScale,
-      showShine: false,
-      onSelect: () => onPlay(item),
-      debugLabel: 'cc-recent:${item.id}',
-      child: Container(
-        width: 212,
-        // A horizontal ListView hands its children a tight height; the Stack in
-        // TvFocusable passes it down loose, so say "fill it" explicitly or the
-        // card collapses to the height of its text.
-        height: double.infinity,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(PsRadius.card),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: art,
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // The panel body is the height budget; a poster takes 2:3 of it and is
+        // clamped so a tall window cannot turn the row into three banners.
+        final double height = constraints.maxHeight;
+        final double width = (height * 2 / 3).clamp(148.0, 232.0).toDouble();
+        return TvFocusable(
+          radius: PsRadius.card,
+          focusedRadius: PsRadius.cardFocused,
+          highlightScale: PsCard.focusScale,
+          pressScale: PsCard.pressScale,
+          showShine: false,
+          onSelect: () => widget.onPlay(widget.item),
+          onFocused: (bool focused) => setState(() => _focused = focused),
+          debugLabel: 'cc-recent:${widget.item.id}',
+          child: PosterCard(
+            item: widget.item,
+            width: width,
+            height: height,
+            focused: _focused,
           ),
-          border: Border.all(color: PsColor.hairline),
-        ),
-        padding: const EdgeInsets.all(PsCard.textInset),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: <Widget>[
-            Text(
-              item.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: PsType.card.copyWith(fontSize: PsCard.titleSize, height: 1.25),
-            ),
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: SizedBox(
-                height: PsCard.progressHeight,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    // The track takes the tone that reads against the fill
-                    // (`Painter::on(accent).with_alpha(0.5)`, `card.cpp:313`),
-                    // so the bar shows on any artwork.
-                    ColoredBox(color: PsColor.text.withValues(alpha: 0.5)),
-                    FractionallySizedBox(
-                      alignment: Alignment.centerLeft,
-                      widthFactor: progress <= 0 ? 0.02 : progress,
-                      child: const ColoredBox(color: PsColor.text),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              progress <= 0 ? '未开始' : '${(progress * 100).round()}%',
-              style: PsType.micro.copyWith(fontSize: 13),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 }
