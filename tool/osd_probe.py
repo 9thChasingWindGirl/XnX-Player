@@ -349,3 +349,22 @@ for line in overlays[0]['data'].splitlines():
     if 'fs20' in line or 'fs17' in line:
         hover_note.append(line[line.find('}') + 1:][:18])
 print('chrome still renders:', len(overlays[0]['data'].splitlines()), 'events')
+
+# ---- HDR passthrough -------------------------------------------------------
+#
+# The chrome is SDR content while the swapchain is PQ, so the script has to
+# thicken the outline and densify the scrim the moment `video-target-params`
+# says the output is real HDR. Nothing else in this file exercises that branch,
+# and it is the kind of change that breaks silently: the OSD still draws, it
+# just goes back to reading grey over an HDR picture.
+print('---')
+for fn in handlers.get('observe-video-target-params', []):
+    fn('video-target-params', _to_lua({'gamma': 'pq', 'max-luma': 1000}))
+for fn in periodic:
+    fn()
+hdr_lines = overlays[0]['data'].splitlines()
+scrims = [line for line in hdr_lines if '\\blur' in line and '\\1c&H000000&' in line]
+for line in scrims:
+    print('  hdr scrim:', line[:110])
+bordered = [line for line in hdr_lines if '\\bord2.4' in line]
+print('hdr text with the heavy outline:', len(bordered))

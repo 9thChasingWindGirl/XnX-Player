@@ -193,6 +193,25 @@ local function triangle(x, y, s, dir, color, alpha)
 end
 
 -- align: 7 = top-left, 9 = top-right, 5 = top-center, 8 = top-middle-center
+--- Weight of the OSD's black outline, and how hard the scrim is allowed to be.
+---
+--- These are declared once and rewritten by [set_output_space] because the same
+--- pixels have to survive two very different colour pipelines.
+---
+--- SDR is the easy case: a hairline outline is enough, the way uosc does it.
+---
+--- HDR passthrough is not. Everything this script draws is SDR content that mpv
+--- maps into PQ, so its white lands on the SDR reference (≈203 cd/m²) while the
+--- picture around it can reach 1000+. Type cannot be made brighter than white,
+--- so the only lever left is contrast: a heavier outline, a real drop shadow,
+--- and a denser scrim. Without it the chrome reads as grey and washed out over
+--- HDR footage, which is exactly how it was reported.
+local TEXT_BORDER = 1.2
+local TEXT_SHADOW = 0
+local TEXT_SHADOW_ALPHA = 0x30
+local SCRIM_TOP = 0x4E
+local SCRIM_BOTTOM = 0x62
+
 --- Draws one line of text.
 ---
 --- A hairline black outline is always on, the way uosc does it: the reference
@@ -201,8 +220,10 @@ end
 --- make the bar unreadable on a snowy or desert shot.
 local function text(x, y, size, color, alpha, str, align, bold, font)
   return string.format(
-    '{\\an%d\\pos(%d,%d)\\fn%s\\fs%d\\bord1.2\\shad0\\3c&H000000&\\3a&H88&\\%s\\c%s\\1a&H%02X&}%s',
+    '{\\an%d\\pos(%d,%d)\\fn%s\\fs%d\\bord%.1f\\shad%.1f\\3c&H000000&\\3a&H88&'
+      .. '\\4c&H000000&\\4a&H%02X&\\%s\\c%s\\1a&H%02X&}%s',
     align or 7, round(x), round(y), font or FONT, round(size),
+    TEXT_BORDER, TEXT_SHADOW, TEXT_SHADOW_ALPHA,
     bold and 'b1' or 'b0', color, round(alpha), esc(str)
   )
 end
@@ -268,6 +289,10 @@ local state = {
   external_pointer = false,
   mouse_events = 0,
   audio_mode = false,
+  -- True when the video output is really emitting PQ/HLG, i.e. HDR passthrough
+  -- is live. The chrome gets a heavier outline and a denser scrim, because an
+  -- SDR overlay in a PQ swapchain otherwise reads as grey. See [set_output_space].
+  hdr = false,
   has_video = true,
   ui_scale = 1,
 }
@@ -1380,6 +1405,25 @@ local function draw_toast(parts)
   parts[#parts + 1] = text(W / 2, 81, 26, WHITE, alpha, clip(label, 46), 8, false)
 end
 
+--- Switches the chrome between SDR and HDR-pass-through weightings.
+---
+--- Driven by `video-target-params` — what the video output is *actually*
+--- emitting — not by the source. Tone-mapping an HDR file onto an SDR desktop
+--- still composites in SDR, so it keeps the light outline; a PQ swapchain gets
+--- the heavy one.
+local function set_output_space(hdr)
+  if state.hdr == hdr then
+    return
+  end
+  state.hdr = hdr
+  TEXT_BORDER = hdr and 2.4 or 1.2
+  TEXT_SHADOW = hdr and 1.4 or 0
+  TEXT_SHADOW_ALPHA = hdr and 0x18 or 0x30
+  SCRIM_TOP = hdr and 0x66 or 0x4E
+  SCRIM_BOTTOM = hdr and 0x84 or 0x62
+  mark_dirty()
+end
+
 local function draw_scrim(parts)
   -- The reference build (Yaozhi/uosc) draws no scrim at all: the bar floats on
   -- the picture and a hairline text outline does the legibility work. Eight
@@ -1388,9 +1432,21 @@ local function draw_scrim(parts)
   -- stripes. Two heavily feathered plates keep a whisper of contrast without
   -- any edge to see, and `text()` now carries a black outline as the real
   -- guarantee.
-  parts[#parts + 1] = rect(0, 700, W, H - 700, 0, BLACK, 0x4E, 42)
-  parts[#parts + 1] = rect(0, 840, W, H - 840, 0, BLACK, 0x62, 24)
+  parts[#parts + 1] = rect(0, 700, W, H - 700, 0, BLACK, SCRIM_TOP, 42)
+  parts[#parts + 1] = rect(0, 840, W, H - 840, 0, BLACK, SCRIM_BOTTOM, 24)
 end
+
+-- `video-target-params` is the VO's own description of the swapchain, so this
+-- fires once when passthrough engages (or when the display leaves HDR) and
+-- never for a file that is merely tone-mapped into SDR.
+mp.observe_property('video-target-params', 'native', function(_, value)
+  if type(value) ~= 'table' then
+    return
+  end
+  local gamma = value.gamma
+  local peak = tonumber(value['max-luma']) or 0
+  set_output_space(gamma == 'pq' or gamma == 'hlg' or peak > 203)
+end)
 
 local function draw_audio_stage(parts)
   parts[#parts + 1] = rect(0, 0, W, H, 0, BLACK, 0xFF)
@@ -2120,6 +2176,34 @@ local function update_hover(x, y)
   return hit
 end
 
+--- Repaint cadence for anything that follows the pointer.
+---
+--- `mark_dirty()` is flushed by the 100 ms tick, which is right for a progress
+--- bar and wrong for the pointer: the scrub preview, the hover lift and a bar
+--- being dragged would all trail by up to a tenth of a second — which is what
+--- "the OSD lags when I use the mouse" was.
+---
+--- Coalescing to 30 Hz keeps it visually continuous without re-emitting the
+--- whole ASS blob once per mouse packet (a 1000 Hz mouse would otherwise ask
+--- for a thousand IPC round-trips a second).
+local POINTER_INTERVAL = 1 / 30
+local pointer_frame = false
+
+local function paint_pointer()
+  if pointer_frame then
+    return
+  end
+  pointer_frame = true
+  mp.add_timeout(POINTER_INTERVAL, function()
+    pointer_frame = false
+    -- Re-checked at fire time: the chrome may have auto-hidden in between, and
+    -- painting a removed overlay would pop it back for one frame.
+    if state.visible or state.help or state.toast then
+      render()
+    end
+  end)
+end
+
 mp.observe_property('mouse-pos', 'native', function(_, value)
   -- The host owns pointer input here; anything mpv might report on its own is
   -- stale by definition and would fight the forwarded position.
@@ -2154,6 +2238,9 @@ mp.observe_property('mouse-pos', 'native', function(_, value)
   update_hover(x, y)
   if state.visible then
     schedule_hide()
+    if state.hover then
+      paint_pointer()
+    end
   else
     -- Moving the mouse brings the chrome back, the way every desktop player
     -- does it. mouse-pos only fires on real movement.
@@ -2304,6 +2391,7 @@ local function handle_mouse(payload)
         bar_seek(x)
       end
       schedule_hide()
+      paint_pointer()
       return
     end
     local x, y = pointer_design()
@@ -2313,6 +2401,11 @@ local function handle_mouse(payload)
     update_hover(x, y)
     if state.visible then
       schedule_hide()
+      -- Only controls react to the pointer. Over bare video nothing moves, and
+      -- repainting there would be work with no visible change.
+      if state.hover then
+        paint_pointer()
+      end
     else
       show()
     end
