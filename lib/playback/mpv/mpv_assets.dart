@@ -14,8 +14,8 @@ import 'package:flutter/services.dart';
 class MpvAssets {
   const MpvAssets._();
 
-  static const String _assetKey = 'assets/mpv/xnx_osd.lua';
-  static const String scriptName = 'xnx_osd.lua';
+  static const String _assetKey = 'assets/mpv/player_osd.lua';
+  static const String scriptName = 'player_osd.lua';
 
   static String? _cached;
 

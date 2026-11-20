@@ -150,13 +150,13 @@ class _PlayerPageState extends State<PlayerPage> {
       // impossible to find when someone asks for a log. Falls back to the temp
       // directory only when the install folder is read-only (Program Files).
       final String exeDir = File(Platform.resolvedExecutable).parent.path;
-      String logPath = '${Directory.systemTemp.path}${sep}xnx_player_mpv.log';
+      String logPath = '${Directory.systemTemp.path}${sep}player_mpv.log';
       try {
         final Directory logDir = Directory('$exeDir${sep}log');
         if (!logDir.existsSync()) {
           logDir.createSync(recursive: true);
         }
-        logPath = '${logDir.path}${sep}xnx_player_mpv.log';
+        logPath = '${logDir.path}${sep}player_mpv.log';
       } catch (_) {
         // Read-only install location; keep the temp path.
       }
@@ -273,8 +273,8 @@ class _PlayerPageState extends State<PlayerPage> {
       }
       // The OSD reads these before the first frame so the title and the
       // opening-skip preference are already in place at file-loaded.
-      player.setProperty('user-data/xnx/title', widget.item.title);
-      player.setProperty('user-data/xnx/skip-intro', prefs.skipIntro ? 'yes' : 'no');
+      player.setProperty('user-data/player/title', widget.item.title);
+      player.setProperty('user-data/player/skip-intro', prefs.skipIntro ? 'yes' : 'no');
 
       final Duration resume = widget.item.resumeAt ?? Duration.zero;
       player.loadQueue(queue, startAt: resume.inSeconds > 5 ? resume : Duration.zero);

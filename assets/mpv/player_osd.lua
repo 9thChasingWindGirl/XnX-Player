@@ -650,7 +650,7 @@ local function mark_segment()
 end
 
 local function maybe_skip(opening)
-  local enabled = mp.get_property('user-data/xnx/skip-intro') == 'yes'
+  local enabled = mp.get_property('user-data/player/skip-intro') == 'yes'
   if not enabled then
     return
   end
@@ -763,7 +763,7 @@ local function build_menu(id)
       kind = 'item',
       act = function()
         seq = seq + 1
-        mp.commandv('script-message', 'xnx-event',
+        mp.commandv('script-message', 'player-event',
           utils.format_json({ type = 'subtitle', seq = seq }))
       end,
     })
@@ -1683,7 +1683,7 @@ end
 
 function send_back()
   seq = seq + 1
-  mp.commandv('script-message', 'xnx-event', utils.format_json({ type = 'back', seq = seq }))
+  mp.commandv('script-message', 'player-event', utils.format_json({ type = 'back', seq = seq }))
 end
 
 -- ==== INPUT ================================================================
@@ -1729,7 +1729,7 @@ local function handle_key(raw)
     -- Heartbeat so Flutter knows the script is alive and must not apply its own
     -- "Esc closes the player" fallback.
     seq = seq + 1
-    mp.commandv('script-message', 'xnx-event', utils.format_json({ type = 'ui', seq = seq }))
+    mp.commandv('script-message', 'player-event', utils.format_json({ type = 'ui', seq = seq }))
     if state.stats then
       state.stats = false
       mark_dirty()
@@ -1802,7 +1802,7 @@ local function handle_key(raw)
   elseif name == 'o' and alt then
     -- Flutter owns the file dialog; the OSD cannot open one.
     seq = seq + 1
-    mp.commandv('script-message', 'xnx-event', utils.format_json({ type = 'subtitle', seq = seq }))
+    mp.commandv('script-message', 'player-event', utils.format_json({ type = 'subtitle', seq = seq }))
   elseif name == 'b' and alt then
     command('playlist-prev')
   elseif name == 'pageup' then
@@ -1866,12 +1866,12 @@ for _, entry in ipairs(BINDINGS) do
   local binding, name = entry[1], entry[2]
   -- Binding names must be unique: `i` and `I` share a handler but not an id.
   local id = entry[3] or name
-  mp.add_key_binding(binding, 'xnx-' .. id:gsub('%+', '-'), function()
+  mp.add_key_binding(binding, 'pp-' .. id:gsub('%+', '-'), function()
     handle_key(name)
   end)
 end
 
-mp.add_key_binding('MBTN_LEFT', 'xnx-click', function()
+mp.add_key_binding('MBTN_LEFT', 'pp-click', function()
   local p = state.pointer
   if not p then
     return
@@ -1888,7 +1888,7 @@ mp.add_key_binding('MBTN_LEFT', 'xnx-click', function()
   end
 end)
 
-mp.add_key_binding('MBTN_RIGHT', 'xnx-context', function()
+mp.add_key_binding('MBTN_RIGHT', 'pp-context', function()
   if not close_menu() then
     if state.visible then
       open_menu('more')
@@ -1898,11 +1898,11 @@ mp.add_key_binding('MBTN_RIGHT', 'xnx-context', function()
   end
 end)
 
-mp.add_key_binding('WHEEL_UP', 'xnx-wheel-up', function()
+mp.add_key_binding('WHEEL_UP', 'pp-wheel-up', function()
   add_volume(5)
 end)
 
-mp.add_key_binding('WHEEL_DOWN', 'xnx-wheel-down', function()
+mp.add_key_binding('WHEEL_DOWN', 'pp-wheel-down', function()
   add_volume(-5)
 end)
 
@@ -1953,7 +1953,7 @@ end)
 
 -- ==== IPC ==================================================================
 
-mp.register_script_message('xnx-cmd', function(json)
+mp.register_script_message('player-cmd', function(json)
   local ok, payload = pcall(utils.parse_json, json)
   if not ok or type(payload) ~= 'table' then
     msg.debug('bad command: ' .. tostring(json))
@@ -1992,7 +1992,7 @@ mp.observe_property('time-pos', 'number', function(_, value)
   mark_dirty()
   -- Auto-skip the ending once we drift into it. Guarded so it fires at most
   -- once per file and never fights a deliberate rewind.
-  if not outro_skipped and mp.get_property('user-data/xnx/skip-intro') == 'yes' then
+  if not outro_skipped and mp.get_property('user-data/player/skip-intro') == 'yes' then
     local seg = effective_segments()['outro']
     if seg and state.position > seg['start'] - 1.5 and state.position < seg['end'] - 1 then
       outro_skipped = true
@@ -2031,7 +2031,7 @@ mp.observe_property('media-title', 'string', function(_, value)
   mark_dirty()
 end)
 
-mp.observe_property('user-data/xnx/title', 'string', function(_, value)
+mp.observe_property('user-data/player/title', 'string', function(_, value)
   state.title = value or ''
   mark_dirty()
 end)

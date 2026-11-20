@@ -46,7 +46,7 @@ class OsdBridge {
   void sendKey(String name) => player.sendKey(name);
 
   void _handle(MpvClientEvent event) {
-    if (event.name != 'xnx-event') {
+    if (event.name != 'player-event') {
       return;
     }
     final String? payload = event.payload;

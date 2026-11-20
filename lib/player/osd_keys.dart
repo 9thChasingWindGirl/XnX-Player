@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 /// compile-time constant (the Unicode code point for printable keys, an offset
 /// namespace for the rest).
 ///
-/// The OSD (`assets/mpv/xnx_osd.lua`) parses strings like `space`,
+/// The OSD (`assets/mpv/player_osd.lua`) parses strings like `space`,
 /// `shift+left` and `alt+n`; this is the only place that knows both lexicons.
 abstract final class OsdKeys {
   const OsdKeys._();

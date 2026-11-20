@@ -566,12 +566,12 @@ class MpvPlayer {
     }
   }
 
-  /// Sends a JSON command to the Lua OSD (`xnx-cmd`).
+  /// Sends a JSON command to the Lua OSD (`player-cmd`).
   ///
   /// The transport is a single JSON string on purpose: the Lua side can grow
   /// new verbs without touching the FFI surface.
   void sendScriptMessage(Map<String, Object?> payload) {
-    command(<String>['script-message', 'xnx-cmd', jsonEncode(payload)], async: true);
+    command(<String>['script-message', 'player-cmd', jsonEncode(payload)], async: true);
   }
 
   /// Forwards one key to the OSD, which owns all playback actions.
