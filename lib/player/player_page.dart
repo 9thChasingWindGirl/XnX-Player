@@ -198,7 +198,8 @@ class _PlayerPageState extends State<PlayerPage> {
           wid: host,
           logFile: logPath,
           screenshotDir: shotDir,
-          settings: _settingsFor(prefs),
+          // 直通永远不在初始选项里请求：等音频端点确认能收码流后再开。
+          settings: _settingsFor(prefs, passthroughOverride: AudioPassthrough.off),
         ),
         logLevel: 'info',
       );
@@ -505,6 +506,19 @@ class _PlayerPageState extends State<PlayerPage> {
     if (wanted == AudioPassthrough.off) {
       return;
     }
+    // mpv is up now, so the endpoint is knowable: only request passthrough on
+    // devices that look like they can take a bitstream (HDMI/SPDIF into an
+    // AVR). Starting blind is what made WASAPI exclusive mode fail and drag
+    // the whole audio chain down on ordinary speaker endpoints.
+    final String? deviceName = player.getProperty('audio-device-name');
+    if (!deviceSupportsBitstream(deviceName)) {
+      player.setProperty('audio-spdif', '');
+      setState(() {
+        _capsNote = '$_capsNote · 音频端点非 HDMI/SPDIF 类，未启用直通';
+      });
+      return;
+    }
+    player.setProperty('audio-spdif', audioSpdifValue(wanted));
     Timer(const Duration(seconds: 2), () {
       if (!mounted) {
         return;
@@ -566,7 +580,14 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   /// Maps the persisted preferences onto mpv options.
-  MpvSettings _settingsFor(PlaybackPrefs prefs) {
+  ///
+  /// `passthroughOverride` exists because bitstream passthrough must never be
+  /// part of the initial option table: at that point mpv has no audio device
+  /// yet, so requesting it is a blind bet that WASAPI exclusive mode succeeds.
+  /// On an ordinary desktop endpoint it does not, and the refusal takes the
+  /// whole audio chain with it. The player starts with passthrough off and the
+  /// capability probe below re-enables it once the endpoint is known.
+  MpvSettings _settingsFor(PlaybackPrefs prefs, {AudioPassthrough? passthroughOverride}) {
     return MpvSettings(
       quality: switch (prefs.quality) {
         QualityPref.fast => VideoQuality.fast,
@@ -576,7 +597,7 @@ class _PlayerPageState extends State<PlayerPage> {
       hwdec: prefs.hardwareDecoding ? 'auto-safe' : 'no',
       hdrPassthrough: prefs.hdrPassthrough,
       smoothMotion: prefs.smoothMotion,
-      audioPassthrough: switch (prefs.passthrough) {
+      audioPassthrough: passthroughOverride ?? switch (prefs.passthrough) {
         PassthroughPref.all => AudioPassthrough.all,
         PassthroughPref.dolby => AudioPassthrough.dolby,
         PassthroughPref.dts => AudioPassthrough.dts,
