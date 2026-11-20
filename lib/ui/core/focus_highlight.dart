@@ -157,6 +157,9 @@ class _GlidePainter extends CustomPainter {
     required this.time,
   });
 
+  /// 2π / 2.4 s: the period of the reference's `ui::breathe()`.
+  static const double _breatheSpeed = 6.283185307179586 / 2.4;
+
   final Rect rect;
   final double radius;
   final Color accent;
@@ -175,13 +178,17 @@ class _GlidePainter extends CustomPainter {
 
     // Glow spills the focused item's own accent, not one global highlight
     // colour, and breathes slowly so the screen reads as lit rather than pasted.
-    final double pulse = 0.72 + 0.28 * breathe(time, speed: 1.35);
+    //
+    // Both numbers come from the reference: the glow's alpha rides the breathing
+    // between 0.40 and 0.55 (`aurora.cpp:501`), and its `breathe()` is a 2.4 s
+    // period (`ui/motion.hpp:135`) — 6.283/2.4 rad per second.
+    final double pulse = 0.40 + 0.15 * breathe(time, speed: _breatheSpeed);
     canvas.drawRRect(
       ring,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = PsFocus.glideGlowWidth
-        ..color = accent.withValues(alpha: 0.26 * opacity * pulse)
+        ..color = accent.withValues(alpha: pulse * opacity)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, PsFocus.glideGlowBlur),
     );
     canvas.drawRRect(

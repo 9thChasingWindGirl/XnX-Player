@@ -124,6 +124,13 @@ abstract final class PsSpace {
 
 abstract final class PsRadius {
   static const double card = 22;
+
+  /// A focused card is drawn larger, and the reference bumps the corner with
+  /// it: `aurora.cpp:503` rings the grown card at radius 30 where the resting
+  /// card is 22. Growing the rectangle without growing the corner makes a big
+  /// card look pinched.
+  static const double cardFocused = 26;
+
   static const double cardLarge = 26;
   static const double hero = 36;
   static const double sheet = 44;
@@ -132,15 +139,16 @@ abstract final class PsRadius {
 
 /// Geometry of the focused control's ring.
 ///
-/// The reference kit splits this into `focus_width` and `focus_gap`
-/// (`theme.hpp:99-100`); keeping both named here means the ring can be tuned in
-/// one place instead of in each focusable.
+/// The reference splits this into `focus_width` and `focus_gap`
+/// (`theme.hpp:99-100`), but what it *draws* is what matters, and
+/// `aurora.cpp:503` is explicit: `bordered_rect(ring.inset(-5), 30, …, 4, white)`
+/// — a 4 px stroke, 5 px outside the card. The struct's default of 3 is what
+/// other themes use, not what the home screen shows.
 abstract final class PsFocus {
-  static const double ringWidth = 2.5;
+  static const double ringWidth = 4;
 
-  /// Distance between the control's edge and the ring. Matches the kit's
-  /// `focus_gap` of 4.
-  static const double ringGap = 4;
+  /// Distance between the control's edge and the ring.
+  static const double ringGap = 5;
 
   static const double glowWidth = 8;
   static const double glowBlur = 8;
@@ -167,8 +175,8 @@ abstract final class PsElevation {
 
   static const List<BoxShadow> cardFocused = <BoxShadow>[
     BoxShadow(
-      color: Color(0x8C000000),
-      blurRadius: 26,
+      color: Color(0x99000000),
+      blurRadius: 34,
       offset: Offset(0, 18),
     ),
   ];

@@ -60,7 +60,7 @@ motion/sound   omega, damping, sounds(声音集), dark
 | `ui::SpringColor` | `SpringColor` | 通道级颜色弹簧 |
 | `Pulse` / `shake` / `breathe` / `stagger` | 同名 | 拒绝、呼吸、入场错峰 |
 | `Ease.cubic_out/quint_out/back_out` | `Ease.*` | 曲线 |
-| 焦点环 4px 间距 | `TvFocusable` 的 `-4` 内缩 | 一致 |
+| 焦点环 4px 描边、5px 外扩 | `PsFocus.ringWidth/ringGap` | 一致（第二轮修正，见 §10） |
 
 所以「ps5-homebrew-ui 能不能适配 Flutter」已经不是假设题：**它已经适配了一半**，剩下的是媒体中心独有的部分。
 
@@ -83,20 +83,22 @@ motion/sound   omega, damping, sounds(声音集), dark
 
 ### 4.2 焦点环几何（`PsFocus`）
 
-`theme.hpp:99-100` 把焦点环拆成 `focus_width` 与 `focus_gap` 两个值。我们的环是固化的魔数（`tv_focusable.dart` 里 2.5 / 8 / `-4`）。新增：
+`theme.hpp:99-100` 把焦点环拆成 `focus_width` 与 `focus_gap` 两个值。我们的环原本是固化的魔数（`tv_focusable.dart` 里 2.5 / 8 / `-4`）。新增：
 
 | Token | 值 | 说明 |
 |---|---|---|
-| `PsFocus.ringWidth` | 2.5 | 环的描边（两个 painter 共用） |
-| `PsFocus.ringGap` | 4 | 与上游 `focus_gap` 一致 |
+| `PsFocus.ringWidth` | 4 | 环的描边（两个 painter 共用） |
+| `PsFocus.ringGap` | 5 | 与 aurora 的 `inset(-5)` 一致 |
 | `PsFocus.glowWidth` | 8 | 卡片自己兜底环的发光宽度 |
 | `PsFocus.glowBlur` | 8 | 同上 |
 | `PsFocus.glideGlowWidth` | 14 | 舞台上那个滑动环更粗，要能被一眼追上 |
 | `PsFocus.glideGlowBlur` | 16 | 同上 |
 
-已落地：`tv_focusable.dart` 与 `focus_highlight.dart` 的六个魔数全部改为引用，渲染结果不变。
+已落地：`tv_focusable.dart` 与 `focus_highlight.dart` 的六个魔数全部改为引用。
 
-上游 `focus_width` 默认 3，我们画 2.5。**这是有意的**：1920 画布缩放到 1080p 时 2.5 在视网膜屏上更接近 1px 的锐利感，3 会显得毛。记在 §7 的偏离清单里。
+> 值在第二轮核对时改过：最初 2.5 / 4 是照 `Theme` 结构体默认值（`focus_width 3`）
+> 推的，而 aurora 首页实际画的是 `bordered_rect(ring.inset(-5), 30, …, 4, kWhite)`
+> ——4 px 描边、5 px 外扩。见 §10.1。
 
 ### 4.3 阴影层级（`PsElevation`）
 
@@ -105,7 +107,7 @@ motion/sound   omega, damping, sounds(声音集), dark
 | Token | 值 | 来源 |
 |---|---|---|
 | `PsElevation.cardResting` | 0,14 / blur 24 / 黑 50% | `home_tile.dart:225` |
-| `PsElevation.cardFocused` | 0,18 / blur 26 / 黑 55% | `home_tile.dart:35`（与 `aurora.cpp:500` 的 18/26 一致） |
+| `PsElevation.cardFocused` | 0,18 / blur 34 / 黑 60% | `aurora.cpp:500`：`shadow(…, 26, 34, black 0.6)`，26 是圆角、34 才是柔化 |
 | `PsElevation.sheet` | 0,20 / blur 60 / 黑 50% | `aurora.cpp:519` 详情抽屉 |
 | `PsElevation.heroGlow(accent)` | accent 30% / blur 60 / spread 6 + 0,26 / blur 36 | `home_hero.dart:195-206` |
 
@@ -201,7 +203,6 @@ motion/sound   omega, damping, sounds(声音集), dark
 | 项 | 上游 | 我们 | 理由 |
 |---|---|---|---|
 | `danger` | `#E5484D` | `#FF5D6C` | 深色玻璃面板上更醒目；上游那套偏 Web 语义 |
-| 焦点环宽 | 3 | 2.5 | 1920→1080p 缩放后更锐利 |
 | 卡片静止阴影 | 无或极淡 | 0,14 / blur 24 | 我们的海报有真实图片边缘，需要一点点分离感 |
 | 主题数量 | 30 套 | 1 套 | 媒体中心不需要换肤；多套主题会稀释「一种语言」 |
 
@@ -229,3 +230,49 @@ motion/sound   omega, damping, sounds(声音集), dark
 - **6 套 SDF 字体**：许可同上。我们用系统字体栈（`PsType.fontFallback`）。
 - **SDF shader 与渲染器**：Flutter 用 Skia/Impeller，没有对应物，也不需要。
 - **30 套主题**：见 §7。
+
+---
+
+## 10. 第二轮核对：源码到手后逐项验数（2026-11-21）
+
+第一轮提取令牌时，控件已经写完了。令牌是照着 `theme.hpp` 的**结构体默认值**抄的，
+而首页真正的样子写在 `concepts/aurora.cpp` 的**绘制调用**里。两者不一样，于是有
+几处「文档说对齐了、实际没对齐」。
+
+### 10.1 本轮修正（数值错，已改）
+
+| 项 | 参考实际绘制 | 修正前 | 现在 |
+|---|---|---|---|
+| 焦点环描边 | `bordered_rect(ring.inset(-5), 30, …, **4**, kWhite)` `aurora.cpp:503` | 2.5 | **4** |
+| 焦点环外扩 | 同上，`inset(-5)` | 4 | **5** |
+| 焦点卡投影 | `shadow({x, y+18, w, h}, 26, **34**, black 0.6)` `aurora.cpp:500` | blur 26 / 0.55 | **34 / 0.60** |
+| 光晕强度 | `glow(ring, 26, 26, accent.with_alpha(**0.4 + 0.15*breathe**))` `aurora.cpp:501` | 固定 0.26×pulse | **0.40–0.55** |
+| 呼吸周期 | `ui::breathe()` 默认 **2.4 s**（`motion.hpp:135`） | 4.65 s（speed 1.35） | **2.4 s** |
+| 放大后的圆角 | 静止 22 → 聚焦 26 | 只有 22 | 常量已备 `PsRadius.cardFocused = 26`，但**尚未引用**——放大本身没做，见 §10.2 |
+
+`§7` 里原来那行「焦点环宽 上游 3 / 我们 2.5，缩小后更锐利」是错的：3 是
+`Theme` 结构体的默认值，aurora 首页实际画的是 4。已删除。
+
+### 10.2 仍是源码前版本（未改，涉及布局或需目视）
+
+| 项 | 参考 | 我们 | 影响 |
+|---|---|---|---|
+| 聚焦卡片放大 | `kCardGrow 1.2`，并上移 `grown - kCard`（`aurora.cpp:238`） | **卡片不放大**，`SizedBox` 尺寸固定 | 首页「焦点把卡片顶起来」的核心手感缺失 |
+| 放大时的邻居让位 | 右侧卡片 `x += kCard * (grow - 1)`（`aurora.cpp:487`） | 无 | 放大后必然重叠，得一起做 |
+| 非首页的环偏移 | 环始终贴着放大后的卡片 | `highlightScale 1.08`，环浮在静止卡片外 4% | 媒体页/搜索页的环「离卡片有点远」 |
+| 卡片投影状态 | 只有聚焦卡有投影 | `home_tile.dart:35` 恒用 `cardFocused` | 每张卡都像被聚焦 |
+| eyebrow 颜色 | 用品名 accent（`aurora.cpp:527`） | `PsType.eyebrow` 写死白色 | 页眉没有随内容染色 |
+| 面板材质 | `glass()`：模糊底 + tint 0.62 + 22% 发丝线 | 控制中心写死 `#CC0A0B10 → #F207080D` 渐变 | 面板是实色，不是玻璃 |
+
+### 10.3 结构缺口：上游是主题系统，我们是一个主题
+
+`Theme` 是数据：11 种 `SurfaceStyle`、3 种 `Corner`、6 个 `FontRole`，外加
+`omega/damping/sounds`。我们把它压平成了常量，于是：
+
+- 换一种表面语言（`hard` / `neumorphic` / `pixel`）没有任何入口；
+- `PsColor.surface / surfaceHigh / sheetTop / sheetBottom / scrimSoft / plus / star`
+  七个令牌**零引用**（`surface` 只被 `ps_theme.dart` 转给 `ThemeData`）。控件各自
+  写死填充色，令牌和实现是两套东西。
+
+要真正解决，得把 `Theme` 落成 Dart 值对象 + 一个 `aurora` 实例，控件从
+`PsTheme.of(context)` 取色取形。这是重构（约 20 个文件），不是调参——单独立项。
