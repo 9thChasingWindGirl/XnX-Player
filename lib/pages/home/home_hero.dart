@@ -6,7 +6,9 @@ import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_ids.dart';
+import '../../ui/core/focus_zone.dart';
 import '../../ui/core/poster_image.dart';
+import '../../ui/core/tv_focusable.dart';
 import '../../ui/core/title_treatment.dart';
 import '../../ui/widgets/ps_button.dart';
 
@@ -26,6 +28,7 @@ class HeroPanel extends StatelessWidget {
     this.onPlay,
     this.onFavorite,
     this.onDetails,
+    this.carousel,
   });
 
   final MediaItem item;
@@ -42,6 +45,11 @@ class HeroPanel extends StatelessWidget {
   final VoidCallback? onFavorite;
   final VoidCallback? onDetails;
 
+  /// The shelf the hero item came from, drawn as the right-edge carousel.
+  /// Null on the leaving panel of a cross-fade — only the arriving hero
+  /// carries the list.
+  final HeroCarousel? carousel;
+
   @override
   Widget build(BuildContext context) {
     final List<Color> art = item.palette;
@@ -56,13 +64,20 @@ class HeroPanel extends StatelessWidget {
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: <Widget>[
-            Positioned(
-              left: PsSpace.heroArtX + slide * 1.6,
-              top: PsSpace.heroArtY + bob,
-              width: PsSpace.heroArt,
-              height: PsSpace.heroArt,
-              child: _HeroArt(item: item),
+            // Full-bleed key art. The reference home is a poster that owns the
+            // whole stage, not a framed square on the right: the left-to-right
+            // and top-to-bottom dissolves sink it into the page, and the copy
+            // sits directly on the picture.
+            Positioned.fill(
+              left: -80 + slide * 1.2,
+              child: _HeroBackdrop(item: item),
             ),
+            if (carousel != null)
+              Positioned(
+                right: 88 + slide * 1.6,
+                top: 120 + bob,
+                child: carousel!,
+              ),
             Positioned(
               left: PsSpace.safeX + slide,
               top: 204,
@@ -184,53 +199,172 @@ class HeroPanel extends StatelessWidget {
   }
 }
 
-class _HeroArt extends StatelessWidget {
-  const _HeroArt({required this.item});
+/// The whole-stage art, dissolved into the page on its left and bottom edges
+/// so the copy and the shelves read on top of it without a scrim bar.
+class _HeroBackdrop extends StatelessWidget {
+  const _HeroBackdrop({required this.item});
 
   final MediaItem item;
 
   @override
   Widget build(BuildContext context) {
     final List<Color> art = item.palette;
-    // A square frame should hold the poster: cropping a 16:9 backdrop to a
-    // square throws away both ends of every shot. The backdrop is the fallback
-    // for items that only ever had one.
-    final String? url = item.posterUrl ?? item.heroBackdropUrl;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(PsRadius.hero),
-        boxShadow: PsElevation.heroGlow(art[2]),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(PsRadius.hero),
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: <Color>[art[1], art[0]],
+    final String? url = item.heroBackdropUrl ?? item.posterUrl;
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: <Color>[art[1], art[0]],
+            ),
+          ),
+        ),
+        if (url != null && url.isNotEmpty)
+          posterImage(
+            url,
+            fit: BoxFit.cover,
+            alignment: Alignment.topRight,
+            gapless: true,
+            errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
+                const SizedBox.shrink(),
+          ),
+        // Left dissolve: copy side fades the picture out completely.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: <Color>[Color(0xFF05060C), Color(0xB305060C), Color(0x00000000)],
+              stops: <double>[0.0, 0.34, 0.72],
+            ),
+          ),
+        ),
+        // Bottom dissolve: the shelves arrive on clean ground.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: <Color>[Color(0x0005060C), Color(0xD905060C)],
+              stops: <double>[0.55, 1.0],
+            ),
+          ),
+        ),
+        // Right-edge dim under the carousel strip.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerRight,
+              end: Alignment.centerLeft,
+              colors: <Color>[Color(0x9605060C), Color(0x00000000)],
+              stops: <double>[0.0, 0.30],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The right-edge carousel: one small card per shelf item, the active one
+/// ringed in the accent. Picking a card cross-fades the hero — this is the
+/// "轮播" of the reference layout, and it doubles as a preview strip for the
+/// row below.
+class HeroCarousel extends StatelessWidget {
+  const HeroCarousel({
+    super.key,
+    required this.items,
+    required this.activeId,
+    required this.onPick,
+  });
+
+  final List<MediaItem> items;
+  final String activeId;
+  final ValueChanged<MediaItem> onPick;
+
+  static const double _cardWidth = 196;
+  static const double _cardHeight = 110;
+  static const int _max = 6;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<MediaItem> shown = items.take(_max).toList(growable: false);
+    return FocusZone(
+      id: 'hero-carousel',
+      child: Column(
+        children: <Widget>[
+          for (final MediaItem item in shown)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TvFocusable(
+                key: ValueKey<String>(item.id),
+                radius: 10,
+                accent: item.accentColor,
+                highlightScale: 1.04,
+                pressScale: PsCard.pressScale,
+                onSelect: () => onPick(item),
+                child: Stack(
+                  children: <Widget>[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: _cardWidth,
+                        height: _cardHeight,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: <Color>[item.palette[1], item.palette[0]],
+                            ),
+                          ),
+                          child: (item.thumbUrl ?? '').isNotEmpty
+                              ? posterImage(
+                                  item.thumbUrl!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder:
+                                      (BuildContext context, Object error, StackTrace? stack) =>
+                                          const SizedBox.shrink(),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ),
+                    ),
+                    if (item.id == activeId)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: item.accentColor, width: 3),
+                            ),
+                          ),
+                        ),
+                      ),
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      bottom: 8,
+                      child: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PsType.micro.copyWith(
+                          fontSize: 14,
+                          shadows: <Shadow>[
+                            Shadow(color: const Color(0xB3000000), blurRadius: 6),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            if (url != null && url.isNotEmpty)
-              posterImage(
-                url,
-                fit: BoxFit.cover,
-                gapless: true,
-                errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
-                    const SizedBox.shrink(),
-              ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(PsRadius.hero),
-                border: Border.all(color: PsColor.text.withValues(alpha: 0.16), width: 2),
-              ),
-            ),
-          ],
-        ),
+        ],
       ),
     );
   }

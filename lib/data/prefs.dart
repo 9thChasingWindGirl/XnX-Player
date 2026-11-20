@@ -32,6 +32,8 @@ class PlaybackPrefs {
     // Interface cues: on by default at a level that sits under the content.
     this.soundEnabled = true,
     this.soundVolume = 70,
+    // Home shelf order (row ids, best first). Empty = the built-in order.
+    this.shelfOrder = const <String>[],
   });
 
   final QualityPref quality;
@@ -51,6 +53,9 @@ class PlaybackPrefs {
   final bool soundEnabled;
   final int soundVolume;
 
+  /// Home shelf order, persisted so the user's arrangement survives restarts.
+  final List<String> shelfOrder;
+
   PlaybackPrefs copyWith({
     QualityPref? quality,
     PassthroughPref? passthrough,
@@ -65,6 +70,7 @@ class PlaybackPrefs {
     bool? startFullscreen,
     bool? soundEnabled,
     int? soundVolume,
+    List<String>? shelfOrder,
   }) {
     return PlaybackPrefs(
       quality: quality ?? this.quality,
@@ -80,6 +86,7 @@ class PlaybackPrefs {
       hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
       soundEnabled: soundEnabled ?? this.soundEnabled,
       soundVolume: soundVolume ?? this.soundVolume,
+      shelfOrder: shelfOrder ?? this.shelfOrder,
     );
   }
 
@@ -97,6 +104,7 @@ class PlaybackPrefs {
         'hardwareDecoding': hardwareDecoding,
         'soundEnabled': soundEnabled,
         'soundVolume': soundVolume,
+        'shelfOrder': shelfOrder,
       };
 
   static PlaybackPrefs fromJson(Map<String, dynamic> json) {
@@ -120,6 +128,9 @@ class PlaybackPrefs {
       hardwareDecoding: json['hardwareDecoding'] as bool? ?? true,
       soundEnabled: json['soundEnabled'] as bool? ?? true,
       soundVolume: (json['soundVolume'] as num?)?.toInt() ?? 70,
+      shelfOrder: (json['shelfOrder'] as List<dynamic>? ?? <dynamic>[])
+          .whereType<String>()
+          .toList(growable: false),
     );
   }
 

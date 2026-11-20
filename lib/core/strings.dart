@@ -44,6 +44,14 @@ abstract final class S {
   static const String refresh = '刷新';
   static const String retry = '重试';
   static const String back = '返回';
+  static const String minimize = '最小化';
+  static const String maximize = '最大化';
+  static const String restoreDown = '向下还原';
+  static const String close = '关闭';
+  static const String sourcesTitle = '媒体源';
+  static const String favoritesShelf = '我的收藏';
+  static const String watchingShelf = '正在追剧';
+  static const String historyShelf = '观看历史';
 
   // Library
   static const String sources = '媒体来源';

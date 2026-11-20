@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
@@ -40,10 +41,15 @@ class HomePage extends StatefulWidget {
 }
 
 class _Row {
-  const _Row(this.title, this.items);
+  const _Row(this.id, this.title, this.items, {this.wide = false});
 
+  /// Stable identity for the saved shelf order.
+  final String id;
   final String title;
   final List<MediaItem> items;
+
+  /// Wide shelves carry 16:9 stills (continue watching), the rest 2:3 posters.
+  final bool wide;
 }
 
 class _HomePageState extends State<HomePage> {
@@ -92,19 +98,39 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  /// The shelves, in the order the user arranged them. Unknown ids (a source
+  /// went away) sort last; missing ids (a new shelf) are appended — both so
+  /// the saved order stays valid without a migration.
   List<_Row> _computeRows() {
     final AppStore store = AppStore.instance;
-    final List<_Row> rows = <_Row>[];
-    if (store.continueWatching.isNotEmpty) {
-      rows.add(_Row(S.continueWatching, store.continueWatching));
+    final List<_Row> all = <_Row>[
+      if (store.continueWatching.isNotEmpty)
+        _Row('continue', S.continueWatching, store.continueWatching, wide: true),
+      if (_seriesInFlight().isNotEmpty)
+        _Row('watching', S.watchingShelf, _seriesInFlight()),
+      if (store.items.any((MediaItem item) => item.favorite))
+        _Row('favorites', S.favoritesShelf,
+            store.items.where((MediaItem item) => item.favorite).toList(growable: false)),
+      if (store.recent.isNotEmpty)
+        _Row('history', S.historyShelf, store.recent.reversed.toList(growable: false)),
+      if (store.channels.isNotEmpty)
+        _Row('live', S.liveChannels, store.channels),
+    ];
+    final List<String> order = store.prefs.shelfOrder;
+    if (order.isEmpty) {
+      return all;
     }
-    if (store.recent.isNotEmpty) {
-      rows.add(_Row(S.recentlyAdded, store.recent));
-    }
-    if (store.channels.isNotEmpty) {
-      rows.add(_Row(S.liveChannels, store.channels));
-    }
-    return rows;
+    int rank(_Row row) => order.indexOf(row.id) < 0 ? order.length : order.indexOf(row.id);
+    return all.toList()..sort(( _Row a, _Row b) => rank(a).compareTo(rank(b)));
+  }
+
+  /// Series with any progress are "正在追剧"; a finished or untouched series
+  /// belongs to the library, not to this shelf.
+  List<MediaItem> _seriesInFlight() {
+    return AppStore.instance.items
+        .where((MediaItem item) =>
+            item.kind == MediaKind.series && item.progress > 0.01 && item.progress < 0.97)
+        .toList(growable: false);
   }
 
   MediaItem? _firstItem() {
@@ -212,6 +238,16 @@ class _HomePageState extends State<HomePage> {
               onPlay: () => widget.onPlay(_shown ?? focused),
               onFavorite: () => AppStore.instance.toggleFavorite(_shown ?? focused),
               onDetails: () => widget.onOpenItem(_shown ?? focused),
+              carousel: HeroCarousel(
+                items: items,
+                activeId: (_shown ?? focused).id,
+                onPick: (MediaItem picked) {
+                  final int index = items.indexOf(picked);
+                  if (index >= 0) {
+                    _focusAt(row, index);
+                  }
+                },
+              ),
             ),
             for (int i = 0; i < _rows.length; i++)
               ..._shelf(
@@ -227,6 +263,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// The vertical band the hero owns, derived from the stage's design height:
+  /// 16:9 stages get the tuned constant, taller stages give the hero a little
+  /// more room so the shelves still start on clean ground.
+  double _heroBand() {
+    final double height = TvScale.heightOf(context);
+    return (height * 0.60).clamp(560.0, 760.0).toDouble();
+  }
+
   List<Widget> _shelf({
     required int index,
     required _Row row,
@@ -239,16 +283,18 @@ class _HomePageState extends State<HomePage> {
     if (presence <= 0.012) {
       return const <Widget>[];
     }
-    final double cardTop = PsSpace.shelfY + distance * PsSpace.shelfPitch;
+    final double cardHeight = row.wide ? 180.0 : PsSpace.tileSize;
+    final double cardWidth = row.wide ? 320.0 : PsSpace.tileSize;
+    final double cardTop = _heroBand() + 60 + distance * PsSpace.shelfPitch;
     final double railTop =
-        cardTop - (PsSpace.tileSize * PsSpace.cardGrow - PsSpace.tileSize);
+        cardTop - (cardHeight * PsSpace.cardGrow - cardHeight);
 
     return <Widget>[
       Positioned(
         left: 0,
         top: railTop,
         width: TvScale.widthOf(context),
-        height: PsSpace.tileSize * PsSpace.cardGrow + 40,
+        height: cardHeight * PsSpace.cardGrow + 40,
         child: Opacity(
           opacity: presence,
           child: FocusZone(
@@ -257,6 +303,8 @@ class _HomePageState extends State<HomePage> {
               items: row.items,
               focusedIndex: active ? column.clamp(0, row.items.length - 1).toInt() : -1,
               active: active,
+              cardSize: cardHeight,
+              cardWidth: row.wide ? cardWidth : null,
               onFocus: (int value) => _focusAt(index, value),
               onSelect: widget.onOpenItem,
               onLongSelect: widget.onPlay,
@@ -264,20 +312,70 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
       ),
+      // Title with the order controls. The arrows are small and always there —
+      // a hidden edit mode is one more thing to discover — but they read as
+      // quiet chrome until hovered.
       Positioned(
         left: PsSpace.safeX,
         top: cardTop - 78,
         child: Opacity(
           opacity: presence,
-          child: Text(
-            row.title,
-            style: PsType.section.copyWith(
-              color: PsColor.text.withValues(alpha: active ? 0.96 : 0.6),
-            ),
+          child: Row(
+            children: <Widget>[
+              Text(
+                row.title,
+                style: PsType.section.copyWith(
+                  color: PsColor.text.withValues(alpha: active ? 0.96 : 0.6),
+                ),
+              ),
+              const SizedBox(width: 16),
+              TvFocusable(
+                radius: 10,
+                showRing: false,
+                onSelect: () => _moveShelf(index, -1),
+                child: Icon(
+                  Icons.arrow_upward_rounded,
+                  size: 20,
+                  color: index == 0
+                      ? PsColor.text.withValues(alpha: 0.18)
+                      : PsColor.text.withValues(alpha: 0.45),
+                ),
+              ),
+              const SizedBox(width: 6),
+              TvFocusable(
+                radius: 10,
+                showRing: false,
+                onSelect: () => _moveShelf(index, 1),
+                child: Icon(
+                  Icons.arrow_downward_rounded,
+                  size: 20,
+                  color: index == _rows.length - 1
+                      ? PsColor.text.withValues(alpha: 0.18)
+                      : PsColor.text.withValues(alpha: 0.45),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     ];
+  }
+
+  /// Moves shelf [index] by [delta] rows and persists the new order.
+  void _moveShelf(int index, int delta) {
+    final int target = index + delta;
+    if (target < 0 || target >= _rows.length || index == target) {
+      return;
+    }
+    final List<_Row> next = _rows.toList();
+    final _Row moved = next.removeAt(index);
+    next.insert(target, moved);
+    setState(() => _rows = next);
+    unawaited(AppStore.instance.updatePrefs(
+      AppStore.instance.prefs.copyWith(
+        shelfOrder: next.map((_Row row) => row.id).toList(growable: false),
+      ),
+    ));
   }
 }
 

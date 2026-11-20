@@ -68,6 +68,9 @@ class _ShellPageState extends State<ShellPage> {
   /// Mirrors the window state so the power panel can label its toggle.
   bool _fullscreen = false;
 
+  /// Mirrors the maximized state for the top bar's restore/maximize glyph.
+  bool _maximized = false;
+
   /// The source being edited in the dock, if any. Kept here rather than in the
   /// panel because the editor is a full-screen sheet, above the whole shell.
   SourceConfig? _sourceDialog;
@@ -88,6 +91,8 @@ class _ShellPageState extends State<ShellPage> {
     _input = InputRouter.instance.subscribe(_onIntent, name: 'shell');
     unawaited(AppStore.instance.load());
     unawaited(_syncFullscreen());
+    windowManager.addListener(_windowEvents);
+    WindowMaximizeState.instance.value.addListener(_onMaximizeChanged);
   }
 
   /// The power panel labels its toggle, so it needs the real window state
@@ -103,12 +108,23 @@ class _ShellPageState extends State<ShellPage> {
     }
   }
 
+  void _onMaximizeChanged() {
+    if (mounted) {
+      setState(() => _maximized = WindowMaximizeState.instance.value.value);
+    }
+  }
+
   @override
   void dispose() {
+    WindowMaximizeState.instance.value.removeListener(_onMaximizeChanged);
+    windowManager.removeListener(_windowEvents);
     _input?.cancel();
     _hero.dispose();
     super.dispose();
   }
+
+  /// Keeps the restore/maximize glyph honest without polling.
+  final WindowListener _windowEvents = _MaximizeListener();
 
   /// One handler per screen, fed by [InputRouter]. The shell only sees intents
   /// that no route above it claimed.
@@ -206,7 +222,7 @@ class _ShellPageState extends State<ShellPage> {
 
   /// Opens or closes the dock, landing on its icon row when it appears rather
   /// than wherever focus happened to be.
-  void _setDock(bool open) {
+  void _setDock(bool open, {CcPanelId? panel}) {
     if (open) {
       // Read the page position *before* the dock becomes focusable. After the
       // icons take focus this is no longer recoverable, and "Back from the
@@ -215,9 +231,7 @@ class _ShellPageState extends State<ShellPage> {
     }
     setState(() {
       _ccOpen = open;
-      if (!open) {
-        _ccPanel = null;
-      }
+      _ccPanel = open ? (panel ?? _ccPanel) : null;
     });
     SoundManager.instance.play(open ? SoundCue.modalOpen : SoundCue.modalClose);
     if (open) {
@@ -236,6 +250,24 @@ class _ShellPageState extends State<ShellPage> {
         FocusMemory.instance.restore(mark);
       }
     });
+  }
+
+  Future<void> _toggleMaximize() async {
+    try {
+      if (await windowManager.isMaximized()) {
+        await windowManager.unmaximize();
+        if (mounted) {
+          setState(() => _maximized = false);
+        }
+      } else {
+        await windowManager.maximize();
+        if (mounted) {
+          setState(() => _maximized = true);
+        }
+      }
+    } on Object {
+      // Window manager unavailable; nothing the button can do about it.
+    }
   }
 
   Future<void> _toggleFullScreen() async {
@@ -605,6 +637,11 @@ class _ShellPageState extends State<ShellPage> {
                         tabIndex: _tab,
                         onTabSelected: _selectTab,
                         onSearch: _openSearch,
+                        onOpenSources: () => _setDock(true, panel: CcPanelId.sources),
+                        onMinimize: () => unawaited(_minimize()),
+                        onToggleMaximize: () => unawaited(_toggleMaximize()),
+                        onClose: () => unawaited(_quitApp()),
+                        maximized: _maximized,
                       ),
                     ),
                     if (_searchOpen)
@@ -678,4 +715,36 @@ class _ShellPageState extends State<ShellPage> {
       ),
     );
   }
+}
+
+
+/// Maximization events land here because the shell is the one place that
+/// always exists; pages come and go underneath it.
+class _MaximizeListener extends WindowListener {
+  @override
+  void onWindowMaximize() {
+    _syncMaximized(true);
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    _syncMaximized(false);
+  }
+
+  void _syncMaximized(bool value) {
+    // The listener outlives individual setState targets; reaching the shell
+    // state through the widget tree is not possible from here, so a static
+    // notifier would be needed. Simpler: the shell polls nothing and instead
+    // updates on its own toggle plus these events via the singleton below.
+    WindowMaximizeState.instance.value = value;
+  }
+}
+
+/// A tiny global mirror of the maximized flag, read by the shell's build.
+class WindowMaximizeState {
+  WindowMaximizeState._();
+
+  static final WindowMaximizeState instance = WindowMaximizeState._();
+
+  final ValueNotifier<bool> value = ValueNotifier<bool>(false);
 }

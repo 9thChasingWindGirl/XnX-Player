@@ -28,6 +28,7 @@ class HomeRail extends StatefulWidget {
     required this.onSelect,
     this.onLongSelect,
     this.cardSize = PsSpace.tileSize,
+    this.cardWidth,
     this.startIndex = 2,
   });
 
@@ -41,7 +42,13 @@ class HomeRail extends StatefulWidget {
   final ValueChanged<int> onFocus;
   final ValueChanged<MediaItem> onSelect;
   final ValueChanged<MediaItem>? onLongSelect;
+  /// Card height; the shelf baseline every card sits on.
   final double cardSize;
+
+  /// Card width. Null means square (`cardSize`) — the 2:3 poster shelves.
+  /// The continue-watching shelf passes 16:9 so a still, not a poster crop,
+  /// carries the "where you left off" moment.
+  final double? cardWidth;
 
   /// Which slot the focused card is pulled toward.
   final int startIndex;
@@ -62,7 +69,9 @@ class _HomeRailState extends State<HomeRail> {
   /// instead of an assumed size.
   double get _designWidth => TvScale.widthOf(context);
 
-  double get _pitch => widget.cardSize + PsSpace.cardGap;
+  double get _pitch => _width + PsSpace.cardGap;
+
+  double get _width => widget.cardWidth ?? widget.cardSize;
 
   @override
   void didUpdateWidget(HomeRail oldWidget) {
@@ -87,7 +96,7 @@ class _HomeRailState extends State<HomeRail> {
   double _restLeft(int index) {
     final double baseline = PsSpace.safeX + index * _pitch;
     if (widget.focusedIndex >= 0 && index > widget.focusedIndex) {
-      return baseline + widget.cardSize * (_focusedGrow - 1);
+      return baseline + _width * (_focusedGrow - 1);
     }
     return baseline;
   }
@@ -140,17 +149,18 @@ class _HomeRailState extends State<HomeRail> {
             final MediaItem item = widget.items[i];
             final double grow = _growthFor(item.id).value;
             final double size = widget.cardSize * grow;
+            final double width = _width * grow;
             final double left = _restLeft(i) - _scroll.value;
             // Cull off-screen cards: a 400-item folder should not build 400
             // image widgets every frame.
-            if (left > _designWidth + 40 || left + size < -40) {
+            if (left > _designWidth + 40 || left + width < -40) {
               continue;
             }
             cards.add(
               Positioned(
                 left: left,
                 top: height - size,
-                width: size,
+                width: width,
                 height: size,
                 child: TvFocusable(
                   key: ValueKey<String>(item.id),
@@ -168,7 +178,7 @@ class _HomeRailState extends State<HomeRail> {
                   },
                   child: PosterCard(
                     item: item,
-                    width: size,
+                    width: _width,
                     height: size,
                     focused: i == widget.focusedIndex,
                   ),
