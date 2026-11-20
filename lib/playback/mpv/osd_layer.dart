@@ -8,34 +8,23 @@ import 'package:ffi/ffi.dart';
 /// painted entirely from Dart.
 ///
 /// This is the escape hatch from mpv's colour pipeline. Everything mpv draws —
-/// including its own OSD and every `overlay-add` bitmap — is adapted into the
-/// swapchain's colour space, so under HDR passthrough the chrome is rendered
-/// through PQ and its whites land on the SDR reference (≈203 cd/m²). A separate
-/// window is composited by DWM as plain 8-bit SDR content, which is exactly
-/// what "the OSD must not be touched by the picture" requires.
-///
-/// Layers, bottom to top:
-///
-///   FLUTTERVIEW (Flutter draws here)
-///   └── mpv container (STATIC) ── mpv video child   ← the picture
-///   └── OsdLayer window (this class)                ← the chrome, SDR forever
+/// including its own OSD — is adapted into the swapchain's colour space, so
+/// under HDR passthrough the chrome is rendered through PQ and its whites land
+/// on the SDR reference (≈203 cd/m²). A separate window is composited by DWM
+/// as plain 8-bit SDR content, which is exactly what "the OSD must not be
+/// touched by the picture" requires.
 ///
 /// The layer is deliberately a *pure display* surface: its window procedure
 /// answers `HTTRANSPARENT` for every hit-test, so pointer input falls through
-/// to the windows below and keeps flowing into the Flutter view, which is the
-/// one place that already sees and forwards mouse events in this embedding.
-/// The chrome's interactions (seek drag, volume wheel) live in Dart, in
-/// `player_page.dart`'s pointer forwarder — there is no second input channel
-/// to keep in sync.
-
-
+/// and keeps flowing into the Flutter view, which is the one place that sees
+/// and forwards mouse events in this embedding. The chrome's interactions live
+/// in `player_page.dart`'s pointer forwarder — no second input channel.
 final class OsdLayer {
-  OsdLayer._(this._hwnd, this._size);
+  OsdLayer._(this._hwnd, this._width, this._height);
 
   final int _hwnd;
-
-  /// Frame size in device pixels. The DIB is rebuilt when this changes.
-  _Size _size;
+  int _width;
+  int _height;
 
   int? _dib;
   Pointer<Uint8>? _dibBits;
@@ -47,6 +36,7 @@ final class OsdLayer {
   // --- Win32 --------------------------------------------------------------
   static final DynamicLibrary _user32 = DynamicLibrary.open('user32.dll');
   static final DynamicLibrary _gdi32 = DynamicLibrary.open('gdi32.dll');
+  static final DynamicLibrary _kernel32 = DynamicLibrary.open('kernel32.dll');
 
   static const int _wsChild = 0x40000000;
   static const int _wsClipSiblings = 0x04000000;
@@ -54,26 +44,32 @@ final class OsdLayer {
   static const int _wmNcHitTest = 0x0084;
   static const int _htTransparent = -1;
   static const int _ulwAlpha = 0x0002;
+  static const int _swShow = 5;
+  static const int _swHide = 0;
 
-  static const int _hwndTop = 0;
-  static const int _swpNoSize = 0x0001;
-  static const int _swpNoMove = 0x0002;
-  static const int _swpNoActivate = 0x0010;
+  // The window procedure is a plain native pointer from [Pointer.fromFunction]
+  // — the CI SDK predates `NativeCallable.receiver`, and a listener cannot
+  // serve WM_NCHITTEST anyway because its return value must be decided inside
+  // the dispatch. The procedure never touches Dart: it returns HTTRANSPARENT
+  // for hit-tests and defers everything else to DefWindowProc.
+  static int _globalWndProc(int hwnd, int msg, int wParam, int lParam) => msg == _wmNcHitTest
+      ? _htTransparent
+      : _defWindowProc(hwnd, msg, wParam, lParam);
 
-  static final int Function(Pointer<_WndClassEx>) _registerClass =
-      _user32.lookupFunction<Int32 Function(Pointer<_WndClassEx>), int Function(
+  static final Pointer<NativeFunction<Int64 Function(IntPtr, Uint32, IntPtr, IntPtr)>>
+      _proc = Pointer.fromFunction<Int64 Function(IntPtr, Uint32, IntPtr, IntPtr)>(
+          _globalWndProc, 0);
+
+  static final int Function(Pointer<_WndClassEx>) _registerClass = _user32
+      .lookupFunction<Int32 Function(Pointer<_WndClassEx>), int Function(
           Pointer<_WndClassEx>)>('RegisterClassExW');
 
-  static final int Function(int, Pointer<Utf16>, Pointer<Utf16>, int, int, int, int, int, int, int,
-          int, int) _createWindowEx =
+  static final int Function(int, Pointer<Utf16>, Pointer<Utf16>, int, int, int, int, int, int,
+          int, int, int) _createWindowEx =
       _user32.lookupFunction<IntPtr Function(Uint32, Pointer<Utf16>, Pointer<Utf16>, Uint32, Int32,
               Int32, Int32, Int32, IntPtr, IntPtr, IntPtr, IntPtr),
           int Function(int, Pointer<Utf16>, Pointer<Utf16>, int, int, int, int, int, int, int, int,
               int)>('CreateWindowExW');
-
-  static final int Function(int, int, int, int) _defWindowProc = _user32
-      .lookupFunction<IntPtr Function(IntPtr, Uint32, IntPtr, IntPtr), int Function(int, int, int,
-          int)>('DefWindowProcW');
 
   static final int Function(int) _destroyWindow =
       _user32.lookupFunction<Int32 Function(IntPtr), int Function(int)>('DestroyWindow');
@@ -85,29 +81,32 @@ final class OsdLayer {
       .lookupFunction<Int32 Function(IntPtr, Int32, Int32, Int32, Int32, Int32), int Function(
           int, int, int, int, int, int)>('MoveWindow');
 
-  static final int Function(int) _showWindow =
-      _user32.lookupFunction<Int32 Function(IntPtr), Int32 Function(int)>('ShowWindow');
+  static final int Function(int, int) _showWindow =
+      _user32.lookupFunction<Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow');
 
-  static final int Function(int, int, int, int, int, int, int) _setWindowPos = _user32
-      .lookupFunction<Int32 Function(IntPtr, IntPtr, Int32, Int32, Int32, Int32, Uint32),
-          int Function(int, int, int, int, int, int, int)>('SetWindowPos');
+  static final int Function(int, int, int, int) _defWindowProc = _user32
+      .lookupFunction<IntPtr Function(IntPtr, Uint32, IntPtr, IntPtr), int Function(
+          int, int, int, int)>('DefWindowProcW');
 
-  static final int Function(int, int, int, int, int, int, int, Pointer<Pointer<Void>>, int, int)
-      _updateLayeredWindow = _user32.lookupFunction<
-          Int32 Function(
-              IntPtr, IntPtr, Pointer<_Point>, Pointer<_Point>, IntPtr, Pointer<_Point>, int,
-              Pointer<Void>, int),
+  static final int Function(Pointer<Utf16>) _getModuleHandle = _kernel32
+      .lookupFunction<IntPtr Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>(
+          'GetModuleHandleW');
+
+  static final int Function(int, int, int, int, int, int, int, Pointer<_Point>, Pointer<_Point>,
+          int, Pointer<_Blend>, int) _updateLayeredWindow = _user32.lookupFunction<
+          Int32 Function(IntPtr, IntPtr, Pointer<_Point>, Pointer<_Point>, IntPtr,
+              Pointer<_Point>, int, Pointer<_Blend>, Uint32),
           int Function(int, int, Pointer<_Point>, Pointer<_Point>, int, Pointer<_Point>, int,
-              Pointer<Void>, int)>('UpdateLayeredWindow');
+              Pointer<_Blend>, int)>('UpdateLayeredWindow');
 
-  static final int Function(int, int) _createCompatibleDc = _gdi32
+  static final int Function(int) _createCompatibleDc = _gdi32
       .lookupFunction<IntPtr Function(IntPtr), int Function(int)>('CreateCompatibleDC');
 
   static final int Function(int) _deleteDc =
       _gdi32.lookupFunction<Int32 Function(IntPtr), int Function(int)>('DeleteDC');
 
-  static final int Function(int, int) _deleteObject = _gdi32
-      .lookupFunction<Int32 Function(IntPtr), int Function(int)>('DeleteObject');
+  static final int Function(int) _deleteObject =
+      _gdi32.lookupFunction<Int32 Function(IntPtr), int Function(int)>('DeleteObject');
 
   static final int Function(int, int) _selectObject = _gdi32
       .lookupFunction<IntPtr Function(IntPtr, IntPtr), int Function(int, int)>('SelectObject');
@@ -119,40 +118,13 @@ final class OsdLayer {
           int Function(int, Pointer<_BitmapInfo>, int, Pointer<Pointer<Void>>, int,
               int)>('CreateDIBSection');
 
-  static final int Function(int, int) _setWindowPos = _user32.lookupFunction<
-      Int32 Function(IntPtr, IntPtr, Int32, Int32, Int32, Int32, Uint32),
-      int Function(int, int, int, int, int, int, int)>('SetWindowPos');
+  static final int Function(int, int, int, int, int, int, int) _setWindowPos = _user32
+      .lookupFunction<Int32 Function(IntPtr, IntPtr, Int32, Int32, Int32, Int32, Uint32),
+          int Function(int, int, int, int, int, int, int)>('SetWindowPos');
 
-  static final int Function(Pointer<Utf16>) _getModuleHandle = _kernel32
-      .lookupFunction<IntPtr Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>(
-          'GetModuleHandleW');
-
-  // --- registration ---------------------------------------------------------
-
-  static int _globalWndProc(int hwnd, int msg, int wParam, int lParam) {
-    final OsdLayer? layer = _live[hwnd];
-    if (layer != null) {
-      return layer._wndProc(hwnd, msg, wParam, lParam);
-    }
-    return _htTransparent;
-  }
-
-  /// Synchronous on purpose: WM_NCHITTEST's return value must be decided
-  /// inside the message dispatch, so a `listener` (async queue hop) cannot
-  /// serve this procedure. `receiver` runs inline on the calling thread, which
-  /// is the UI isolate's thread in a Flutter Windows app — exactly where the
-  /// message loop pumps.
-  static final NativeCallable<Int64 Function(IntPtr, Uint32, IntPtr, IntPtr)> _proc =
-      NativeCallable<Int64 Function(IntPtr, Uint32, IntPtr, IntPtr)>.receiver(_globalWndProc);
-
-  static final Map<int, OsdLayer> _live = <int, OsdLayer>{};
-
-  /// Creates the layer as the topmost child of [parent].
-  static OsdLayer? create(
-    int parent,
-    int width,
-    int height,
-  ) {
+  /// Creates the layer as the topmost child of [parent]. Returns null off
+  /// Windows or when window creation failed; callers keep using the Lua OSD.
+  static OsdLayer? create(int parent, int width, int height) {
     if (!Platform.isWindows || parent == 0) {
       return null;
     }
@@ -181,9 +153,7 @@ final class OsdLayer {
     if (hwnd == 0) {
       return null;
     }
-    final OsdLayer layer = OsdLayer._(hwnd, _Size(width, height));
-    _live[hwnd] = layer;
-    return layer;
+    return OsdLayer._(hwnd, width, height);
   }
 
   static void _registerClassOnce() {
@@ -196,7 +166,7 @@ final class OsdLayer {
       wc.ref
         ..cbSize = sizeOf<_WndClassEx>()
         ..style = 0
-        ..lpfnWndProc = _proc.nativeFunction.address
+        ..lpfnWndProc = _proc.address
         ..hInstance = _getModuleHandle(nullptr)
         ..lpszClassName = name;
       _registerClass(wc);
@@ -210,21 +180,23 @@ final class OsdLayer {
   // --- layout ---------------------------------------------------------------
 
   void resize(int width, int height) {
-    _size = _Size(width, height);
+    _width = width;
+    _height = height;
     _rebuildDib();
     _moveWindow(_hwnd, 0, 0, width, height, 0);
   }
 
-  void show() => _showWindow(_hwnd, 5);
+  void show() => _showWindow(_hwnd, _swShow);
 
-  void hide() => _showWindow(_hwnd, 0);
+  void hide() => _showWindow(_hwnd, _swHide);
 
+  /// Puts the layer back above the mpv child without touching size or focus.
+  /// Z-order does not survive fullscreen transitions; raising is idempotent.
   void raise() {
-    _setWindowPos(_hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+    _setWindowPos(_hwnd, 0 /* HWND_TOP */, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
   }
 
   void destroy() {
-    _live.remove(_hwnd);
     _freeDib();
     if (_isWindow(_hwnd) != 0) {
       _destroyWindow(_hwnd);
@@ -235,17 +207,17 @@ final class OsdLayer {
 
   /// Pushes a premultiplied BGRA frame to the window.
   ///
-  /// [pixels] is row-major RGBA with premultiplied alpha — exactly what
-  /// Flutter's `Image.toByteData(rawRgba)` produces apart from the R/B swap,
-  /// done here in one pass. OSD frames arrive at most ~30/s for a 1080p
-  /// window, so the 2M-pixel shuffle costs a few milliseconds of the 33 ms
-  /// budget.
+  /// [pixels] is row-major RGBA with premultiplied alpha — what Flutter's
+  /// `Image.toByteData(rawRgba)` produces apart from the R/B swap, done here
+  /// in one pass over 1080p-worth of bytes, a few milliseconds of the 33 ms
+  /// frame budget at 30 fps.
   void present(Uint8List pixels) {
-    final int count = _size.width * _size.height * 4;
-    if (_dibBits == null || pixels.length < count) {
+    final int count = _width * _height * 4;
+    final Pointer<Uint8>? bits = _dibBits;
+    if (bits == null || pixels.length < count) {
       return;
     }
-    final Uint8List dst = _dibBits!.asTypedList(count);
+    final Uint8List dst = bits.asTypedList(count);
     for (int i = 0; i < count; i += 4) {
       final int r = pixels[i];
       dst[i] = pixels[i + 2]; // B
@@ -265,15 +237,15 @@ final class OsdLayer {
         ..x = 0
         ..y = 0;
       sizePoint.ref
-        ..x = _size.width
-        ..y = _size.height;
+        ..x = _width
+        ..y = _height;
       blend.ref
         ..blendOp = 0 // AC_SRC_OVER
         ..blendFlags = 0
         ..sourceConstantAlpha = 255
         ..alphaFormat = 1; // AC_SRC_ALPHA — the bitmap is premultiplied
-      _updateLayeredWindow(_hwnd, 0, dstPoint, sizePoint, _dibDc ?? 0, srcPoint, 0,
-          blend.cast<Void>(), _ulwAlpha);
+      _updateLayeredWindow(_hwnd, 0, dstPoint, sizePoint, _dibDc ?? 0, srcPoint, 0, blend,
+          _ulwAlpha);
     } finally {
       calloc.free(dstPoint);
       calloc.free(srcPoint);
@@ -288,8 +260,8 @@ final class OsdLayer {
     try {
       bmi.ref.bmiHeader
         ..biSize = sizeOf<_BitmapInfoHeader>()
-        ..biWidth = _size.width
-        ..biHeight = -_size.height // top-down
+        ..biWidth = _width
+        ..biHeight = -_height // top-down
         ..biPlanes = 1
         ..biBitCount = 32
         ..biCompression = 0 // BI_RGB
@@ -325,28 +297,6 @@ final class OsdLayer {
     }
     _dibBits = null;
   }
-
-  // --- messages ---------------------------------------------------------------
-
-  int _wndProc(int hwnd, int msg, int wParam, int lParam) {
-    switch (msg) {
-      case _wmNcHitTest:
-        // Always see-through. The chrome is display-only; the windows below
-        // (mpv's child, then the Flutter view) own the pointer.
-        return _htTransparent;
-      default:
-        // The class is ours; baseline housekeeping (WM_NCCALCSIZE, erase,
-        // WM_GETOBJECT for accessibility) goes to the default procedure.
-        return _defWindowProc(hwnd, msg, wParam, lParam);
-    }
-  }
-}
-
-class _Size {
-  _Size(this.width, this.height);
-
-  final int width;
-  final int height;
 }
 
 final class _Point extends Struct {

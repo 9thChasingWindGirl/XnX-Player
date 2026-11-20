@@ -10,6 +10,7 @@ import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_highlight.dart';
 import '../../ui/core/tv_scale.dart';
+import '../../ui/core/tv_focusable.dart';
 import '../../ui/core/focus_zone.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/widgets/ps_button.dart';
@@ -120,7 +121,8 @@ class _HomePageState extends State<HomePage> {
     if (order.isEmpty) {
       return all;
     }
-    int rank(_Row row) => order.indexOf(row.id) < 0 ? order.length : order.indexOf(row.id);
+    bool known(_Row row) => order.contains(row.id);
+    int rank(_Row row) => known(row) ? order.indexOf(row.id) : order.length;
     return all.toList()..sort(( _Row a, _Row b) => rank(a).compareTo(rank(b)));
   }
 

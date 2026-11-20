@@ -99,8 +99,15 @@ class UpdateService {
       if (!tag.startsWith('nightly-')) {
         continue;
       }
-      final UpdateCandidate candidate = _releaseCandidate(release)
-        ..version = tag.substring('nightly-'.length);
+      final UpdateCandidate raw = _releaseCandidate(release);
+      final UpdateCandidate candidate = UpdateCandidate(
+        version: tag.substring('nightly-'.length),
+        name: raw.name,
+        assetUrl: raw.assetUrl,
+        notes: raw.notes,
+        publishedAt: raw.publishedAt,
+        isPrerelease: raw.isPrerelease,
+      );
       if (best == null || compareVersions(candidate.version, best.version) > 0) {
         best = candidate;
       }

@@ -355,7 +355,7 @@ class HeroCarousel extends StatelessWidget {
                         style: PsType.micro.copyWith(
                           fontSize: 14,
                           shadows: <Shadow>[
-                            Shadow(color: const Color(0xB3000000), blurRadius: 6),
+                            const Shadow(color: Color(0xB3000000), blurRadius: 6),
                           ],
                         ),
                       ),

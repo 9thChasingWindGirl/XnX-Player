@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'osd_chrome.dart';
 import '../../design/ps_tokens.dart';
 import '../../playback/mpv/mpv_player.dart';
 import '../../playback/mpv/mpv_window.dart';
@@ -30,7 +31,6 @@ class OsdOverlay {
   final MpvPlayer _player;
 
   ui.Size _size = ui.Size.zero;
-  ui.Image? _lastFrame;
 
   /// Seek fraction while the pointer drags the bar; the knob follows the
   /// pointer instead of the clock, and the seek lands on release.
@@ -227,7 +227,10 @@ class OsdOverlay {
     );
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();
-    final ui.Canvas canvas = ui.Canvas(recorder, _size);
+    final ui.Canvas canvas = ui.Canvas(
+      recorder,
+      ui.Rect.fromLTWH(0, 0, _size.width, _size.height),
+    );
     OsdChrome.paint(canvas, _size, model);
     final ui.Image image = await recorder.endRecording().toImage(
           _size.width.round(),

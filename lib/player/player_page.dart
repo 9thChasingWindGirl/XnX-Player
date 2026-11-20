@@ -19,7 +19,7 @@ import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
 import '../playback/mpv/mpv_window.dart';
-import '../osd/osd_overlay.dart';
+import 'osd/osd_overlay.dart';
 import '../playback/mpv/video_surface.dart';
 import '../ui/core/tv_scale.dart';
 import 'osd_bridge.dart';

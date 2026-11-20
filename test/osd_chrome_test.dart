@@ -57,6 +57,7 @@ void main() {
         volume: 80,
         muted: false,
         badges: <String>['HEVC'],
+        accent: ui.Color(0xFF0070CC),
         hoverSeek: false,
       );
       expect(idle.position, 120);
@@ -69,6 +70,7 @@ void main() {
         volume: 80,
         muted: false,
         badges: <String>[],
+        accent: ui.Color(0xFF0070CC),
         scrubbing: 0.7,
         hoverSeek: true,
       );

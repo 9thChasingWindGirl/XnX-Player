@@ -736,7 +736,7 @@ class _MaximizeListener extends WindowListener {
     // state through the widget tree is not possible from here, so a static
     // notifier would be needed. Simpler: the shell polls nothing and instead
     // updates on its own toggle plus these events via the singleton below.
-    WindowMaximizeState.instance.value = value;
+    WindowMaximizeState.instance.value.value = value;
   }
 }
 
