@@ -258,6 +258,23 @@ class AppStore extends ChangeNotifier {
     return source.children(container);
   }
 
+  /// The full record for a hub page, with the resume bookmark folded in.
+  ///
+  /// A failure here must never cost the user the page: the hub already has
+  /// everything a shelf knows, so a source that is offline or a server that
+  /// drops the extra fields simply leaves the hub with less to say.
+  Future<MediaItem> details(MediaItem item) async {
+    final SourceConfig? config = _configFor(item);
+    if (config == null) {
+      return item;
+    }
+    try {
+      return _withResume(await _sourceFor(config).details(item));
+    } on Object {
+      return item;
+    }
+  }
+
   SourceConfig? _configFor(MediaItem item) {
     for (final SourceConfig config in sources) {
       if (config.id == item.sourceId) {

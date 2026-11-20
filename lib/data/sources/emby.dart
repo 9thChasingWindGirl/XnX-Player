@@ -122,6 +122,185 @@ class EmbySource extends MediaSource {
       'ParentBackdropItemId,ParentBackdropImageTags,ParentThumbItemId,'
       'ParentThumbImageTag,SeriesId,SeriesPrimaryImageTag';
 
+  /// What a hub page needs on top of [_fields]. Kept separate because these are
+  /// per-item costs — `People` alone is a few kilobytes — and a browse of 80
+  /// titles has no use for any of them.
+  static const String _detailFields = '$_fields,'
+      'Taglines,Genres,People,Studios,OfficialRating,MediaSources';
+
+  /// The full record for one item.
+  ///
+  /// `/Users/{uid}/Items/{id}` returns the same shape as the list endpoint, so
+  /// the projection is reused and then enriched: the extra fields are simply
+  /// absent from a list response, which is exactly why the hub used to look
+  /// empty next to what the server actually knew.
+  @override
+  Future<MediaItem> details(MediaItem item) async {
+    await _ensureAuth();
+    final String nativeId = item.id.contains('::')
+        ? item.id.split('::').last
+        : item.id;
+    final Map<String, dynamic> data = await Http.getJson(
+      _uri('/Users/$_userId/Items/$nativeId', <String, String>{'Fields': _detailFields}),
+      headers: _headers,
+    );
+    final MediaItem? parsed = _parse(data);
+    if (parsed == null) {
+      return item;
+    }
+    return parsed.copyWith(
+      tagline: _first(data['Taglines']),
+      genres: _strings(data['Genres']),
+      people: _people(data['People']),
+      studio: _studio(data['Studios']),
+      officialRating: data['OfficialRating'] as String?,
+      tech: _tech(data['MediaSources']),
+    );
+  }
+
+  static String? _first(Object? raw) {
+    if (raw is List && raw.isNotEmpty) {
+      final Object? value = raw.first;
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  static List<String> _strings(Object? raw) {
+    if (raw is! List) {
+      return const <String>[];
+    }
+    return raw
+        .whereType<String>()
+        .where((String value) => value.trim().isNotEmpty)
+        .map((String value) => value.trim())
+        .toList(growable: false);
+  }
+
+  static String? _studio(Object? raw) {
+    if (raw is! List) {
+      return null;
+    }
+    for (final Object? entry in raw) {
+      if (entry is Map && entry['Name'] is String) {
+        final String name = (entry['Name'] as String).trim();
+        if (name.isNotEmpty) {
+          return name;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Credits, in the order the server listed them (cast first, then crew).
+  ///
+  /// A portrait is only built for people the server actually has an image for:
+  /// requesting `/Images/Primary` for a person without one returns a 404 per
+  /// face, which on a 30-person row is 30 wasted round-trips.
+  List<MediaPerson> _people(Object? raw) {
+    if (raw is! List) {
+      return const <MediaPerson>[];
+    }
+    final List<MediaPerson> out = <MediaPerson>[];
+    for (final Object? entry in raw) {
+      if (entry is! Map) {
+        continue;
+      }
+      final Object? name = entry['Name'];
+      if (name is! String || name.trim().isEmpty) {
+        continue;
+      }
+      final Object? id = entry['Id'];
+      final Object? tag = entry['PrimaryImageTag'];
+      final String? portrait = id is String && tag is String && tag.isNotEmpty
+          ? _imageUrl(id, 'Primary', tag: tag, maxHeight: 320)
+          : null;
+      out.add(
+        MediaPerson(
+          name: name.trim(),
+          role: entry['Role'] is String ? (entry['Role'] as String).trim() : null,
+          job: entry['Type'] is String && entry['Type'] != 'Actor'
+              ? _jobLabel(entry['Type'] as String)
+              : null,
+          type: entry['Type'] is String ? entry['Type'] as String : 'Actor',
+          imageUrl: portrait,
+          headers: <String, String>{'X-Emby-Token': _tokenValue},
+        ),
+      );
+    }
+    return out;
+  }
+
+  static String _jobLabel(String type) => switch (type) {
+        'Director' => '导演',
+        'Writer' => '编剧',
+        'Producer' => '制片',
+        'Composer' => '音乐',
+        'GuestStar' => '客串',
+        _ => type,
+      };
+
+  /// "2160p · HEVC · EAC3 5.1" from the first media source's streams.
+  ///
+  /// The value has to survive a transcoded file as well: what is printed is
+  /// whatever the server reports for the source it would actually play.
+  static String? _tech(Object? raw) {
+    if (raw is! List || raw.isEmpty) {
+      return null;
+    }
+    final Object? first = raw.first;
+    if (first is! Map) {
+      return null;
+    }
+    final Object? streams = first['MediaStreams'];
+    if (streams is! List) {
+      return null;
+    }
+    String? video;
+    String? audio;
+    for (final Object? entry in streams) {
+      if (entry is! Map) {
+        continue;
+      }
+      final String type = entry['Type'] is String ? entry['Type'] as String : '';
+      if (type == 'Video' && video == null) {
+        final int height = (entry['Height'] as num?)?.toInt() ?? 0;
+        final String codec = (entry['Codec'] as String? ?? '').toUpperCase();
+        final String range = entry['VideoRange'] is String ? entry['VideoRange'] as String : '';
+        video = <String>[
+          if (height >= 2160)
+            '2160p'
+          else if (height >= 1080)
+            '1080p'
+          else if (height >= 720)
+            '720p'
+          else if (height > 0)
+            '${height}p',
+          if (codec.isNotEmpty) codec,
+          if (range.isNotEmpty && range.toUpperCase() == 'HDR') 'HDR',
+        ].join(' ');
+      } else if (type == 'Audio' && audio == null) {
+        final String codec = (entry['Codec'] as String? ?? '').toUpperCase();
+        final int channels = (entry['Channels'] as num?)?.toInt() ?? 0;
+        final String layout = switch (channels) {
+          1 => '1.0',
+          2 => '2.0',
+          6 => '5.1',
+          8 => '7.1',
+          _ => channels > 0 ? '${channels}ch' : '',
+        };
+        audio = <String>[codec, layout].where((String part) => part.isNotEmpty).join(' ');
+      }
+    }
+    final List<String> parts = <String>[
+      if (video != null && video.isNotEmpty) video,
+      if (audio != null && audio.isNotEmpty) audio,
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
   List<MediaItem> _items(Map<String, dynamic> data) {
     final Object? raw = data['Items'];
     if (raw is! List) {

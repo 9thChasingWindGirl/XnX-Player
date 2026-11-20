@@ -65,6 +65,7 @@ class LocalSource extends MediaSource {
             path: entity.path,
             meta: _sizeLabel(stat.size),
             badge: _resolutionBadge(name),
+            tech: _techFromName(name),
             posterUrl: art.best(ArtKind.poster)?.url,
             backdropUrl: art.best(ArtKind.backdrop)?.url,
             artwork: art,
@@ -184,6 +185,58 @@ class LocalSource extends MediaSource {
       return 'HD';
     }
     return '';
+  }
+
+  /// One technical line read off the file name: `2160p · HEVC · EAC3 · HDR`.
+  ///
+  /// A local file has no metadata server behind it, and the filename is the only
+  /// thing that knows the picture is 4K or the audio is Atmos. It is a hint, not
+  /// a fact — which is why it is shown as one quiet line and never as a badge
+  /// the UI would act on.
+  static String? _techFromName(String name) {
+    final String lower = name.toLowerCase();
+    final String? resolution = lower.contains('2160') || lower.contains('4k')
+        ? '2160p'
+        : lower.contains('1080')
+            ? '1080p'
+            : lower.contains('720')
+                ? '720p'
+                : null;
+    final String? codec = lower.contains('x265') || lower.contains('h265') || lower.contains('hevc')
+        ? 'HEVC'
+        : lower.contains('x264') || lower.contains('h264') || lower.contains('avc')
+            ? 'H.264'
+            : lower.contains('av1')
+                ? 'AV1'
+                : null;
+    // Order matters: `dts-hd` and `ddp5.1` contain the shorter tokens.
+    final String? audio = lower.contains('truehd') || lower.contains('atmos')
+        ? (lower.contains('atmos') ? 'TrueHD Atmos' : 'TrueHD')
+        : lower.contains('dts-hd')
+            ? 'DTS-HD'
+            : lower.contains('dts')
+                ? 'DTS'
+                : lower.contains('ddp') || lower.contains('eac3') || lower.contains('dd+')
+                    ? 'EAC3'
+                    : lower.contains('ac3')
+                        ? 'AC3'
+                        : lower.contains('aac')
+                            ? 'AAC'
+                            : null;
+    final String? hdr = lower.contains('dolby.vision') || lower.contains('dovi') || lower.contains('dv.')
+        ? 'Dolby Vision'
+        : lower.contains('hdr10+')
+            ? 'HDR10+'
+            : lower.contains('hdr')
+                ? 'HDR'
+                : null;
+    final List<String> parts = <String>[
+      if (resolution != null) resolution,
+      if (codec != null) codec,
+      if (audio != null) audio,
+      if (hdr != null) hdr,
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
   }
 
   static String _sizeLabel(int bytes) {

@@ -9,6 +9,42 @@ enum SourceKind { local, directUrl, emby, jellyfin, iptv, openlist, webdav }
 
 enum MediaKind { movie, series, season, episode, channel, folder, file, program }
 
+/// One credited person on a detail page.
+///
+/// Deliberately flat: a name, what they did, and a portrait when the server has
+/// one. Cast and crew share the type because the UI treats them the same way —
+/// a row of faces with two lines of text — and the difference is carried by
+/// [role] ("饰 尼奥" vs "导演").
+class MediaPerson {
+  const MediaPerson({
+    required this.name,
+    this.role,
+    this.job,
+    this.type = 'Actor',
+    this.imageUrl,
+    this.headers = const <String, String>{},
+  });
+
+  final String name;
+
+  /// Character played, for cast.
+  final String? role;
+
+  /// Job title, for crew ("导演", "编剧").
+  final String? job;
+
+  /// 'Actor' / 'Director' / 'Writer' ... as the server labels it.
+  final String type;
+
+  final String? imageUrl;
+  final Map<String, String> headers;
+
+  /// The second line of the tile: the character for cast, the job for crew.
+  String? get caption => role ?? job;
+
+  bool get isCast => type == 'Actor';
+}
+
 /// One entry in the UI, whatever its backend.
 ///
 /// [id] is globally unique and stable (`sourceId::nativeId`), so progress,
@@ -37,6 +73,12 @@ class MediaItem {
     this.year,
     this.rating,
     this.playable = true,
+    this.tagline,
+    this.genres = const <String>[],
+    this.people = const <MediaPerson>[],
+    this.studio,
+    this.officialRating,
+    this.tech,
   });
 
   final String id;
@@ -79,6 +121,37 @@ class MediaItem {
   final int? year;
   final double? rating;
   final bool playable;
+
+  /// Marketing line above the summary ("来自 8 月 15 日起，无处可逃").
+  final String? tagline;
+
+  /// Genres as the server spells them, in its own order.
+  final List<String> genres;
+
+  /// Cast then crew, already ordered by the server (`People` order).
+  final List<MediaPerson> people;
+
+  /// Studio / network, when the source distinguishes one.
+  final String? studio;
+
+  /// Age rating: "PG-13", "TV-MA", "R".
+  final String? officialRating;
+
+  /// One-line technical summary — "2160p · HEVC · EAC3 5.1" — for a detail page.
+  ///
+  /// A joined string rather than three fields because the only consumer paints
+  /// it as one line, and a filename-derived value cannot fill three fields
+  /// honestly (a local file knows "2160p" from its name but nothing about the
+  /// bit depth).
+  final String? tech;
+
+  /// Cast with a role, which is what a detail page shows first.
+  List<MediaPerson> get cast =>
+      people.where((MediaPerson p) => p.isCast).toList(growable: false);
+
+  /// Directors, writers and everyone else the server listed after the cast.
+  List<MediaPerson> get crew =>
+      people.where((MediaPerson p) => !p.isCast).toList(growable: false);
 
   bool get isPlayable => playable && kind != MediaKind.folder && kind != MediaKind.season;
 
@@ -167,6 +240,15 @@ class MediaItem {
     String? group,
     Duration? resumeAt,
     bool? playable,
+    int? year,
+    double? rating,
+    String? tagline,
+    List<String>? genres,
+    List<MediaPerson>? people,
+    String? studio,
+    String? officialRating,
+    String? tech,
+    Artwork? artwork,
   }) {
     return MediaItem(
       id: id,
@@ -183,13 +265,20 @@ class MediaItem {
       badge: badge ?? this.badge,
       posterUrl: posterUrl ?? this.posterUrl,
       backdropUrl: backdropUrl ?? this.backdropUrl,
+      artwork: artwork ?? this.artwork,
       headers: headers ?? this.headers,
       favorite: favorite ?? this.favorite,
       group: group ?? this.group,
       resumeAt: resumeAt ?? this.resumeAt,
-      year: year,
-      rating: rating,
+      year: year ?? this.year,
+      rating: rating ?? this.rating,
       playable: playable ?? this.playable,
+      tagline: tagline ?? this.tagline,
+      genres: genres ?? this.genres,
+      people: people ?? this.people,
+      studio: studio ?? this.studio,
+      officialRating: officialRating ?? this.officialRating,
+      tech: tech ?? this.tech,
     );
   }
 }

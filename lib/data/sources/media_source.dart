@@ -110,6 +110,14 @@ abstract class MediaSource {
   /// Drill-down for series / folders / seasons.
   Future<List<MediaItem>> children(MediaItem container) async => const <MediaItem>[];
 
+  /// The richer record behind one item's hub page.
+  ///
+  /// Lists are projections — a shelf needs a poster, a title and a bar, and
+  /// asking 80 items for their cast would make every browse slow. A hub needs
+  /// tagline, genres, credits and technical detail, so it asks once, for one
+  /// item. Sources that keep no more than the projection simply return [item].
+  Future<MediaItem> details(MediaItem item) async => item;
+
   /// The URL mpv should open. May involve a backend round-trip (AList raw URL).
   Future<String> resolve(MediaItem item) async {
     final String? path = item.path;

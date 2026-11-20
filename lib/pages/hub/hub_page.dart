@@ -42,6 +42,14 @@ class HubPage extends StatefulWidget {
 
 class _HubPageState extends State<HubPage> {
   List<MediaItem> _children = <MediaItem>[];
+
+  /// The enriched record: tagline, genres, credits and technical detail.
+  ///
+  /// The item the shelf handed over is a *projection* — enough to draw a card.
+  /// Null until the source answers, and it stays null when the source has
+  /// nothing more to say, in which case the page simply shows less.
+  MediaItem? _detail;
+
   bool _loading = false;
   String? _error;
   double _age = 0;
@@ -79,11 +87,21 @@ class _HubPageState extends State<HubPage> {
     final bool drillable = item.kind == MediaKind.series ||
         item.kind == MediaKind.folder ||
         item.kind == MediaKind.season;
-    if (!drillable) {
-      return;
+    if (drillable) {
+      setState(() => _loading = true);
     }
-    setState(() => _loading = true);
     try {
+      // The full record first: it is what the page is built from, and a movie
+      // needs nothing else. `details` swallows its own failures and returns the
+      // projection, so this can never cost the page.
+      final MediaItem full = await AppStore.instance.details(item);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _detail = full);
+      if (!drillable) {
+        return;
+      }
       final List<MediaItem> children = await AppStore.instance.children(item);
       if (!mounted) {
         return;
@@ -105,7 +123,10 @@ class _HubPageState extends State<HubPage> {
 
   @override
   Widget build(BuildContext context) {
-    final MediaItem item = widget.item;
+    final MediaItem item = _detail ?? widget.item;
+    // A series spends the bottom of the page on episodes; a movie has nothing
+    // to put there, so the credits take that slot instead of an empty stage.
+    final bool showEpisodes = _children.isNotEmpty;
     return PsPage(
       palette: item.palette,
       child: MotionBuilder(
@@ -125,8 +146,8 @@ class _HubPageState extends State<HubPage> {
               Positioned(
                 right: -80 - 40 * (1 - artArrive),
                 top: -90,
-                width: 1180,
-                height: 900,
+                width: 1320,
+                height: 1000,
                 child: Opacity(
                   opacity: 0.35 + 0.65 * artArrive,
                   child: _KeyArt(item: item),
@@ -134,77 +155,16 @@ class _HubPageState extends State<HubPage> {
               ),
               Positioned(
                 left: PsSpace.safeX,
-                top: 120 + 18 * (1 - arrive),
-                width: 980,
+                top: 92 + 18 * (1 - arrive),
+                width: 1180,
                 child: Opacity(
                   opacity: arrive,
-                  child: Column(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(
-                        _sourceLabel(item),
-                        style: PsType.eyebrow.copyWith(
-                          color: Color.lerp(item.accentColor, PsColor.text, 0.45),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      TitleTreatment(
-                        item: item,
-                        style: PsType.hero,
-                        maxWidth: 900,
-                        logoHeight: 96,
-                        maxLines: 2,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _meta(item),
-                        style: PsType.meta.copyWith(color: PsColor.text.withValues(alpha: 0.78)),
-                      ),
-                      if ((item.overview ?? '').isNotEmpty) ...<Widget>[
-                        const SizedBox(height: 26),
-                        Text(
-                          item.overview!,
-                          maxLines: 4,
-                          overflow: TextOverflow.ellipsis,
-                          style: PsType.body.copyWith(
-                            fontSize: 24,
-                            height: 1.5,
-                            color: PsColor.text.withValues(alpha: 0.84),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 36),
-                      Row(
-                        children: <Widget>[
-                          PsButton(
-                            label: item.progress > 0.02 ? S.resume : S.play,
-                            icon: Icons.play_arrow_rounded,
-                            primary: true,
-                            width: 220,
-                            accent: item.accentColor,
-                            onSelect: () => widget.onPlay(item, const <MediaItem>[]),
-                          ),
-                          const SizedBox(width: 20),
-                          PsIconButton(
-                            icon: _favorite
-                                ? Icons.favorite_rounded
-                                : Icons.favorite_border_rounded,
-                            accent: item.accentColor,
-                            selected: _favorite,
-                            onSelect: () => setState(() {
-                              _favorite = !_favorite;
-                              AppStore.instance.toggleFavorite(item);
-                            }),
-                          ),
-                          const SizedBox(width: 16),
-                          PsButton(
-                            label: S.back,
-                            icon: Icons.arrow_back_rounded,
-                            width: 168,
-                            onSelect: () => Navigator.of(context).maybePop(),
-                          ),
-                        ],
-                      ),
+                      _Poster(item: item),
+                      const SizedBox(width: 48),
+                      Expanded(child: _Info(item: item, favorite: _favorite, onFavorite: _toggleFavorite, onPlay: _play, onBack: () => Navigator.of(context).maybePop())),
                     ],
                   ),
                 ),
@@ -212,17 +172,17 @@ class _HubPageState extends State<HubPage> {
               if (_loading)
                 const Positioned(
                   left: PsSpace.safeX,
-                  top: 720,
+                  top: 760,
                   child: Text(S.loading, style: PsType.body),
                 ),
               if (_error != null)
                 Positioned(
                   left: PsSpace.safeX,
-                  top: 720,
+                  top: 760,
                   width: 900,
                   child: Text(_error!, style: PsType.body.copyWith(color: PsColor.danger)),
                 ),
-              if (_children.isNotEmpty)
+              if (showEpisodes)
                 Positioned(
                   left: 0,
                   top: 742,
@@ -234,12 +194,36 @@ class _HubPageState extends State<HubPage> {
                       onSelect: (MediaItem episode) => widget.onPlay(episode, _children),
                     ),
                   ),
+                )
+              else if (item.cast.isNotEmpty && !_loading)
+                Positioned(
+                  left: 0,
+                  top: 742,
+                  width: 1920,
+                  child: Opacity(
+                    opacity: shelfArrive,
+                    child: _CastShelf(people: item.cast),
+                  ),
                 ),
             ],
           );
         },
       ),
     );
+  }
+
+  void _toggleFavorite() {
+    final MediaItem item = _detail ?? widget.item;
+    setState(() => _favorite = !_favorite);
+    AppStore.instance.toggleFavorite(item);
+  }
+
+  /// A season or a folder is not playable itself: the button plays its first
+  /// child, which is what "继续播放" means on a season cover.
+  void _play() {
+    final MediaItem item = _detail ?? widget.item;
+    final MediaItem? first = _children.isNotEmpty ? _children.first : null;
+    widget.onPlay(first ?? item, _children);
   }
 
   static String _sourceLabel(MediaItem item) => switch (item.sourceKind) {
@@ -251,16 +235,397 @@ class _HubPageState extends State<HubPage> {
         SourceKind.directUrl => 'URL',
         SourceKind.local => '本地',
       };
+}
 
-  static String _meta(MediaItem item) {
-    final List<String> parts = <String>[
-      if (item.year != null) '${item.year}',
-      if (item.duration != null) item.runtimeLabel,
-      if (item.rating != null) '★ ${item.rating!.toStringAsFixed(1)}',
-      if (item.group != null) item.group!,
-      if (item.badge != null) item.badge!,
-    ];
-    return parts.isEmpty ? (item.meta ?? '') : parts.join('   ·   ');
+/// 2:3 cover at the left of the page, the way a shelf in a shop faces you.
+class _Poster extends StatelessWidget {
+  const _Poster({required this.item});
+
+  final MediaItem item;
+
+  static const double width = 300;
+  static const double height = 450;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Color> art = item.palette;
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(PsRadius.cardLarge),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(color: Color(0x99000000), blurRadius: 48, offset: Offset(0, 20)),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(PsRadius.cardLarge),
+        child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[art[1], art[0]],
+                ),
+              ),
+            ),
+            if (item.hasPoster)
+              posterImage(
+                item.posterUrl!,
+                headers: item.headers,
+                errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
+                    const SizedBox.shrink(),
+              ),
+            // A hairline keeps a dark poster from melting into a dark stage.
+            DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(PsRadius.cardLarge),
+                border: Border.all(color: PsColor.hairline),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Everything to the right of the cover: title, facts, copy, genres, actions.
+class _Info extends StatelessWidget {
+  const _Info({
+    required this.item,
+    required this.favorite,
+    required this.onFavorite,
+    required this.onPlay,
+    required this.onBack,
+  });
+
+  final MediaItem item;
+  final bool favorite;
+  final VoidCallback onFavorite;
+  final VoidCallback onPlay;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final double started = item.resumeAt?.inSeconds.toDouble() ?? 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Text(
+          _HubPageState._sourceLabel(item),
+          style: PsType.eyebrow.copyWith(
+            color: Color.lerp(item.accentColor, PsColor.text, 0.45),
+          ),
+        ),
+        const SizedBox(height: 14),
+        TitleTreatment(
+          item: item,
+          style: PsType.page,
+          maxWidth: 800,
+          logoHeight: 84,
+          maxLines: 2,
+        ),
+        const SizedBox(height: 18),
+        _Facts(item: item),
+        if ((item.tagline ?? '').isNotEmpty) ...<Widget>[
+          const SizedBox(height: 16),
+          Text(
+            item.tagline!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: PsType.body.copyWith(
+              fontSize: 22,
+              // Upstream has no italic token and we do not want one: a slanted
+              // CJK face is a synthetic skew that reads as a rendering bug.
+              height: 1.4,
+              color: PsColor.text.withValues(alpha: 0.62),
+            ),
+          ),
+        ],
+        if ((item.overview ?? '').isNotEmpty) ...<Widget>[
+          const SizedBox(height: 14),
+          Text(
+            item.overview!,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: PsType.body.copyWith(
+              fontSize: 21,
+              height: 1.5,
+              color: PsColor.text.withValues(alpha: 0.84),
+            ),
+          ),
+        ],
+        if (item.genres.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 18),
+          _Chips(values: item.genres),
+        ],
+        if ((item.tech ?? '').isNotEmpty) ...<Widget>[
+          const SizedBox(height: 14),
+          Text(
+            item.tech!,
+            style: PsType.micro.copyWith(fontSize: 16, letterSpacing: 0.6),
+          ),
+        ],
+        const SizedBox(height: 30),
+        Row(
+          children: <Widget>[
+            PsButton(
+              label: item.progress > 0.02 ? S.resume : S.play,
+              icon: Icons.play_arrow_rounded,
+              primary: true,
+              width: 232,
+              accent: item.accentColor,
+              onSelect: onPlay,
+            ),
+            const SizedBox(width: 18),
+            PsIconButton(
+              icon: favorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+              accent: item.accentColor,
+              selected: favorite,
+              onSelect: onFavorite,
+            ),
+            const SizedBox(width: 14),
+            PsButton(
+              label: S.back,
+              icon: Icons.arrow_back_rounded,
+              width: 148,
+              onSelect: onBack,
+            ),
+            if (started > 5) ...<Widget>[
+              const SizedBox(width: 20),
+              Text(
+                '从 ${_clock(item.resumeAt!)} 继续',
+                style: PsType.micro.copyWith(fontSize: 15),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  static String _clock(Duration value) {
+    final int minutes = value.inMinutes;
+    return '${minutes ~/ 60}:${(minutes % 60).toString().padLeft(2, '0')}';
+  }
+}
+
+/// The one line of facts under the title: year · certificate · runtime ·
+/// score · badge. Plex puts exactly this row there, and it is the difference
+/// between "a poster with a name" and "a film you can decide about".
+class _Facts extends StatelessWidget {
+  const _Facts({required this.item});
+
+  final MediaItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Widget> parts = <Widget>[];
+    void add(Widget widget) {
+      if (parts.isNotEmpty) {
+        parts.add(const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12),
+          child: Text('·', style: TextStyle(fontSize: 18, color: Color(0x59FFFFFF))),
+        ));
+      }
+      parts.add(widget);
+    }
+
+    final TextStyle style = PsType.meta.copyWith(
+      fontSize: 20,
+      color: PsColor.text.withValues(alpha: 0.82),
+    );
+
+    if (item.year != null) {
+      add(Text('${item.year}', style: style));
+    }
+    if ((item.officialRating ?? '').isNotEmpty) {
+      // A certificate is a plate, not a word: it is the one fact a parent scans
+      // for, and Plex draws it in a box for the same reason.
+      add(Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: PsColor.text.withValues(alpha: 0.45)),
+        ),
+        child: Text(
+          item.officialRating!,
+          style: style.copyWith(fontSize: 15, letterSpacing: 1.0),
+        ),
+      ));
+    }
+    if (item.duration != null) {
+      add(Text(item.runtimeLabel, style: style));
+    }
+    if (item.rating != null) {
+      add(Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          const Icon(Icons.star_rounded, size: 20, color: Color(0xFFFFC24B)),
+          const SizedBox(width: 4),
+          Text(item.rating!.toStringAsFixed(1), style: style),
+        ],
+      ));
+    }
+    if ((item.badge ?? '').isNotEmpty) {
+      add(Text(item.badge!, style: style.copyWith(fontWeight: FontWeight.w600)));
+    }
+    if ((item.studio ?? '').isNotEmpty) {
+      add(Text(item.studio!, style: style));
+    }
+    if ((item.meta ?? '').isNotEmpty && item.duration == null) {
+      add(Text(item.meta!, style: style));
+    }
+    return Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: parts);
+  }
+}
+
+/// Small hairline pills — genres, and anything else that is a tag.
+class _Chips extends StatelessWidget {
+  const _Chips({required this.values});
+
+  final List<String> values;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      children: <Widget>[
+        for (final String value in values)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(PsRadius.pill),
+              border: Border.all(color: PsColor.text.withValues(alpha: 0.28)),
+            ),
+            child: Text(
+              value,
+              style: PsType.label.copyWith(
+                fontSize: 16,
+                fontWeight: FontWeight.w400,
+                color: PsColor.text.withValues(alpha: 0.86),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Round portraits with a name and a character, scrolled horizontally.
+class _CastShelf extends StatelessWidget {
+  const _CastShelf({required this.people});
+
+  final List<MediaPerson> people;
+
+  static const double _size = 132;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: _size + 76,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.only(left: PsSpace.safeX, bottom: 14),
+            child: Text('演员', style: PsType.section.copyWith(fontSize: 20)),
+          ),
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: PsSpace.safeX),
+              clipBehavior: Clip.none,
+              itemCount: people.length,
+              separatorBuilder: (BuildContext context, int index) =>
+                  const SizedBox(width: 26),
+              itemBuilder: (BuildContext context, int index) {
+                final MediaPerson person = people[index];
+                return SizedBox(
+                  width: 160,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      _Portrait(person: person, size: _size),
+                      const SizedBox(height: 10),
+                      Text(
+                        person.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PsType.label.copyWith(fontSize: 18),
+                      ),
+                      if ((person.caption ?? '').isNotEmpty)
+                        Text(
+                          person.caption!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: PsType.micro.copyWith(fontSize: 15),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Portrait extends StatelessWidget {
+  const _Portrait({required this.person, required this.size});
+
+  final MediaPerson person;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    // Initials are the fallback, not a placeholder icon: a row of identical
+    // silhouettes says "we could not be bothered", a row of initials at least
+    // identifies who is who.
+    final String initials =
+        person.name.isEmpty ? '·' : String.fromCharCode(person.name.runes.first);
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: PsColor.text.withValues(alpha: 0.08),
+        border: Border.all(color: PsColor.hairline),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: (person.imageUrl ?? '').isEmpty
+          ? Center(
+              child: Text(
+                initials,
+                style: PsType.page.copyWith(
+                  fontSize: 44,
+                  color: PsColor.text.withValues(alpha: 0.42),
+                ),
+              ),
+            )
+          : posterImage(
+              person.imageUrl!,
+              headers: person.headers,
+              errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
+                  Center(
+                child: Text(
+                  initials,
+                  style: PsType.page.copyWith(
+                    fontSize: 44,
+                    color: PsColor.text.withValues(alpha: 0.42),
+                  ),
+                ),
+              ),
+            ),
+    );
   }
 }
 
