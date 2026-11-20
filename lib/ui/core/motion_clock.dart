@@ -73,13 +73,32 @@ class MotionScope extends InheritedNotifier<MotionClock> {
 }
 
 /// Rebuilds [builder] once per frame and hands it the frame delta.
+///
+/// A missing [MotionScope] is a wiring error and throws: a screen whose springs
+/// silently stop moving is worse than a loud failure, because nothing on screen
+/// says which of the two happened.
 class MotionBuilder extends StatelessWidget {
-  const MotionBuilder({super.key, required this.builder});
+  const MotionBuilder({super.key, required this.builder}) : _optional = false;
+
+  /// Same, but a missing [MotionScope] means "no motion" rather than an error:
+  /// [builder] runs once with `dt = 0` and the widget keeps its last frame.
+  ///
+  /// For per-frame work that is purely decorative — a ring gliding after a rail
+  /// that scrolls, a breathe — so the widget can still be pumped on its own in
+  /// a test, a golden or a preview. Anything that *has* to animate to be
+  /// correct should use the strict constructor and say so.
+  const MotionBuilder.optional({super.key, required this.builder})
+      : _optional = true;
 
   final Widget Function(BuildContext context, double dt) builder;
+  final bool _optional;
 
   @override
   Widget build(BuildContext context) {
+    if (_optional) {
+      final MotionClock? clock = MotionScope.maybeOf(context);
+      return builder(context, clock?.dt ?? 0);
+    }
     return builder(context, MotionScope.of(context).dt);
   }
 }

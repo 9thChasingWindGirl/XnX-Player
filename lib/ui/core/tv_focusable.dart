@@ -368,11 +368,14 @@ class _TvFocusableState extends State<TvFocusable> {
             children: <Widget>[
               content,
               // Only the focused item pays for a per-frame tick: it keeps the
-              // gliding ring welded to artwork that is itself still moving.
+              // gliding ring welded to artwork that is itself still moving
+              // (a rail scrolling under focus). Decorative, so it degrades to
+              // a single build when the item is mounted outside the app — a
+              // widget test, a golden — instead of failing the build.
               if (_focused && widget.reportHighlight)
                 Positioned.fill(
                   child: IgnorePointer(
-                    child: MotionBuilder(
+                    child: MotionBuilder.optional(
                       builder: (BuildContext context, double dt) {
                         _publish();
                         return const SizedBox.shrink();
