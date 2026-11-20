@@ -73,7 +73,7 @@ class _Dock extends StatelessWidget {
     final Widget? body = panel;
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        filter: ImageFilter.blur(sigmaX: PsBlur.panel, sigmaY: PsBlur.panel),
         // The dock grows upwards for a panel; the icon row keeps its place so
         // the thing you just pressed does not move out from under the cursor.
         child: AnimatedContainer(

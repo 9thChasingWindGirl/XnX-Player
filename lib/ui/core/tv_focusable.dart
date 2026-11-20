@@ -278,24 +278,25 @@ class _LocalRingPainter extends CustomPainter {
     if (!active) {
       return;
     }
+    final double gap = PsFocus.ringGap;
     final RRect ring = RRect.fromRectAndRadius(
-      Rect.fromLTWH(-4, -4, size.width + 8, size.height + 8),
-      Radius.circular(radius + 4),
+      Rect.fromLTWH(-gap, -gap, size.width + gap * 2, size.height + gap * 2),
+      Radius.circular(radius + gap),
     );
     canvas.drawRRect(
       ring,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
+        ..strokeWidth = PsFocus.ringWidth
         ..color = PsColor.focusRing,
     );
     canvas.drawRRect(
       ring,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 8
+        ..strokeWidth = PsFocus.glowWidth
         ..color = PsColor.focusGlow
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, PsFocus.glowBlur),
     );
   }
 

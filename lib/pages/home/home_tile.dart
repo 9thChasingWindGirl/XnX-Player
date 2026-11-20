@@ -32,13 +32,7 @@ class PosterCard extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(PsRadius.card),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: const Color(0xFF000000).withValues(alpha: 0.55),
-              blurRadius: 26,
-              offset: const Offset(0, 18),
-            ),
-          ],
+          boxShadow: PsElevation.cardFocused,
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(PsRadius.card),
@@ -222,13 +216,7 @@ class ChannelCard extends StatelessWidget {
             end: Alignment.bottomRight,
             colors: <Color>[art[1], art[0]],
           ),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: const Color(0xFF000000).withValues(alpha: 0.5),
-              blurRadius: 24,
-              offset: const Offset(0, 14),
-            ),
-          ],
+          boxShadow: PsElevation.cardResting,
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(PsRadius.card),

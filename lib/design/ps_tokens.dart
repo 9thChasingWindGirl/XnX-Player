@@ -36,6 +36,19 @@ abstract final class PsColor {
   static const Color scrimSoft = Color(0x8A000000);
   static const Color danger = Color(0xFFFF5D6C);
 
+  /// Outcomes a component reports (toasts, scan progress, destructive rows).
+  /// Values are the reference kit's defaults (`theme.hpp:84-86`); `danger` is
+  /// deliberately ours, see `docs/DESIGN_TOKENS.md` §7.
+  static const Color success = Color(0xFF30A46C);
+  static const Color warning = Color(0xFFF5A524);
+
+  /// Text drawn on an accent-filled control.
+  static const Color onAccent = Color(0xFFFFFFFF);
+
+  /// The hairline of light along a glass panel's edge (the kit's `light`
+  /// token, `aurora.cpp:521`): white at 22 %.
+  static const Color glassEdge = Color(0x38FFFFFF);
+
   // Focus
   static const Color focusRing = Color(0xFFFFFFFF);
   static const Color focusGlow = Color(0x59FFFFFF);
@@ -117,6 +130,90 @@ abstract final class PsRadius {
   static const double pill = 999;
 }
 
+/// Geometry of the focused control's ring.
+///
+/// The reference kit splits this into `focus_width` and `focus_gap`
+/// (`theme.hpp:99-100`); keeping both named here means the ring can be tuned in
+/// one place instead of in each focusable.
+abstract final class PsFocus {
+  static const double ringWidth = 2.5;
+
+  /// Distance between the control's edge and the ring. Matches the kit's
+  /// `focus_gap` of 4.
+  static const double ringGap = 4;
+
+  static const double glowWidth = 8;
+  static const double glowBlur = 8;
+
+  /// The stage's single gliding ring is bolder than an item's own fallback
+  /// ring: the eye has to be able to follow it across the room.
+  static const double glideGlowWidth = 14;
+  static const double glideGlowBlur = 16;
+}
+
+/// Shadows, by what the surface is doing.
+///
+/// Craft guide §5: a focused card floats (offset 10..26, softness 30..46);
+/// resting cards have none or a very faint one. A modal sheet floats higher
+/// than a card, which is why it has its own entry rather than a scale factor.
+abstract final class PsElevation {
+  static const List<BoxShadow> cardResting = <BoxShadow>[
+    BoxShadow(
+      color: Color(0x80000000),
+      blurRadius: 24,
+      offset: Offset(0, 14),
+    ),
+  ];
+
+  static const List<BoxShadow> cardFocused = <BoxShadow>[
+    BoxShadow(
+      color: Color(0x8C000000),
+      blurRadius: 26,
+      offset: Offset(0, 18),
+    ),
+  ];
+
+  /// Overlays and the detail sheet.
+  static const List<BoxShadow> sheet = <BoxShadow>[
+    BoxShadow(
+      color: Color(0x80000000),
+      blurRadius: 60,
+      offset: Offset(0, 20),
+    ),
+  ];
+
+  /// Hero artwork: it is lit by its own colour and casts a long drop. The glow
+  /// uses the artwork's accent, not one global highlight colour.
+  static List<BoxShadow> heroGlow(Color accent) {
+    return <BoxShadow>[
+      BoxShadow(color: accent.withValues(alpha: 0.30), blurRadius: 60, spreadRadius: 6),
+      BoxShadow(
+        color: const Color(0xFF000000).withValues(alpha: 0.55),
+        blurRadius: 36,
+        offset: const Offset(0, 26),
+      ),
+    ];
+  }
+}
+
+/// Blur radii for translucent panels.
+///
+/// Full-screen multi-layer blur is the fastest way to lose frames on Windows;
+/// only modal surfaces get one, and these are the only three sizes in use.
+abstract final class PsBlur {
+  /// Hint bars, toasts.
+  static const double subtle = 12;
+
+  /// The control center's dock and its panels.
+  static const double panel = 24;
+
+  /// Dialogs and the search sheet, which sit over the whole scene.
+  static const double dialog = 28;
+
+  /// How much of the panel's own tint is laid over the blurred copy.
+  static const double glassTint = 0.62;
+}
+
 /// Durations for one-shot transitions (routes, fades, panel slide). Continuous
 /// motion is spring-driven and has no duration — see `ps_motion.dart`.
 abstract final class PsMotion {
@@ -133,6 +230,26 @@ abstract final class PsMotion {
   static const double heroCrossFade = 0.42;
   static const double entrance = 0.6;
   static const double panel = 0.32;
+
+  // ---- spring presets ----
+  //
+  // Every moving thing is a spring chasing a target; what differs is how fast.
+  // The craft guide's bands are: focus 18..22, panels and sheets 12..14,
+  // colour 4..6. Naming them keeps the bands from drifting apart per widget.
+  static const double springFocus = 20;
+  static const double springPanel = 13;
+  static const double springPalette = 5;
+
+  /// Large, soft travel: layout re-centring, artwork that follows the state.
+  static const double springSoft = 10;
+
+  // ---- one-shot timing ----
+  //
+  // Arrivals start fast and stop soft (cubic/quint out); departures are shorter
+  // and use cubic in, so closing never feels slower than opening.
+  static const double staggerStep = 0.04;
+  static const double arrive = 0.35;
+  static const double depart = 0.22;
 }
 
 abstract final class PsType {

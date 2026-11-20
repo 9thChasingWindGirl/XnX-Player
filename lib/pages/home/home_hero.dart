@@ -192,18 +192,7 @@ class _HeroArt extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(PsRadius.hero),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: art[2].withValues(alpha: 0.30),
-            blurRadius: 60,
-            spreadRadius: 6,
-          ),
-          BoxShadow(
-            color: const Color(0xFF000000).withValues(alpha: 0.55),
-            blurRadius: 36,
-            offset: const Offset(0, 26),
-          ),
-        ],
+        boxShadow: PsElevation.heroGlow(art[2]),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(PsRadius.hero),

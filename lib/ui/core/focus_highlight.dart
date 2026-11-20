@@ -156,8 +156,8 @@ class _GlidePainter extends CustomPainter {
       return;
     }
     final RRect ring = RRect.fromRectAndRadius(
-      rect.inflate(4),
-      Radius.circular(radius + 4),
+      rect.inflate(PsFocus.ringGap),
+      Radius.circular(radius + PsFocus.ringGap),
     );
 
     // Glow spills the focused item's own accent, not one global highlight
@@ -167,15 +167,15 @@ class _GlidePainter extends CustomPainter {
       ring,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 14
+        ..strokeWidth = PsFocus.glideGlowWidth
         ..color = accent.withValues(alpha: 0.26 * opacity * pulse)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16),
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, PsFocus.glideGlowBlur),
     );
     canvas.drawRRect(
       ring,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
+        ..strokeWidth = PsFocus.ringWidth
         ..color = const Color(0xFFFFFFFF).withValues(alpha: opacity),
     );
   }

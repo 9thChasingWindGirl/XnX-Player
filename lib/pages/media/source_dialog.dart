@@ -153,7 +153,7 @@ class _SourceDialogState extends State<SourceDialog> {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(PsRadius.sheet),
             child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+              filter: ui.ImageFilter.blur(sigmaX: PsBlur.dialog, sigmaY: PsBlur.dialog),
               child: Container(
                 width: 1120,
                 padding: const EdgeInsets.all(52),

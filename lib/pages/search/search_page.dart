@@ -144,7 +144,7 @@ class _SearchOverlayState extends State<SearchOverlay> {
     final bool typing = _query.trim().isNotEmpty;
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+        filter: ImageFilter.blur(sigmaX: PsBlur.dialog, sigmaY: PsBlur.dialog),
         child: Container(
           height: 764,
           decoration: const BoxDecoration(
