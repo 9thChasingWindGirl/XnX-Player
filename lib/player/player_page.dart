@@ -51,6 +51,7 @@ class _PlayerPageState extends State<PlayerPage> {
   Timer? _watchdog;
   Timer? _escFallback;
   Timer? _health;
+  Timer? _uiHoverThrottle;
 
   /// Which rung of the fallback ladder the video path is on. 0 means the first
   /// choice worked; every step down costs quality but saves the picture.
@@ -84,6 +85,7 @@ class _PlayerPageState extends State<PlayerPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _watchdog?.cancel();
     _escFallback?.cancel();
+    _uiHoverThrottle?.cancel();
     _health?.cancel();
     _loadedSub?.cancel();
     _bridge?.dispose();
@@ -706,38 +708,53 @@ class _PlayerPageState extends State<PlayerPage> {
     return TvScale(
       child: Scaffold(
         backgroundColor: const Color(0xFF000000),
-        body: Stack(
-          children: <Widget>[
-            if (_error != null)
-              Positioned.fill(child: _ErrorPanel(message: _error!, hint: _hint, onBack: _close))
-            else if (showVideoState)
-              Positioned.fill(child: _LoadingPanel(title: widget.item.title, hint: _hint)),
-            if (_showDiagnostics && player != null)
-              Positioned(
-                left: PsSpace.safeX,
-                right: PsSpace.safeX,
-                bottom: PsSpace.lg,
-                child: _DiagnosticsPanel(
-                  logPath: _logPath,
-                  lines: player.logs,
-                  surfaceInfo: _surface?.diagnostics ?? '未枚举到子窗口',
-                  health: _healthText,
-                  scriptNote: _scriptNote,
-                  capsNote: _capsNote,
-                  facts: <String>[
-                    'vo=${player.getProperty('vo') ?? '—'}'
-                        ' 已配置=${player.getProperty('vo-configured') ?? '—'}'
-                        ' 实测帧率=${player.getProperty('estimated-vf-fps') ?? '—'}',
-                    '解码=${player.getProperty('hwdec-current') ?? '—'}'
-                        ' 同步=${player.getProperty('video-sync') ?? '—'}'
-                        ' 音频=${player.getProperty('ao') ?? '无'}',
-                    '画质=${player.getProperty('video-params/pixelformat') ?? '—'}'
-                        ' 色域=${player.getProperty('video-params/primaries') ?? '—'}'
-                        ' 峰值=${player.getProperty('target-peak') ?? '—'}',
-                  ],
+        body: MouseRegion(
+          // The native mpv child window stops receiving mouse events once
+          // fullscreen re-arranges the z-order (probe logs show zero
+          // `mouse-pos` updates there), so the OSD's show-on-mouse-move path
+          // would never fire. The Flutter view still sees the moves: forward
+          // them to the OSD's `show` command, throttled to one hit per hide
+          // cycle.
+          onHover: (_) {
+            if (_uiHoverThrottle?.isActive ?? false) {
+              return;
+            }
+            _uiHoverThrottle = Timer(const Duration(milliseconds: 300), () {});
+            _player?.showUi();
+          },
+          child: Stack(
+            children: <Widget>[
+              if (_error != null)
+                Positioned.fill(child: _ErrorPanel(message: _error!, hint: _hint, onBack: _close))
+              else if (showVideoState)
+                Positioned.fill(child: _LoadingPanel(title: widget.item.title, hint: _hint)),
+              if (_showDiagnostics && player != null)
+                Positioned(
+                  left: PsSpace.safeX,
+                  right: PsSpace.safeX,
+                  bottom: PsSpace.lg,
+                  child: _DiagnosticsPanel(
+                    logPath: _logPath,
+                    lines: player.logs,
+                    surfaceInfo: _surface?.diagnostics ?? '未枚举到子窗口',
+                    health: _healthText,
+                    scriptNote: _scriptNote,
+                    capsNote: _capsNote,
+                    facts: <String>[
+                      'vo=${player.getProperty('vo') ?? '—'}'
+                          ' 已配置=${player.getProperty('vo-configured') ?? '—'}'
+                          ' 实测帧率=${player.getProperty('estimated-vf-fps') ?? '—'}',
+                      '解码=${player.getProperty('hwdec-current') ?? '—'}'
+                          ' 同步=${player.getProperty('video-sync') ?? '—'}'
+                          ' 音频=${player.getProperty('ao') ?? '无'}',
+                      '画质=${player.getProperty('video-params/pixelformat') ?? '—'}'
+                          ' 色域=${player.getProperty('video-params/primaries') ?? '—'}'
+                          ' 峰值=${player.getProperty('target-peak') ?? '—'}',
+                    ],
+                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
