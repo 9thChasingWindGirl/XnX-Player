@@ -11,11 +11,13 @@ import '../core/sound/sound_manager.dart';
 import '../core/strings.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
+import '../data/sources/media_source.dart';
 import '../data/store.dart';
 import '../design/ps_tokens.dart';
 import '../pages/home/home_page.dart';
 import '../pages/hub/hub_page.dart';
 import '../pages/media/media_page.dart';
+import '../pages/media/source_dialog.dart';
 import '../pages/search/search_page.dart';
 import '../pages/settings/settings_page.dart';
 import '../player/player_page.dart';
@@ -65,6 +67,10 @@ class _ShellPageState extends State<ShellPage> {
 
   /// Mirrors the window state so the power panel can label its toggle.
   bool _fullscreen = false;
+
+  /// The source being edited in the dock, if any. Kept here rather than in the
+  /// panel because the editor is a full-screen sheet, above the whole shell.
+  SourceConfig? _sourceDialog;
 
   /// Number of pushed routes (hub, player) above the shell. While any is open
   /// the shell must stay out of the keyboard: its handlers are registered
@@ -328,6 +334,8 @@ class _ShellPageState extends State<ShellPage> {
           sources: store.sources,
           onRefresh: () => unawaited(store.refresh()),
           onAdd: _addSource,
+          onEdit: _editSource,
+          onDelete: (SourceConfig config) => unawaited(_deleteSource(config)),
         );
       case CcPanelId.sound:
         return CcSoundPanel(prefs: prefs, onChanged: _applyPrefs, hw: store.hw);
@@ -438,6 +446,19 @@ class _ShellPageState extends State<ShellPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _libraryKey.currentState?.openSourceDialog();
     });
+  }
+
+  /// Opens the editor right inside the dock: the source list stays up behind
+  /// the dialog, so saving returns to exactly the place that asked for it.
+  void _editSource(SourceConfig config) {
+    setState(() => _sourceDialog = config);
+  }
+
+  Future<void> _deleteSource(SourceConfig config) async {
+    await AppStore.instance.removeSource(config.id);
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _push(Route<void> route) async {
@@ -628,6 +649,17 @@ class _ShellPageState extends State<ShellPage> {
                 panel: _panelHost(),
               ),
             ),
+            if (_sourceDialog != null)
+              Positioned.fill(
+                child: SourceDialog(
+                  initial: _sourceDialog,
+                  onCancel: () => setState(() => _sourceDialog = null),
+                  onSave: (SourceConfig config) {
+                    setState(() => _sourceDialog = null);
+                    unawaited(AppStore.instance.addSource(config));
+                  },
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,

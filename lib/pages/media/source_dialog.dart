@@ -134,6 +134,7 @@ class _SourceDialogState extends State<SourceDialog> {
         path: path,
         token: widget.initial?.token ?? '',
         userId: widget.initial?.userId ?? '',
+        enabled: widget.initial?.enabled ?? true,
       ),
     );
   }

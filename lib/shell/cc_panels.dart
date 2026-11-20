@@ -658,17 +658,23 @@ class CcNotificationsPanel extends StatelessWidget {
 
 // ---------------------------------------------------------------- sources
 
+/// The source list. A row is focusable and opens the editor with its config
+/// prefilled; a trash button deletes without a detour through the library page.
 class CcSourcesPanel extends StatelessWidget {
   const CcSourcesPanel({
     super.key,
     required this.sources,
     required this.onRefresh,
     required this.onAdd,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   final List<SourceConfig> sources;
   final VoidCallback onRefresh;
   final VoidCallback onAdd;
+  final ValueChanged<SourceConfig> onEdit;
+  final ValueChanged<SourceConfig> onDelete;
 
   static String _kindLabel(SourceKind kind) => switch (kind) {
     SourceKind.emby => 'Emby',
@@ -684,7 +690,7 @@ class CcSourcesPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return CcPanelFrame(
       title: S.ccSources,
-      hint: sources.isEmpty ? '还没有接入任何来源' : '${sources.length} 个来源 · 在媒体库页可编辑',
+      hint: sources.isEmpty ? '还没有接入任何来源' : '${sources.length} 个来源 · 选择一行编辑',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -701,32 +707,56 @@ class CcSourcesPanel extends StatelessWidget {
                       final SourceConfig config = sources[index];
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: <Widget>[
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: config.enabled
-                                    ? PsColor.text
-                                    : PsColor.text.withValues(alpha: 0.3),
-                              ),
+                        child: TvFocusable(
+                          debugLabel: 'cc-source:${config.id}',
+                          radius: 14,
+                          onSelect: () => onEdit(config),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              color: PsColor.text.withValues(alpha: 0.05),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                config.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: PsType.label.copyWith(fontSize: 19),
-                              ),
+                            child: Row(
+                              children: <Widget>[
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: config.enabled
+                                        ? PsColor.text
+                                        : PsColor.text.withValues(alpha: 0.3),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    config.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: PsType.label.copyWith(fontSize: 19),
+                                  ),
+                                ),
+                                Text(
+                                  _kindLabel(config.kind),
+                                  style: PsType.micro.copyWith(fontSize: 14),
+                                ),
+                                const SizedBox(width: 10),
+                                // Deleting is a one-button affair: the config
+                                // only ever held a connection, and removing it
+                                // costs nothing that refresh cannot rebuild.
+                                GestureDetector(
+                                  onTap: () => onDelete(config),
+                                  child: Icon(
+                                    Icons.delete_outline_rounded,
+                                    size: 22,
+                                    color: PsColor.text.withValues(alpha: 0.55),
+                                  ),
+                                ),
+                              ],
                             ),
-                            Text(
-                              _kindLabel(config.kind),
-                              style: PsType.micro.copyWith(fontSize: 14),
-                            ),
-                          ],
+                          ),
                         ),
                       );
                     },
