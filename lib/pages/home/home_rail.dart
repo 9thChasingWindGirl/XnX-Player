@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../data/models/media_item.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/focus_ids.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/tv_focusable.dart';
 import 'home_tile.dart';
@@ -148,6 +149,7 @@ class _HomeRailState extends State<HomeRail> {
                 height: size,
                 child: TvFocusable(
                   key: ValueKey<String>(item.id),
+                  focusId: FocusIds.media(item.id),
                   radius: PsRadius.card,
                   accent: item.accentColor,
                   onSelect: () => widget.onSelect(item),

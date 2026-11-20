@@ -1,10 +1,15 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import 'core/input/gamepad.dart';
 import 'core/input/input_router.dart';
+import 'core/sound/sound_manager.dart';
+import 'data/prefs.dart';
 import 'data/store.dart';
 import 'design/ps_theme.dart';
 import 'shell/shell_page.dart';
+import 'ui/core/focus_memory.dart';
 import 'ui/core/motion_clock.dart';
 import 'ui/core/text_entry.dart';
 
@@ -31,6 +36,12 @@ class _XnXAppState extends State<XnXApp> {
     // XInput is polled on its own timer: it is a device that reports state, not
     // events, and nothing else in the app can see it.
     GamepadPoller.instance.start();
+    // Watches the focus owner so a page can come back to the item you left
+    // without every surface having to snapshot it on the way out.
+    FocusMemory.instance.install();
+    // Decoding twenty short wavs off the bundle happens once; until it lands
+    // the app is simply quiet, which is better than blocking first paint.
+    unawaited(SoundManager.instance.load());
     AppStore.instance.addListener(_syncAccessibility);
     _syncAccessibility();
   }
@@ -39,13 +50,18 @@ class _XnXAppState extends State<XnXApp> {
   void dispose() {
     GamepadPoller.instance.stop();
     InputRouter.instance.uninstall();
+    FocusMemory.instance.uninstall();
     AppStore.instance.removeListener(_syncAccessibility);
+    SoundManager.instance.dispose();
     _clock.dispose();
     super.dispose();
   }
 
   void _syncAccessibility() {
-    _clock.reduceMotion = AppStore.instance.prefs.reduceMotion;
+    final PlaybackPrefs prefs = AppStore.instance.prefs;
+    _clock.reduceMotion = prefs.reduceMotion;
+    SoundManager.instance.enabled = prefs.soundEnabled;
+    SoundManager.instance.volume = (prefs.soundVolume / 100).clamp(0.0, 1.0);
   }
 
   @override

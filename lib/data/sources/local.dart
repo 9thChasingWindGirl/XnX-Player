@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../models/artwork.dart';
 import '../models/media_item.dart';
 import 'media_source.dart';
 
@@ -49,6 +50,10 @@ class LocalSource extends MediaSource {
           continue;
         }
         final String parent = entity.parent.path;
+        // Scrapers (tinyMediaManager, Emby for Windows, …) drop artwork next
+        // to the video under fixed names; read all of them, not just a poster,
+        // so a local library gets the same hero treatment as a server one.
+        final Artwork art = _artworkFor(parent, name, siblingCache);
         out.add(
           MediaItem(
             id: '${config.id}::$parent/$name',
@@ -60,10 +65,9 @@ class LocalSource extends MediaSource {
             path: entity.path,
             meta: _sizeLabel(stat.size),
             badge: _resolutionBadge(name),
-            // Scrapers (tinyMediaManager, Emby for Windows, …) drop a
-            // poster/folder image next to the video — pick it up so the
-            // library shows real artwork instead of a letter tile.
-            posterUrl: _posterFor(parent, name, siblingCache),
+            posterUrl: art.best(ArtKind.poster)?.url,
+            backdropUrl: art.best(ArtKind.backdrop)?.url,
+            artwork: art,
           ),
         );
       }
@@ -84,46 +88,91 @@ class LocalSource extends MediaSource {
     return path;
   }
 
-  /// Finds scraped artwork for a video among its directory siblings.
+  /// Resolves artwork by the file-name conventions the whole ecosystem uses
+  /// (Emby's own table; Kodi and tinyMediaManager write the same names).
   ///
-  /// Priority: `<video-stem>-poster.*` / `<video-stem>.*` (per-movie artwork)
-  /// first, then the fixed `poster` / `folder` / `cover` conventions. The
-  /// directory listing is cached per folder — movies rarely live alone.
-  static String? _posterFor(String parent, String videoName, Map<String, List<String>> cache) {
+  /// One directory scan fills every role at once. The sibling list is cached
+  /// per folder, because a 200-title folder would otherwise stat the same
+  /// files 200 times.
+  static Artwork _artworkFor(String parent, String videoName, Map<String, List<String>> cache) {
     final List<String> siblings = cache.putIfAbsent(
       parent,
       () => Directory(parent)
           .listSync(recursive: false, followLinks: false)
           .whereType<File>()
           .map((File file) => file.path.toLowerCase())
-          .toList(growable: false),
+          .toList(growable: false)
+        ..sort(),
     );
     if (siblings.isEmpty) {
-      return null;
+      return const Artwork.empty();
     }
+
     final String lower = videoName.toLowerCase();
     final String stem = lower.contains('.') ? lower.substring(0, lower.lastIndexOf('.')) : lower;
-    const List<String> fixed = <String>['poster', 'folder', 'cover'];
-    String? best;
+
+    // Stem → path, first extension wins so the result is deterministic.
+    final Map<String, String> byStem = <String, String>{};
     for (final String path in siblings) {
       final String name = path.replaceAll('\\', '/').split('/').last;
       final int dot = name.lastIndexOf('.');
       if (dot <= 0) {
         continue;
       }
-      final String stemName = name.substring(0, dot);
       final String ext = name.substring(dot + 1);
       if (ext != 'jpg' && ext != 'jpeg' && ext != 'png' && ext != 'webp') {
         continue;
       }
-      if (stemName == stem || stemName == '$stem-poster') {
-        return path;
+      byStem.putIfAbsent(name.substring(0, dot), () => path);
+    }
+    if (byStem.isEmpty) {
+      return const Artwork.empty();
+    }
+
+    String? pick(List<String> names) {
+      for (final String name in names) {
+        final String? path = byStem[name];
+        if (path != null) {
+          return path;
+        }
       }
-      if (best == null && fixed.contains(stemName)) {
-        best = path;
+      return null;
+    }
+
+    final ArtworkBuilder art = ArtworkBuilder();
+
+    // Primary: the per-movie names first, then the fixed folder conventions.
+    art.add(
+      ArtKind.poster,
+      pick(<String>[
+        stem, '$stem-poster', '$stem-cover', '$stem-default', '$stem-movie',
+        'poster', 'folder', 'cover', 'default', 'movie',
+      ]),
+      source: 'local',
+    );
+    art.add(ArtKind.logo, pick(<String>['$stem-logo', 'logo']), source: 'local');
+    art.add(
+      ArtKind.thumb,
+      pick(<String>['$stem-thumb', '$stem-landscape', 'thumb', 'landscape']),
+      source: 'local',
+    );
+    art.add(ArtKind.banner, pick(<String>['$stem-banner', 'banner']), source: 'local');
+    art.add(ArtKind.disc, pick(<String>['$stem-disc', '$stem-cdart', 'disc', 'cdart']), source: 'local');
+    art.add(ArtKind.clearart, pick(<String>['$stem-clearart', 'clearart']), source: 'local');
+
+    // Backdrops: one unnumbered file, then the numbered variants.
+    final String? first = pick(<String>['backdrop', 'fanart', 'background', 'art']);
+    if (first != null) {
+      art.add(ArtKind.backdrop, first, source: 'local');
+    }
+    for (int i = 1; i <= 9; i++) {
+      final String? extra = pick(<String>['backdrop$i', 'fanart$i', 'fanart-$i', 'art$i']);
+      if (extra != null) {
+        art.add(ArtKind.backdrop, extra, source: 'local');
       }
     }
-    return best;
+
+    return art.build();
   }
 
   static String _resolutionBadge(String name) {

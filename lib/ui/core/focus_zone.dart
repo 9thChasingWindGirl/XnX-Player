@@ -33,14 +33,27 @@ class FocusEntry {
     required this.context,
     required this.zoneId,
     required this.order,
+    this.id,
     this.activate,
     this.menu,
   });
 
   final FocusNode node;
   final BuildContext context;
-  final String? zoneId;
   final int order;
+
+  /// The zone this item currently belongs to. Mutable because a widget can be
+  /// moved between zones (a card entering the "continue" rail) without being
+  /// rebuilt from scratch.
+  String? zoneId;
+
+  /// Stable address of this item inside the app, when it has one.
+  ///
+  /// Optional on purpose: a card that knows its media id passes it, and every
+  /// surface built out of that card inherits the address for free. Items
+  /// without an id still navigate geometrically — nothing breaks, they just
+  /// cannot be returned to by name.
+  String? id;
 
   /// The item's primary action. A keyboard reaches it through the focus tree
   /// (Enter/Space) and a pointer through the tap handler, but a gamepad raises
@@ -77,6 +90,11 @@ class FocusRegistry {
 
   final List<FocusEntry> _entries = <FocusEntry>[];
 
+  /// Address index, maintained alongside [_entries] so a lookup costs a map
+  /// hit instead of a scan. Duplicate ids are a programming error, not a
+  /// runtime condition worth crashing over: the newest registration wins.
+  final Map<String, FocusEntry> _byId = <String, FocusEntry>{};
+
   int _sequence = 0;
 
   List<FocusEntry> get entries => List<FocusEntry>.unmodifiable(_entries);
@@ -85,16 +103,57 @@ class FocusRegistry {
 
   void register(FocusEntry entry) {
     _entries.add(entry);
+    final String? id = entry.id;
+    if (id != null && id.isNotEmpty) {
+      _byId[id] = entry;
+    }
   }
 
   void unregister(FocusEntry entry) {
     _entries.remove(entry);
+    final String? id = entry.id;
+    if (id != null && identical(_byId[id], entry)) {
+      _byId.remove(id);
+    }
+  }
+
+  /// The entry registered under [id], if it is still on screen.
+  FocusEntry? entryById(String id) {
+    final FocusEntry? entry = _byId[id];
+    if (entry == null || !entry.context.mounted) {
+      return null;
+    }
+    return entry;
+  }
+
+  /// Re-points a registered entry at a new address.
+  ///
+  /// Keeps its slot in [_entries], so navigation order does not reshuffle when
+  /// a list is rebuilt with the same widgets in a different order.
+  void reindex(FocusEntry entry, {required String? id, required String? zoneId}) {
+    final String? previous = entry.id;
+    if (previous != null && previous.isNotEmpty && identical(_byId[previous], entry)) {
+      _byId.remove(previous);
+    }
+    entry
+      ..id = id
+      ..zoneId = zoneId;
+    if (id != null && id.isNotEmpty) {
+      _byId[id] = entry;
+    }
   }
 
   /// Drops entries whose widget tree is gone (defensive: dispose ordering can
   /// leave a stale entry behind during hot reload).
   void prune() {
-    _entries.removeWhere((FocusEntry entry) => !entry.context.mounted);
+    _entries.removeWhere((FocusEntry entry) {
+      final bool dead = !entry.context.mounted;
+      final String? id = entry.id;
+      if (dead && id != null && identical(_byId[id], entry)) {
+        _byId.remove(id);
+      }
+      return dead;
+    });
   }
 
   FocusEntry? entryFor(FocusNode? node) {
@@ -111,6 +170,7 @@ class FocusRegistry {
 
   void reset() {
     _entries.clear();
+    _byId.clear();
     _sequence = 0;
   }
 }

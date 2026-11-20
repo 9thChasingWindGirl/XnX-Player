@@ -8,6 +8,7 @@ import '../../data/models/media_item.dart';
 import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/focus_ids.dart';
 import '../../ui/core/focus_navigator.dart';
 import '../../ui/core/focus_zone.dart';
 import '../../ui/core/motion_clock.dart';
@@ -244,6 +245,7 @@ class _SearchOverlayState extends State<SearchOverlay> {
             for (final MediaItem item in _results)
               TvFocusable(
                 key: ValueKey<String>('search:${item.id}'),
+                focusId: FocusIds.media(item.id),
                 radius: PsRadius.card,
                 accent: item.accentColor,
                 highlightScale: 1.08,

@@ -5,6 +5,7 @@ import '../../data/models/media_item.dart';
 import '../../data/sources/media_source.dart';
 import '../../data/store.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/focus_ids.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/tv_focusable.dart';
 import '../../ui/widgets/ps_button.dart';
@@ -185,6 +186,7 @@ class _GridCard extends StatelessWidget {
     final double height = channel ? 170 : PsSpace.tileSize;
 
     return TvFocusable(
+      focusId: FocusIds.media(item.id),
       radius: PsRadius.card,
       accent: item.accentColor,
       highlightScale: 1.08,

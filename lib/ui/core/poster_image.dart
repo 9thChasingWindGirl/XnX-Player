@@ -17,6 +17,7 @@ Widget posterImage(
   bool gapless = false,
   double? width,
   double? height,
+  Map<String, String>? headers,
 }) {
   final bool remote = url.startsWith('http://') || url.startsWith('https://');
   if (remote) {
@@ -25,6 +26,9 @@ Widget posterImage(
       fit: fit,
       alignment: alignment,
       gaplessPlayback: gapless,
+      // Plex rejects a bare URL: its token travels in a header, not the query
+      // string. Emby and local files pass none.
+      headers: headers == null || headers.isEmpty ? null : headers,
       errorBuilder: errorBuilder,
       width: width,
       height: height,

@@ -19,6 +19,7 @@ class PsButton extends StatelessWidget {
     this.height = 64,
     this.enabled = true,
     this.accent,
+    this.focusId,
   });
 
   final String label;
@@ -30,6 +31,10 @@ class PsButton extends StatelessWidget {
   final bool enabled;
   final Color? accent;
 
+  /// Optional stable address (see `FocusIds`), so a page can come back to this
+  /// button — the hero's Play button is the one that matters.
+  final String? focusId;
+
   @override
   Widget build(BuildContext context) {
     final Color foreground = primary ? const Color(0xFF0B0D16) : PsColor.text;
@@ -37,6 +42,7 @@ class PsButton extends StatelessWidget {
       opacity: enabled ? 1 : 0.45,
       child: TvFocusable(
         enabled: enabled,
+        focusId: focusId,
         radius: PsRadius.pill,
         accent: accent ?? PsColor.focusRing,
         onSelect: onSelect,
@@ -84,6 +90,7 @@ class PsIconButton extends StatelessWidget {
     this.size = 64,
     this.accent,
     this.selected = false,
+    this.focusId,
   });
 
   final IconData icon;
@@ -91,11 +98,13 @@ class PsIconButton extends StatelessWidget {
   final double size;
   final Color? accent;
   final bool selected;
+  final String? focusId;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       radius: PsRadius.pill,
+      focusId: focusId,
       onSelect: onSelect,
       accent: accent ?? PsColor.focusRing,
       child: Container(

@@ -9,6 +9,7 @@ import '../../data/models/media_item.dart';
 import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/focus_ids.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/poster_image.dart';
 import '../../ui/core/tv_focusable.dart';
@@ -369,6 +370,7 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
                 width: _cardWidth,
                 height: _cardHeight,
                 child: TvFocusable(
+                  focusId: FocusIds.media(item.id),
                   radius: PsRadius.card,
                   accent: item.accentColor,
                   onSelect: () => widget.onSelect(item),

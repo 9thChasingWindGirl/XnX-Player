@@ -2,6 +2,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../core/input/input_router.dart';
+import '../../core/sound/sound_cue.dart';
+import '../../core/sound/sound_manager.dart';
 import '../../design/ps_tokens.dart';
 import 'focus_highlight.dart';
 import 'focus_shine.dart';
@@ -37,6 +39,7 @@ class TvFocusable extends StatefulWidget {
     this.showRing = false,
     this.showShine = false,
     this.debugLabel,
+    this.focusId,
   });
 
   final Widget child;
@@ -70,6 +73,12 @@ class TvFocusable extends StatefulWidget {
   final bool showShine;
   final String? debugLabel;
 
+  /// Stable address, so focus can be returned to this exact item later
+  /// (`FocusNavigator.focusById`). Built from [FocusIds] rather than typed by
+  /// hand, and optional: an item without one still navigates, it just cannot
+  /// be recalled by name.
+  final String? focusId;
+
   @override
   State<TvFocusable> createState() => _TvFocusableState();
 }
@@ -97,13 +106,14 @@ class _TvFocusableState extends State<TvFocusable> {
       node: _node,
       context: context,
       zoneId: FocusZone.idOf(context),
+      id: widget.focusId,
       order: FocusRegistry.instance.nextOrder(),
       // The focus tree handles Enter/Space and the tap handler handles the
       // pointer; these exist so a gamepad, which produces neither, can still
       // press the item it just highlighted.
       activate: () {
         if (widget.enabled) {
-          widget.onSelect?.call();
+          _select();
         }
       },
       menu: () {
@@ -116,6 +126,26 @@ class _TvFocusableState extends State<TvFocusable> {
   }
 
   @override
+  void didUpdateWidget(TvFocusable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final FocusEntry? entry = _entry;
+    if (entry == null) {
+      return;
+    }
+    // A recycled list item can be handed a different address (the same widget
+    // slot now showing a different episode). Re-point it in place so its
+    // navigation slot survives; re-registering would push it to the end of the
+    // registry and change what "first" means.
+    if (oldWidget.focusId != widget.focusId) {
+      FocusRegistry.instance.reindex(
+        entry,
+        id: widget.focusId,
+        zoneId: FocusZone.idOf(context),
+      );
+    }
+  }
+
+  @override
   void dispose() {
     final FocusEntry? entry = _entry;
     if (entry != null) {
@@ -123,6 +153,13 @@ class _TvFocusableState extends State<TvFocusable> {
     }
     _node.dispose();
     super.dispose();
+  }
+
+  /// The one place a press becomes both a sound and an action, so keyboard,
+  /// pointer and gamepad cannot drift apart.
+  void _select() {
+    SoundManager.instance.play(SoundCue.select);
+    widget.onSelect?.call();
   }
 
   void _publish() {
@@ -161,7 +198,7 @@ class _TvFocusableState extends State<TvFocusable> {
         final bool fire = _pressed;
         _pressed = false;
         if (fire) {
-          widget.onSelect?.call();
+          _select();
         }
         return KeyEventResult.handled;
       }
@@ -240,6 +277,11 @@ class _TvFocusableState extends State<TvFocusable> {
         setState(() => _focused = focused);
         if (focused) {
           _publish();
+          // A pointer sweeping across a shelf would otherwise chirp on every
+          // card it passes: hover is not navigation.
+          if (!InputRouter.instance.device.value.points) {
+            SoundManager.instance.play(SoundCue.focus);
+          }
         } else if (widget.reportHighlight) {
           _highlight?.report(this, null, widget.radius, widget.accent ?? PsColor.focusRing);
         }
@@ -263,7 +305,7 @@ class _TvFocusableState extends State<TvFocusable> {
           onTap: widget.enabled
               ? () {
                   InputRouter.instance.notePointer();
-                  widget.onSelect?.call();
+                  _select();
                 }
               : null,
           onLongPress: widget.enabled ? widget.onLongSelect : null,

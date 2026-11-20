@@ -6,6 +6,8 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/input/input_action.dart';
 import '../core/input/input_router.dart';
+import '../core/sound/sound_cue.dart';
+import '../core/sound/sound_manager.dart';
 import '../core/strings.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
@@ -18,6 +20,7 @@ import '../pages/search/search_page.dart';
 import '../pages/settings/settings_page.dart';
 import '../player/player_page.dart';
 import '../ui/core/focus_highlight.dart';
+import '../ui/core/focus_memory.dart';
 import '../ui/core/focus_navigator.dart';
 import '../ui/core/tv_scale.dart';
 import '../ui/widgets/ps_backdrop.dart';
@@ -46,6 +49,14 @@ class _ShellPageState extends State<ShellPage> {
   int _tab = 0;
   final Set<int> _visited = <int>{0};
   bool _ccOpen = false;
+
+  /// Where focus was in each tab, so coming back lands on the card you left
+  /// instead of the first one in the grid.
+  final Map<int, FocusMark> _tabMarks = <int, FocusMark>{};
+
+  /// Where focus was when the dock opened, and when the search sheet opened.
+  FocusMark? _dockMark;
+  FocusMark? _searchMark;
   bool _searchOpen = false;
 
   /// Which dock panel is raised, if any. Kept separate from [_ccOpen] because
@@ -162,6 +173,7 @@ class _ShellPageState extends State<ShellPage> {
     if (stack.isEmpty) {
       return false;
     }
+    SoundManager.instance.play(SoundCue.back);
     final String top = stack.last;
     setState(() {
       switch (top) {
@@ -174,11 +186,14 @@ class _ShellPageState extends State<ShellPage> {
           _ccOpen = false;
       }
     });
-    if (top == 'search') {
-      FocusNavigator.focusFirst();
-    } else if (top == 'panel') {
-      // Focus was inside the panel that just went away.
-      _focusZone('dock-icons');
+    switch (top) {
+      case 'search':
+        _restoreMark(_searchMark);
+      case 'panel':
+        // Focus was inside the panel that just went away.
+        _focusZone('dock-icons');
+      case 'dock':
+        _restoreMark(_dockMark);
     }
     return true;
   }
@@ -186,15 +201,35 @@ class _ShellPageState extends State<ShellPage> {
   /// Opens or closes the dock, landing on its icon row when it appears rather
   /// than wherever focus happened to be.
   void _setDock(bool open) {
+    if (open) {
+      // Read the page position *before* the dock becomes focusable. After the
+      // icons take focus this is no longer recoverable, and "Back from the
+      // control centre" would land on the dock instead of the card you left.
+      _dockMark = FocusMemory.instance.mark();
+    }
     setState(() {
       _ccOpen = open;
       if (!open) {
         _ccPanel = null;
       }
     });
+    SoundManager.instance.play(open ? SoundCue.modalOpen : SoundCue.modalClose);
     if (open) {
       _focusZone('dock-icons');
+    } else {
+      _restoreMark(_dockMark);
     }
+  }
+
+  /// Returns focus after a frame: the surface being returned to is usually
+  /// rebuilt by the same setState that hid the overlay, so its geometry is not
+  /// valid until layout has run.
+  void _restoreMark(FocusMark? mark) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        FocusMemory.instance.restore(mark);
+      }
+    });
   }
 
   Future<void> _toggleFullScreen() async {
@@ -220,6 +255,9 @@ class _ShellPageState extends State<ShellPage> {
 
   void _selectTab(int index, {bool fromDock = false}) {
     final bool changed = index != _tab;
+    if (changed) {
+      _tabMarks[_tab] = FocusMemory.instance.mark();
+    }
     setState(() {
       if (changed) {
         _tab = index;
@@ -232,12 +270,10 @@ class _ShellPageState extends State<ShellPage> {
       return;
     }
     // The dock is about to stop being focusable, so the arrow keys would go
-    // nowhere. Hand them back to the page that just became visible.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        FocusNavigator.focusFirst();
-      }
-    });
+    // nowhere. Hand them back to the page that just became visible — and to
+    // the card it had focus on, when that card still exists.
+    _restoreMark(_tabMarks[index]);
+  }
   }
 
   void _onControlCenter(CcItem item) {
@@ -380,6 +416,7 @@ class _ShellPageState extends State<ShellPage> {
   }
 
   void _openSearch() {
+    _searchMark = FocusMemory.instance.mark();
     setState(() {
       _searchOpen = true;
       _ccOpen = false;
@@ -389,7 +426,7 @@ class _ShellPageState extends State<ShellPage> {
 
   void _closeSearch() {
     setState(() => _searchOpen = false);
-    FocusNavigator.focusFirst();
+    _restoreMark(_searchMark);
   }
 
   void _addSource() {
@@ -575,10 +612,7 @@ class _ShellPageState extends State<ShellPage> {
                   opacity: _ccOpen ? 1 : 0,
                   duration: PsMotion.base,
                   child: GestureDetector(
-                    onTap: () => setState(() {
-                      _ccOpen = false;
-                      _ccPanel = null;
-                    }),
+                    onTap: () => _setDock(false),
                     child: ColoredBox(color: const Color(0xFF000000).withValues(alpha: 0.55)),
                   ),
                 ),

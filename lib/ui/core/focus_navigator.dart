@@ -86,6 +86,23 @@ class FocusNavigator {
     return false;
   }
 
+  /// Focuses one specific item by its stable id.
+  ///
+  /// Returns whether it landed: a recorded id can outlive its widget (the list
+  /// reloaded, a source went away), and callers are expected to fall back
+  /// rather than treat that as an error.
+  static bool focusById(String id) {
+    final FocusRegistry registry = FocusRegistry.instance;
+    registry.prune();
+    final FocusEntry? entry = registry.entryById(id);
+    if (entry == null || !entry.node.canRequestFocus) {
+      return false;
+    }
+    entry.node.requestFocus();
+    reveal(entry);
+    return true;
+  }
+
   /// Focuses the first item of one zone. Used when a text field hands the
   /// keyboard back to the grid underneath it (search, dialogs): jumping to
   /// "the first focusable in the app" would land on the top bar instead.

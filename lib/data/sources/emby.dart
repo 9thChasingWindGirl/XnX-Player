@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../models/artwork.dart';
 import '../models/media_item.dart';
 import '../net.dart';
 import 'media_source.dart';
@@ -85,8 +86,7 @@ class EmbySource extends MediaSource {
         'SortBy': 'DateCreated',
         'SortOrder': 'Descending',
         'Limit': '80',
-        'ImageTypeLimit': '1',
-        'EnableImageTypes': 'Primary,Backdrop',
+        'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
       }),
       headers: _headers,
     );
@@ -104,8 +104,7 @@ class EmbySource extends MediaSource {
         'IncludeItemTypes': 'Movie,Episode',
         'Fields': _fields,
         'Limit': '24',
-        'ImageTypeLimit': '1',
-        'EnableImageTypes': 'Primary,Backdrop',
+        'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
       }),
       headers: _headers,
     );
@@ -115,7 +114,13 @@ class EmbySource extends MediaSource {
   static const String _fields =
       'Overview,RunTimeTicks,ProductionYear,CommunityRating,ImageTags,'
       'BackdropImageTags,UserData,SeriesName,IndexNumber,ParentIndexNumber,'
-      'PrimaryImageAspectRatio';
+      'PrimaryImageAspectRatio,'
+      // Inheritance: an episode carries only a still, and names its series as
+      // the owner of the logo, art and backdrop. Asking for these fields is
+      // what makes a hub look finished instead of empty.
+      'ParentLogoItemId,ParentLogoImageTag,ParentArtItemId,ParentArtImageTag,'
+      'ParentBackdropItemId,ParentBackdropImageTags,ParentThumbItemId,'
+      'ParentThumbImageTag,SeriesId,SeriesPrimaryImageTag';
 
   List<MediaItem> _items(Map<String, dynamic> data) {
     final Object? raw = data['Items'];
@@ -166,6 +171,8 @@ class EmbySource extends MediaSource {
       badge = 'S${season ?? 1}E$index';
     }
 
+    final Artwork art = _artworkFor(json, idValue);
+
     return MediaItem(
       id: '${config.id}::$idValue',
       sourceId: config.id,
@@ -182,8 +189,9 @@ class EmbySource extends MediaSource {
       duration: ticks > 0 ? Duration(microseconds: ticks ~/ 10) : null,
       resumeAt: positionTicks > 0 ? Duration(microseconds: positionTicks ~/ 10) : null,
       path: idValue,
-      posterUrl: _imageUrl(idValue, 'Primary'),
-      backdropUrl: _imageUrl(idValue, 'Backdrop'),
+      posterUrl: art.best(ArtKind.poster)?.url,
+      backdropUrl: art.best(ArtKind.backdrop)?.url,
+      artwork: art,
       badge: badge,
       year: year,
       rating: rating,
@@ -192,12 +200,125 @@ class EmbySource extends MediaSource {
     );
   }
 
-  String? _imageUrl(String id, String type) {
+  /// Emby re-encodes any image at any size, so each role asks for roughly what
+  /// the slot will paint. One `maxHeight=660` for everything was cheap but
+  /// soft: a 440pt hero cover was being upscaled from 660px.
+  String? _imageUrl(
+    String id,
+    String type, {
+    String? tag,
+    int? index,
+    int? maxWidth,
+    int? maxHeight,
+  }) {
     if (_tokenValue.isEmpty) {
       return null;
     }
-    final String size = type == 'Backdrop' ? 'maxWidth=1920' : 'maxHeight=660';
-    return '$_base/Items/$id/Images/$type?$size&quality=90&api_key=$_tokenValue';
+    final (int, int) box = switch (type) {
+      'Backdrop' => (maxWidth ?? 1920, maxHeight ?? 0),
+      'Logo' => (maxWidth ?? 900, maxHeight ?? 0),
+      'Thumb' => (maxWidth ?? 1280, maxHeight ?? 0),
+      'Banner' => (maxWidth ?? 1000, maxHeight ?? 0),
+      'Disc' => (maxWidth ?? 700, maxHeight ?? 0),
+      'Art' => (maxWidth ?? 0, maxHeight ?? 700),
+      _ => (maxWidth ?? 0, maxHeight ?? 900),
+    };
+    final StringBuffer url = StringBuffer('$_base/Items/$id/Images/$type');
+    if (index != null) {
+      url.write('/$index');
+    }
+    url.write('?');
+    if (box.$1 > 0) {
+      url.write('maxWidth=${box.$1}&');
+    }
+    if (box.$2 > 0) {
+      url.write('maxHeight=${box.$2}&');
+    }
+    if (tag != null && tag.isNotEmpty) {
+      url.write('tag=$tag&');
+    }
+    url.write('quality=90&api_key=$_tokenValue');
+    return url.toString();
+  }
+
+  /// Builds the full art set, applying the server's inheritance rules.
+  ///
+  /// `ImageTags` lists what this item owns; `Parent*` names the item that owns
+  /// what it lacks. The rule is worth implementing rather than approximating:
+  /// without it an episode hub shows a single 16:9 still and calls it a page.
+  Artwork _artworkFor(Map<String, dynamic> json, String itemId) {
+    final ArtworkBuilder art = ArtworkBuilder();
+    final Map<String, dynamic> tags = json['ImageTags'] is Map
+        ? (json['ImageTags'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+
+    void own(ArtKind kind, String type) {
+      final String? tag = tags[type]?.toString();
+      if (tag == null) {
+        return;
+      }
+      art.add(kind, _imageUrl(itemId, type, tag: tag), source: 'emby');
+    }
+
+    own(ArtKind.poster, 'Primary');
+    own(ArtKind.logo, 'Logo');
+    own(ArtKind.thumb, 'Thumb');
+    own(ArtKind.banner, 'Banner');
+    own(ArtKind.disc, 'Disc');
+    own(ArtKind.clearart, 'Art');
+
+    final List<dynamic> backdropTags = json['BackdropImageTags'] is List
+        ? json['BackdropImageTags'] as List<dynamic>
+        : const <dynamic>[];
+    for (int i = 0; i < backdropTags.length; i++) {
+      art.add(
+        ArtKind.backdrop,
+        _imageUrl(itemId, 'Backdrop', tag: backdropTags[i].toString(), index: i),
+        source: 'emby',
+      );
+    }
+
+    // An episode has no logo, art or backdrop of its own; the series does.
+    void inherit(ArtKind kind, String idField, String tagField, String type) {
+      if (art.has(kind)) {
+        return;
+      }
+      final String? owner = json[idField] as String?;
+      if (owner == null || owner.isEmpty) {
+        return;
+      }
+      art.add(
+        kind,
+        _imageUrl(owner, type, tag: json[tagField] as String?),
+        source: 'emby',
+      );
+    }
+
+    inherit(ArtKind.logo, 'ParentLogoItemId', 'ParentLogoImageTag', 'Logo');
+    inherit(ArtKind.clearart, 'ParentArtItemId', 'ParentArtImageTag', 'Art');
+    inherit(ArtKind.thumb, 'ParentThumbItemId', 'ParentThumbImageTag', 'Thumb');
+    inherit(ArtKind.poster, 'SeriesId', 'SeriesPrimaryImageTag', 'Primary');
+
+    if (!art.has(ArtKind.backdrop)) {
+      final String? owner = json['ParentBackdropItemId'] as String?;
+      final List<dynamic> parentTags = json['ParentBackdropImageTags'] is List
+          ? json['ParentBackdropImageTags'] as List<dynamic>
+          : const <dynamic>[];
+      if (owner != null && owner.isNotEmpty) {
+        if (parentTags.isEmpty) {
+          art.add(ArtKind.backdrop, _imageUrl(owner, 'Backdrop'), source: 'emby');
+        }
+        for (int i = 0; i < parentTags.length; i++) {
+          art.add(
+            ArtKind.backdrop,
+            _imageUrl(owner, 'Backdrop', tag: parentTags[i].toString(), index: i),
+            source: 'emby',
+          );
+        }
+      }
+    }
+
+    return art.build();
   }
 
   static String _runtime(Duration duration) {
@@ -215,16 +336,14 @@ class EmbySource extends MediaSource {
         ? _uri('/Shows/$nativeId/Episodes', <String, String>{
             'UserId': '$_userId',
             'Fields': _fields,
-            'ImageTypeLimit': '1',
-            'EnableImageTypes': 'Primary',
+            'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
           })
         : _uri('/Users/$_userId/Items', <String, String>{
             'ParentId': nativeId,
             'Fields': _fields,
             'SortBy': 'SortName',
             'SortOrder': 'Ascending',
-            'ImageTypeLimit': '1',
-            'EnableImageTypes': 'Primary',
+            'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
           });
     final Map<String, dynamic> data = await Http.getJson(uri, headers: _headers);
     return _items(data);

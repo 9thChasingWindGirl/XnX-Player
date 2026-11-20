@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
+import '../../ui/core/focus_ids.dart';
 import '../../ui/core/poster_image.dart';
 import '../../ui/widgets/ps_button.dart';
 
@@ -132,6 +133,7 @@ class HeroPanel extends StatelessWidget {
                     primary: true,
                     width: 220,
                     accent: item.accentColor,
+                    focusId: FocusIds.action('home', 'play'),
                     onSelect: onPlay,
                   ),
                   const SizedBox(width: 20),
@@ -139,12 +141,14 @@ class HeroPanel extends StatelessWidget {
                     icon: item.favorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                     accent: item.accentColor,
                     selected: item.favorite,
+                    focusId: FocusIds.action('home', 'favorite'),
                     onSelect: onFavorite,
                   ),
                   const SizedBox(width: 16),
                   PsIconButton(
                     icon: Icons.more_horiz_rounded,
                     accent: item.accentColor,
+                    focusId: FocusIds.action('home', 'more'),
                     onSelect: onDetails,
                   ),
                 ],

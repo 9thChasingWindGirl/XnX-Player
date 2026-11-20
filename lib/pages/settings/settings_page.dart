@@ -288,6 +288,25 @@ class _SettingsPageState extends State<SettingsPage> {
                         onSelect: () => _apply(prefs.copyWith(reduceMotion: !prefs.reduceMotion)),
                       ),
                       _Row(
+                        label: '界面音效',
+                        hint: '移动、确认与返回的提示音，独立于视频音量',
+                        toggle: prefs.soundEnabled,
+                        onSelect: () =>
+                            _apply(prefs.copyWith(soundEnabled: !prefs.soundEnabled)),
+                      ),
+                      if (prefs.soundEnabled)
+                        _Row(
+                          label: '音效音量',
+                          hint: '${prefs.soundVolume}%',
+                          value: '${prefs.soundVolume}%',
+                          onAdjust: (int step) => _apply(
+                            prefs.copyWith(
+                              soundVolume: (prefs.soundVolume + step * 5).clamp(0, 100),
+                            ),
+                          ),
+                          onSelect: null,
+                        ),
+                      _Row(
                         label: S.skipIntro,
                         hint: '检测到片头标记时自动跳过',
                         toggle: prefs.skipIntro,

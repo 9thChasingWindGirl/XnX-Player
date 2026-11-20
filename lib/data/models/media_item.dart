@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../../design/ps_tokens.dart';
+import 'artwork.dart';
 
 /// Where a media item comes from. The UI treats every source the same way: a
 /// poster, a title, a play action.
@@ -28,6 +29,7 @@ class MediaItem {
     this.badge,
     this.posterUrl,
     this.backdropUrl,
+    this.artwork = const Artwork.empty(),
     this.headers = const <String, String>{},
     this.favorite = false,
     this.group,
@@ -61,6 +63,13 @@ class MediaItem {
   final String? posterUrl;
   final String? backdropUrl;
 
+  /// The full art set, when the source has one.
+  ///
+  /// [posterUrl] and [backdropUrl] stay as the flat fields every card already
+  /// reads; this carries the roles a shelf cannot show but a hero can — the
+  /// transparent logo, the 16:9 still, the disc, the clearart.
+  final Artwork artwork;
+
   /// Extra headers required to fetch [path] (WebDAV auth, AList token...).
   final Map<String, String> headers;
 
@@ -76,6 +85,49 @@ class MediaItem {
   bool get hasPoster => posterUrl != null && posterUrl!.isNotEmpty;
 
   bool get hasBackdrop => backdropUrl != null && backdropUrl!.isNotEmpty;
+
+  /// Transparent title treatment. When present, a hero should draw it instead
+  /// of the title text — that is the whole point of having it.
+  String? get logoUrl => artwork.best(ArtKind.logo)?.url;
+
+  bool get hasLogo => logoUrl != null && logoUrl!.isNotEmpty;
+
+  /// Headers needed to fetch [logoUrl] (Plex). Empty for the common case.
+  Map<String, String> get logoHeaders =>
+      artwork.best(ArtKind.logo)?.headers ?? const <String, String>{};
+
+  /// 16:9 still, falling back to the poster: a landscape screen should never
+  /// stretch a 2:3 cover when nothing else exists.
+  String? get thumbUrl => artwork.best(ArtKind.thumb)?.url ?? posterUrl;
+
+  String? get bannerUrl => artwork.best(ArtKind.banner)?.url;
+
+  String? get discUrl => artwork.best(ArtKind.disc)?.url;
+
+  String? get clearartUrl => artwork.best(ArtKind.clearart)?.url;
+
+  /// Every backdrop the source has, in preference order. Servers usually carry
+  /// more than one so a client can alternate them.
+  List<String> get backdrops {
+    final List<String> urls = artwork
+        .all(ArtKind.backdrop)
+        .map((ArtRef ref) => ref.url)
+        .where((String url) => url.isNotEmpty)
+        .toList(growable: false);
+    if (urls.isNotEmpty) {
+      return urls;
+    }
+    return hasBackdrop ? <String>[backdropUrl!] : const <String>[];
+  }
+
+  /// The widest image available, for a full-bleed hero or a hub background.
+  String? get heroBackdropUrl {
+    final List<String> wide = backdrops;
+    if (wide.isNotEmpty) {
+      return wide.first;
+    }
+    return thumbUrl;
+  }
 
   /// Deterministic artwork colours, so a title always looks the same.
   List<Color> get artwork => PsColor.artFor(id);

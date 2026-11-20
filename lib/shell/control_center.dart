@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:material_ui/material_ui.dart';
 
 import '../design/ps_tokens.dart';
+import '../ui/core/focus_ids.dart';
 import '../ui/core/focus_zone.dart';
 import '../ui/core/tv_focusable.dart';
 import 'control_center_items.dart';
@@ -260,6 +261,7 @@ class _DockIconState extends State<_DockIcon> {
       radius: PsRadius.card,
       highlightScale: 1.08,
       showShine: false,
+      focusId: FocusIds.dock(widget.item.id),
       onFocused: (bool focused) => setState(() => _focused = focused),
       onSelect: () => widget.onSelect(widget.item),
       debugLabel: 'dock:${widget.item.id}',

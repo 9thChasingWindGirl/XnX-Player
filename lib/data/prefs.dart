@@ -29,6 +29,9 @@ class PlaybackPrefs {
     // jarring when the user only wanted a window, and there was previously no
     // way back out except leaving the player entirely.
     this.startFullscreen = false,
+    // Interface cues: on by default at a level that sits under the content.
+    this.soundEnabled = true,
+    this.soundVolume = 70,
   });
 
   final QualityPref quality;
@@ -43,6 +46,11 @@ class PlaybackPrefs {
   final bool hardwareDecoding;
   final bool startFullscreen;
 
+  /// Interface sound effects (`lib/core/sound`). Separate from [volume], which
+  /// is the video's own level.
+  final bool soundEnabled;
+  final int soundVolume;
+
   PlaybackPrefs copyWith({
     QualityPref? quality,
     PassthroughPref? passthrough,
@@ -55,6 +63,8 @@ class PlaybackPrefs {
     bool? skipIntro,
     bool? hardwareDecoding,
     bool? startFullscreen,
+    bool? soundEnabled,
+    int? soundVolume,
   }) {
     return PlaybackPrefs(
       quality: quality ?? this.quality,
@@ -68,6 +78,8 @@ class PlaybackPrefs {
       skipIntro: skipIntro ?? this.skipIntro,
       startFullscreen: startFullscreen ?? this.startFullscreen,
       hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
+      soundEnabled: soundEnabled ?? this.soundEnabled,
+      soundVolume: soundVolume ?? this.soundVolume,
     );
   }
 
@@ -83,6 +95,8 @@ class PlaybackPrefs {
         'skipIntro': skipIntro,
         'startFullscreen': startFullscreen,
         'hardwareDecoding': hardwareDecoding,
+        'soundEnabled': soundEnabled,
+        'soundVolume': soundVolume,
       };
 
   static PlaybackPrefs fromJson(Map<String, dynamic> json) {
@@ -104,6 +118,8 @@ class PlaybackPrefs {
       skipIntro: json['skipIntro'] as bool? ?? false,
       startFullscreen: json['startFullscreen'] as bool? ?? false,
       hardwareDecoding: json['hardwareDecoding'] as bool? ?? true,
+      soundEnabled: json['soundEnabled'] as bool? ?? true,
+      soundVolume: (json['soundVolume'] as num?)?.toInt() ?? 70,
     );
   }
 
