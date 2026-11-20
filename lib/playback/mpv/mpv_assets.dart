@@ -131,7 +131,7 @@ class MpvAssets {
       }
 
       final String stamp = '${manifest['version'] ?? 0}';
-      final File stampFile = File('${dir.path}${sep}.version');
+      final File stampFile = File('${dir.path}$sep.version');
       if (stampFile.existsSync() && stampFile.readAsStringSync().trim() == stamp) {
         _logoDirCached = dir.path;
         return dir.path;
