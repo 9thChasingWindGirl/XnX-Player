@@ -67,7 +67,7 @@ jobs:
           $rel = $exe.Directory.FullName
           Write-Host "Release dir: $rel"
           Copy-Item third_party/mpv/libmpv-2.dll "$rel/libmpv-2.dll" -Force
-          if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/xnx_osd.lua")) { throw "OSD lua missing from bundle" }
+          if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/player_osd.lua")) { throw "OSD lua missing from bundle" }
           if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
 
