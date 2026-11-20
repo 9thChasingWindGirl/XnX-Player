@@ -6,7 +6,8 @@ import 'package:xnx_player/core/input/keymap.dart';
 import 'package:xnx_player/player/osd_keys.dart';
 
 KeyEvent _key(LogicalKeyboardKey key) => KeyDownEvent(
-  physicalKey: PhysicalKeyboardKey(0),
+  timeStamp: Duration.zero,
+  physicalKey: const PhysicalKeyboardKey(0),
   logicalKey: key,
 );
 

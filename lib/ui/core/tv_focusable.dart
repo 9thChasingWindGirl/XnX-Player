@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../core/input/input_action.dart';
 import '../../core/input/input_router.dart';
 import '../../core/sound/sound_cue.dart';
 import '../../core/sound/sound_manager.dart';
@@ -345,7 +346,7 @@ class _LocalRingPainter extends CustomPainter {
     if (!active) {
       return;
     }
-    final double gap = PsFocus.ringGap;
+    const double gap = PsFocus.ringGap;
     final RRect ring = RRect.fromRectAndRadius(
       Rect.fromLTWH(-gap, -gap, size.width + gap * 2, size.height + gap * 2),
       Radius.circular(radius + gap),

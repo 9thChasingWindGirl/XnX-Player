@@ -130,9 +130,12 @@ class MediaItem {
   }
 
   /// Deterministic artwork colours, so a title always looks the same.
-  List<Color> get artwork => PsColor.artFor(id);
+  ///
+  /// Named [palette] rather than `artwork` because [artwork] is the art set
+  /// itself: one is "which images exist", this is "what colour they read as".
+  List<Color> get palette => PsColor.artFor(id);
 
-  Color get accentColor => artwork[2];
+  Color get accentColor => palette[2];
 
   /// "1 小时 42 分" / "48 分钟", derived from [duration].
   String get runtimeLabel {

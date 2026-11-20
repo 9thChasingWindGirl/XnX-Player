@@ -25,7 +25,7 @@ class PosterCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> art = item.artwork;
+    final List<Color> art = item.palette;
     return SizedBox(
       width: width,
       height: height,
@@ -146,7 +146,7 @@ class _ArtFallback extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> art = item.artwork;
+    final List<Color> art = item.palette;
     final String initial = item.title.isEmpty
         ? '·'
         : String.fromCharCode(item.title.runes.first);
@@ -204,7 +204,7 @@ class ChannelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> art = item.artwork;
+    final List<Color> art = item.palette;
     return SizedBox(
       width: width,
       height: height,

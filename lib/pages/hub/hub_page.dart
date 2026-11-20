@@ -106,7 +106,7 @@ class _HubPageState extends State<HubPage> {
   Widget build(BuildContext context) {
     final MediaItem item = widget.item;
     return PsPage(
-      palette: item.artwork,
+      palette: item.palette,
       child: MotionBuilder(
         builder: (BuildContext context, double dt) {
           final MotionClock clock = MotionScope.of(context);
@@ -269,7 +269,7 @@ class _KeyArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> art = item.artwork;
+    final List<Color> art = item.palette;
     final String? url = item.backdropUrl ?? item.posterUrl;
     return Stack(
       fit: StackFit.expand,

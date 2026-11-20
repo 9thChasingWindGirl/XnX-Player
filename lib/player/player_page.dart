@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/input/input_action.dart';
+import '../core/input/input_router.dart';
 import '../design/ps_tokens.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';

@@ -146,7 +146,15 @@ class PcmClip {
 /// One device voice: a handle, a reusable header and a buffer that grows to the
 /// largest clip it has been asked to play.
 class _Voice {
-  _Voice(this.handle, this.header, this.capacity, this.sampleRate, this.channels, this.bits);
+  _Voice(
+    this.handle,
+    this.header,
+    this.buffer,
+    this.capacity,
+    this.sampleRate,
+    this.channels,
+    this.bits,
+  );
 
   final int handle;
   final Pointer<_WaveHdr> header;
@@ -176,7 +184,9 @@ class WaveOut {
   /// cutting anything off, small enough that the device opens instantly.
   static const int _voiceCount = 6;
 
-  DynamicLibrary? _lib;
+  /// `WAVE_MAPPER` from mmsystem.h: let the OS choose the default output.
+  static const int _waveMapper = 0xFFFFFFFF;
+
   _OpenDart? _waveOutOpen;
   _HeaderDart? _waveOutPrepare;
   _HeaderDart? _waveOutUnprepare;
@@ -202,6 +212,9 @@ class WaveOut {
     }
     try {
       final DynamicLibrary lib = DynamicLibrary.open('winmm.dll');
+      // Resolve everything before touching the device: a partial lookup means
+      // winmm is not what we expect, and half-bound voices are worse than no
+      // sound at all.
       _waveOutOpen = lib.lookupFunction<_OpenNative, _OpenDart>('waveOutOpen');
       _waveOutPrepare = lib.lookupFunction<_HeaderNative, _HeaderDart>('waveOutPrepareHeader');
       _waveOutUnprepare =
@@ -210,7 +223,6 @@ class WaveOut {
       _waveOutReset = lib.lookupFunction<_HandleNative, _HandleDart>('waveOutReset');
       _waveOutClose = lib.lookupFunction<_HandleNative, _HandleDart>('waveOutClose');
       _waveOutSetVolume = lib.lookupFunction<_VolumeNative, _VolumeDart>('waveOutSetVolume');
-      _lib = lib;
       return true;
     } on Object {
       return false;
@@ -229,18 +241,24 @@ class WaveOut {
       return;
     }
 
-    final _HeaderDart? reset = _waveOutReset;
+    final _HandleDart? reset = _waveOutReset;
     final _HeaderDart? write = _waveOutWrite;
     final _HeaderDart? prepare = _waveOutPrepare;
+    final _HeaderDart? unprepare = _waveOutUnprepare;
     if (reset == null || write == null || prepare == null) {
       return;
     }
 
-    // Stop whatever this voice was doing before overwriting its buffer.
+    // Stop whatever this voice was doing before overwriting its buffer, then
+    // unprepare: re-preparing an already-prepared header is how the header
+    // flags get stale, and a stale flag makes the next write a no-op.
     reset(voice.handle);
+    unprepare?.call(voice.handle, voice.header, sizeOf<_WaveHdr>());
 
     voice.buffer.asTypedList(clip.bytes.length).setAll(0, clip.bytes);
-    voice.header.ref.dwBufferLength = clip.bytes.length;
+    voice.header.ref
+      ..dwBufferLength = clip.bytes.length
+      ..dwFlags = 0;
     prepare(voice.handle, voice.header, sizeOf<_WaveHdr>());
     _applyGain(voice, gain);
     write(voice.handle, voice.header, sizeOf<_WaveHdr>());
@@ -317,7 +335,10 @@ class WaveOut {
     final Pointer<IntPtr> handlePtr = calloc<IntPtr>();
     final Pointer<_WaveFormatEx> format = _formatFor(clip);
     try {
-      final int result = open(handlePtr, 0, format, 0, 0, 0);
+      // WAVE_MAPPER (0xFFFFFFFF), not device 0: the first device enumerated is
+      // not necessarily the default one, and picking the wrong one is silent
+      // rather than loud.
+      final int result = open(handlePtr, _waveMapper, format, 0, 0, 0);
       if (result != 0) {
         return null;
       }
@@ -331,6 +352,7 @@ class WaveOut {
       return _Voice(
         handlePtr.value,
         header,
+        buffer,
         clip.bytes.length,
         clip.sampleRate,
         clip.channels,
@@ -357,6 +379,5 @@ class WaveOut {
     }
     _voices.clear();
     _ready = false;
-    _lib = null;
   }
 }

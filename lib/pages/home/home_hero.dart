@@ -43,7 +43,7 @@ class HeroPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> art = item.artwork;
+    final List<Color> art = item.palette;
     final Color accent = Color.lerp(art[2], PsColor.text, 0.45) ?? PsColor.text;
     final double bob = math.sin(time * 0.8) * 6;
 
@@ -191,7 +191,7 @@ class _HeroArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> art = item.artwork;
+    final List<Color> art = item.palette;
     final String? url = item.backdropUrl ?? item.posterUrl;
     return DecoratedBox(
       decoration: BoxDecoration(

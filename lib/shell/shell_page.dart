@@ -274,7 +274,6 @@ class _ShellPageState extends State<ShellPage> {
     // the card it had focus on, when that card still exists.
     _restoreMark(_tabMarks[index]);
   }
-  }
 
   void _onControlCenter(CcItem item) {
     switch (item.kind) {
@@ -555,7 +554,7 @@ class _ShellPageState extends State<ShellPage> {
               child: ValueListenableBuilder<MediaItem?>(
                 valueListenable: _hero,
                 builder: (BuildContext context, MediaItem? item, Widget? child) {
-                  return PsBackdrop(palette: item?.artwork);
+                  return PsBackdrop(palette: item?.palette);
                 },
               ),
             ),
