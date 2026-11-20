@@ -243,17 +243,54 @@ class _SearchOverlayState extends State<SearchOverlay> {
           runSpacing: PsSpace.cardGap,
           children: <Widget>[
             for (final MediaItem item in _results)
-              TvFocusable(
-                key: ValueKey<String>('search:${item.id}'),
-                focusId: FocusIds.media(item.id),
-                radius: PsRadius.card,
-                accent: item.accentColor,
-                highlightScale: 1.08,
-                onSelect: () => _open(item),
-                child: PosterCard(item: item, width: PsSpace.tileSize, height: PsSpace.tileSize),
-              ),
+              _ResultTile(item: item, onOpen: _open),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// One hit in the result grid.
+///
+/// Same contract as the library grid: the layout never moves, the artwork grows
+/// into focus, and the ring is told the same factor so it lands on the visible
+/// edge.
+class _ResultTile extends StatefulWidget {
+  const _ResultTile({required this.item, required this.onOpen});
+
+  final MediaItem item;
+  final ValueChanged<MediaItem> onOpen;
+
+  @override
+  State<_ResultTile> createState() => _ResultTileState();
+}
+
+class _ResultTileState extends State<_ResultTile> {
+  static const double _grow = 1.08;
+
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      key: ValueKey<String>('search:${widget.item.id}'),
+      focusId: FocusIds.media(widget.item.id),
+      radius: PsRadius.card,
+      focusedRadius: PsRadius.cardFocused,
+      accent: widget.item.accentColor,
+      highlightScale: _grow,
+      onFocused: (bool focused) {
+        if (mounted && focused != _focused) {
+          setState(() => _focused = focused);
+        }
+      },
+      onSelect: () => widget.onOpen(widget.item),
+      child: PosterCard(
+        item: widget.item,
+        width: PsSpace.tileSize,
+        height: PsSpace.tileSize,
+        focused: _focused,
       ),
     );
   }

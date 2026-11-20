@@ -82,12 +82,20 @@ class _Dock extends StatelessWidget {
           curve: PsMotion.out,
           height: body == null ? _closedHeight : _openHeight,
           decoration: const BoxDecoration(
+            // Glass, not a solid panel: the blur above does the work and the
+            // tint only has to keep text legible over whatever is behind it.
+            // The reference lays `tint 0.62` on the blurred copy and closes the
+            // edge with a 22 % hairline (`aurora.cpp:518-521`); a top-heavy
+            // gradient is kept because the bottom of the dock sits on video.
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: <Color>[Color(0xCC0A0B10), Color(0xF207080D)],
+              colors: <Color>[
+                Color(0x9E0A0B10),
+                Color(0xC70A0B10),
+              ],
             ),
-            border: Border(top: BorderSide(color: PsColor.hairline)),
+            border: Border(top: BorderSide(color: PsColor.glassEdge)),
           ),
           child: Column(
             children: <Widget>[
@@ -159,6 +167,10 @@ class _DockCards extends StatelessWidget {
           id: 'dock-cards',
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
+            // A focused card grows 4 % past its box; without this the list
+            // would shave the top and bottom of the artwork the moment it is
+            // the one you are on.
+            clipBehavior: Clip.none,
             itemCount: 3,
             separatorBuilder: (BuildContext context, int index) {
               return const SizedBox(width: PsSpace.md);

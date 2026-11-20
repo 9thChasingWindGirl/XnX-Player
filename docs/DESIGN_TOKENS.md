@@ -248,21 +248,25 @@ motion/sound   omega, damping, sounds(声音集), dark
 | 焦点卡投影 | `shadow({x, y+18, w, h}, 26, **34**, black 0.6)` `aurora.cpp:500` | blur 26 / 0.55 | **34 / 0.60** |
 | 光晕强度 | `glow(ring, 26, 26, accent.with_alpha(**0.4 + 0.15*breathe**))` `aurora.cpp:501` | 固定 0.26×pulse | **0.40–0.55** |
 | 呼吸周期 | `ui::breathe()` 默认 **2.4 s**（`motion.hpp:135`） | 4.65 s（speed 1.35） | **2.4 s** |
-| 放大后的圆角 | 静止 22 → 聚焦 26 | 只有 22 | 常量已备 `PsRadius.cardFocused = 26`，但**尚未引用**——放大本身没做，见 §10.2 |
+| 放大后的圆角 | 静止 22 → 聚焦 26 | 只有 22 | 已引用，见 §11 |
 
 `§7` 里原来那行「焦点环宽 上游 3 / 我们 2.5，缩小后更锐利」是错的：3 是
 `Theme` 结构体的默认值，aurora 首页实际画的是 4。已删除。
 
 ### 10.2 仍是源码前版本（未改，涉及布局或需目视）
 
-| 项 | 参考 | 我们 | 影响 |
+> 本节写成后，`§11` 已把下表全部处理完。保留原文是为了记住「哪些是没验过的判断」——
+> 其中「聚焦卡片放大」「邻居让位」「eyebrow 染色」三条**当时就是错的**：功能早就在
+> `home_rail.dart` 与 `home_hero.dart` 里，只是没有对照源码确认，凭印象记成了缺失。
+
+| 项 | 参考 | 我们（拍摄时） | 影响 |
 |---|---|---|---|
-| 聚焦卡片放大 | `kCardGrow 1.2`，并上移 `grown - kCard`（`aurora.cpp:238`） | **卡片不放大**，`SizedBox` 尺寸固定 | 首页「焦点把卡片顶起来」的核心手感缺失 |
-| 放大时的邻居让位 | 右侧卡片 `x += kCard * (grow - 1)`（`aurora.cpp:487`） | 无 | 放大后必然重叠，得一起做 |
-| 非首页的环偏移 | 环始终贴着放大后的卡片 | `highlightScale 1.08`，环浮在静止卡片外 4% | 媒体页/搜索页的环「离卡片有点远」 |
-| 卡片投影状态 | 只有聚焦卡有投影 | `home_tile.dart:35` 恒用 `cardFocused` | 每张卡都像被聚焦 |
-| eyebrow 颜色 | 用品名 accent（`aurora.cpp:527`） | `PsType.eyebrow` 写死白色 | 页眉没有随内容染色 |
-| 面板材质 | `glass()`：模糊底 + tint 0.62 + 22% 发丝线 | 控制中心写死 `#CC0A0B10 → #F207080D` 渐变 | 面板是实色，不是玻璃 |
+| 聚焦卡片放大 | `kCardGrow 1.2`，并上移 `grown - kCard`（`aurora.cpp:238`） | ~~卡片不放大~~ 实为放大：`cardSize * grow`，底边对齐 | 判断有误 |
+| 放大时的邻居让位 | 右侧卡片 `x += kCard * (grow - 1)`（`aurora.cpp:487`） | ~~无~~ 实为 `_restLeft()` 已实现 | 判断有误 |
+| 非首页的环偏移 | 环始终贴着放大后的卡片 | `highlightScale 1.08` 只放大环，不放大图 | 环浮在卡片外 8 % |
+| 卡片投影状态 | 只有聚焦卡有投影 | `home_tile.dart` 恒用 `cardFocused` | 每张卡都像被聚焦 |
+| eyebrow 颜色 | 用品名 accent（`aurora.cpp:527`） | ~~写死白色~~ 实为 `copyWith(color: accent)` | 判断有误 |
+| 面板材质 | `glass()`：模糊底 + tint 0.62 + 22% 发丝线 | 有模糊，但 tint 近乎不透明（0xCC→0xF2） | 面板是实色，不是玻璃 |
 
 ### 10.3 结构缺口：上游是主题系统，我们是一个主题
 
@@ -276,3 +280,42 @@ motion/sound   omega, damping, sounds(声音集), dark
 
 要真正解决，得把 `Theme` 落成 Dart 值对象 + 一个 `aurora` 实例，控件从
 `PsTheme.of(context)` 取色取形。这是重构（约 20 个文件），不是调参——单独立项。
+
+---
+
+## 11. 第三轮：把「聚焦」做成一件事（2026-11-21）
+
+参考里「聚焦」不是一个属性，而是四层叠加：**卡片变大 + 邻居让位 + 环贴着新边缘 +
+其余变暗**。第三轮把这四层收到两个地方，页面不再各写一套。
+
+### 11.1 缩放归 `TvFocusable`
+
+`highlightScale` 过去只放大环的矩形，卡片本身不动，于是网格页的环永远浮在卡片外
+8 %——「环离卡片有点远」就是这么来的。现在 `TvFocusable` 自己用 `AnimatedScale`
+放大内容（160 ms，`PsMotion.grow`，easeOutCubic），环仍然按同一个系数算矩形：
+
+- 测量点在 `MouseRegion`（外层渲染盒，不含变换），拿到的是**静止矩形**；
+- 环的矩形 = `grownRect(rest, highlightScale)`，与变换后的视觉边缘一一对应；
+- 货架把**盒子**放大（布局必须让邻居动），所以货架传 `highlightScale: 1.0`，不会放大两次。
+
+### 11.2 卡片状态归 `PosterCard`
+
+| 状态 | 静止 | 聚焦 |
+|---|---|---|
+| 圆角 | 22 | 26（`PsRadius.cardFocused`，对应 `aurora.cpp:503` 的 30 = 26 + 4） |
+| 投影 | `cardResting`（0,10 / blur 20 / 35 %） | `cardFocused`（0,18 / blur 34 / 60 %） |
+| 图像 | 压暗 18 %（`aurora.cpp:487` 的 0.82 alpha） | 全亮 |
+
+`focused` 传 `null` 时卡片既不压暗也不抬起（不跟踪逐卡焦点的列表沿用这个）。
+
+### 11.3 环形半径随放大后圆角
+
+`TvFocusable.focusedRadius` 默认等于 `radius`，货架与网格传 26。环的半径是 26 + 5 的
+外扩 = 31，静止卡是 22 + 5 = 27，聚焦时弹簧把半径推过去——不这样，一张放大的卡片
+会顶着一个按小尺寸画的圆角。
+
+### 11.4 面板回到玻璃
+
+控制中心原本有 `BackdropFilter`，但上面的渐变从 `0xCC` 到 `0xF2`，几乎不透光，
+看起来仍是实色板。改为 62 % → 78 % 的 tint，边框换成 `PsColor.glassEdge`（22 % 白，
+`aurora.cpp:521` 的 `light`）。模糊本身没动，仍是 `PsBlur.panel` 24。

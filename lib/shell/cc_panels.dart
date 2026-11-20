@@ -442,6 +442,10 @@ class CcRecentPanel extends StatelessWidget {
             )
           : ListView.separated(
               scrollDirection: Axis.horizontal,
+              // These cards fill the viewport height, so their 3 % growth goes
+              // outside the list; letting it paint keeps the focus lift from
+              // being shaved into a cropped rectangle.
+              clipBehavior: Clip.none,
               itemCount: items.length,
               separatorBuilder: (BuildContext context, int index) =>
                   const SizedBox(width: 14),

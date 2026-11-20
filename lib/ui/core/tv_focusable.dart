@@ -35,6 +35,7 @@ class TvFocusable extends StatefulWidget {
     this.highlightScale = 1.0,
     this.highlightAlignment = Alignment.center,
     this.radius = PsRadius.card,
+    this.focusedRadius = PsRadius.card,
     this.accent,
     this.reportHighlight = true,
     this.showRing = false,
@@ -66,6 +67,13 @@ class TvFocusable extends StatefulWidget {
   final Alignment highlightAlignment;
 
   final double radius;
+
+  /// Corner radius while focused, when the item's own artwork grows with it.
+  /// A card that is drawn larger at 22 still looks pinched; the reference rings
+  /// the grown cover at 30 where the resting one is 22 (`aurora.cpp:503`), so
+  /// anything that resizes itself should say so here.
+  final double focusedRadius;
+
   final Color? accent;
   final bool reportHighlight;
 
@@ -175,7 +183,7 @@ class _TvFocusableState extends State<TvFocusable> {
     scope.report(
       this,
       grownRect(rest, widget.highlightScale, alignment: widget.highlightAlignment),
-      widget.radius,
+      _focused ? widget.focusedRadius : widget.radius,
       widget.accent ?? PsColor.focusRing,
     );
   }
@@ -232,6 +240,25 @@ class _TvFocusableState extends State<TvFocusable> {
   @override
   Widget build(BuildContext context) {
     Widget content = widget.child;
+
+    // Grow the artwork itself, not just the ring around it.
+    //
+    // `highlightScale` used to size the highlight rectangle only, so a focused
+    // tile had a ring 8 % larger than its artwork — which is exactly what "the
+    // ring sits a bit away from the card" looks like. Since the rect is measured
+    // from the outermost render box (the MouseRegion above this transform), the
+    // measurement stays at rest size and `_publish` maps it with the same
+    // factor: ring and artwork land on the same edge, and shelves that grow
+    // their box keep `highlightScale: 1.0` so nothing grows twice.
+    if (widget.highlightScale != 1.0) {
+      content = AnimatedScale(
+        scale: _focused ? widget.highlightScale : 1.0,
+        duration: PsMotion.grow,
+        curve: PsMotion.out,
+        alignment: widget.highlightAlignment,
+        child: content,
+      );
+    }
 
     if (widget.showShine && _focused) {
       content = Stack(

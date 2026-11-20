@@ -9,6 +9,12 @@ import '../../ui/core/poster_image.dart';
 /// The card draws at whatever size it is given: the shelf animates the box, so
 /// artwork, scrim, badge and progress all scale together and the gliding ring
 /// always hugs the visible edge.
+///
+/// [focused] is what makes a shelf read as *one lit card among many*, which is
+/// the reference's home screen (`aurora.cpp:483-495`): resting cards are drawn
+/// at 82 % over the stage and cast no shadow, the focused one is drawn full
+/// strength, lifted, and at the larger corner. Pass `null` on surfaces that do
+/// not track focus per card (a plain list) and the card stays lit and quiet.
 class PosterCard extends StatelessWidget {
   const PosterCard({
     super.key,
@@ -16,6 +22,7 @@ class PosterCard extends StatelessWidget {
     required this.width,
     required this.height,
     this.showTitle = true,
+    this.focused,
   });
 
   final MediaItem item;
@@ -23,119 +30,133 @@ class PosterCard extends StatelessWidget {
   final double height;
   final bool showTitle;
 
+  /// `true` / `false` when the surface knows which card is focused; `null` when
+  /// it does not, in which case the card is neither dimmed nor lifted.
+  ///
+  /// Growth is *not* here: the `TvFocusable` above the card owns
+  /// `highlightScale`, so artwork and ring scale together and this widget only
+  /// has to know how to *look* focused.
+  final bool? focused;
+
   @override
   Widget build(BuildContext context) {
     final List<Color> art = item.palette;
-    return SizedBox(
-      width: width,
-      height: height,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(PsRadius.card),
-          boxShadow: PsElevation.cardFocused,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(PsRadius.card),
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              DecoratedBox(
+    final bool lit = focused ?? true;
+    final bool grown = focused == true;
+    final double radius = grown ? PsRadius.cardFocused : PsRadius.card;
+
+    Widget card = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        boxShadow: grown ? PsElevation.cardFocused : PsElevation.cardResting,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[art[1], art[0]],
+                ),
+              ),
+            ),
+            if (item.hasPoster)
+              posterImage(
+                item.posterUrl!,
+                fit: BoxFit.cover,
+                gapless: true,
+                errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
+                    _ArtFallback(item: item),
+              )
+            else
+              _ArtFallback(item: item),
+            // Unfocused artwork is dimmed, not desaturated: the colour still
+            // identifies the title, it just stops competing with the one card
+            // the user is actually on.
+            if (!lit) const ColoredBox(color: Color(0x2E000000)),
+            // Bottom scrim: the title has to read over any artwork.
+            const Positioned.fill(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: <Color>[art[1], art[0]],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: <Color>[
+                      Color(0x00000000),
+                      Color(0x1A000000),
+                      Color(0xD9000000),
+                    ],
+                    stops: <double>[0.42, 0.68, 1.0],
                   ),
                 ),
               ),
-              if (item.hasPoster)
-                posterImage(
-                  item.posterUrl!,
-                  fit: BoxFit.cover,
-                  gapless: true,
-                  errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
-                      _ArtFallback(item: item),
-                )
-              else
-                _ArtFallback(item: item),
-              // Bottom scrim: the title has to read over any artwork.
-              const Positioned.fill(
-                child: DecoratedBox(
+            ),
+            if (item.badge != null && item.badge!.isNotEmpty)
+              Positioned(
+                left: 10,
+                top: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: <Color>[
-                        Color(0x00000000),
-                        Color(0x1A000000),
-                        Color(0xD9000000),
-                      ],
-                      stops: <double>[0.42, 0.68, 1.0],
+                    color: const Color(0xFF000000).withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(PsRadius.pill),
+                    border: Border.all(color: PsColor.text.withValues(alpha: 0.22)),
+                  ),
+                  child: Text(
+                    item.badge!,
+                    style: PsType.micro.copyWith(
+                      fontSize: 12,
+                      letterSpacing: 1.2,
+                      color: PsColor.text,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
               ),
-              if (item.badge != null && item.badge!.isNotEmpty)
-                Positioned(
-                  left: 10,
-                  top: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF000000).withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(PsRadius.pill),
-                      border: Border.all(color: PsColor.text.withValues(alpha: 0.22)),
-                    ),
-                    child: Text(
-                      item.badge!,
-                      style: PsType.micro.copyWith(
-                        fontSize: 12,
-                        letterSpacing: 1.2,
-                        color: PsColor.text,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+            if (showTitle && height >= 140)
+              Positioned(
+                left: 14,
+                right: 14,
+                bottom: item.progress > 0.01 ? 18 : 12,
+                child: Text(
+                  item.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: PsType.label.copyWith(
+                    fontSize: 18,
+                    height: 1.25,
+                    fontWeight: FontWeight.w500,
+                    shadows: const <Shadow>[
+                      Shadow(color: Color(0xB3000000), blurRadius: 8),
+                    ],
                   ),
                 ),
-              if (showTitle && height >= 140)
-                Positioned(
-                  left: 14,
-                  right: 14,
-                  bottom: item.progress > 0.01 ? 18 : 12,
-                  child: Text(
-                    item.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: PsType.label.copyWith(
-                      fontSize: 18,
-                      height: 1.25,
-                      fontWeight: FontWeight.w500,
-                      shadows: const <Shadow>[
-                        Shadow(color: Color(0xB3000000), blurRadius: 8),
-                      ],
-                    ),
+              ),
+            if (item.progress > 0.01)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  height: 4,
+                  color: PsColor.text.withValues(alpha: 0.16),
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: item.progress.clamp(0.0, 1.0).toDouble(),
+                    child: ColoredBox(color: item.accentColor),
                   ),
                 ),
-              if (item.progress > 0.01)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    height: 4,
-                    color: PsColor.text.withValues(alpha: 0.16),
-                    alignment: Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      widthFactor: item.progress.clamp(0.0, 1.0).toDouble(),
-                      child: ColoredBox(color: item.accentColor),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
+
+    return SizedBox(width: width, height: height, child: card);
   }
 }
 

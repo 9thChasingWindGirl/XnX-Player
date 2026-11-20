@@ -168,7 +168,7 @@ class MediaPageState extends State<MediaPage> {
   }
 }
 
-class _GridCard extends StatelessWidget {
+class _GridCard extends StatefulWidget {
   const _GridCard({
     required this.item,
     required this.onPlay,
@@ -180,7 +180,21 @@ class _GridCard extends StatelessWidget {
   final ValueChanged<MediaItem> onOpen;
 
   @override
+  State<_GridCard> createState() => _GridCardState();
+}
+
+class _GridCardState extends State<_GridCard> {
+  /// The grid keeps its layout fixed, so focus grows the artwork instead of the
+  /// box. `highlightScale` must carry the same factor or the ring ends up
+  /// floating 8 % outside the resting card — which is what "the ring is a bit
+  /// away from the tile" was.
+  static const double _grow = 1.08;
+
+  bool _focused = false;
+
+  @override
   Widget build(BuildContext context) {
+    final MediaItem item = widget.item;
     final bool channel = item.kind == MediaKind.channel;
     final double width = channel ? 300 : PsSpace.tileSize;
     final double height = channel ? 170 : PsSpace.tileSize;
@@ -188,15 +202,28 @@ class _GridCard extends StatelessWidget {
     return TvFocusable(
       focusId: FocusIds.media(item.id),
       radius: PsRadius.card,
+      focusedRadius: channel ? PsRadius.card : PsRadius.cardFocused,
       accent: item.accentColor,
-      highlightScale: 1.08,
+      // A live-channel tile keeps its size (its logo is laid out to the box),
+      // so its ring must hug the resting edge.
+      highlightScale: channel ? 1.0 : _grow,
+      onFocused: (bool focused) {
+        if (mounted && focused != _focused) {
+          setState(() => _focused = focused);
+        }
+      },
       onSelect: () => item.isPlayable && item.kind != MediaKind.series
-          ? onPlay(item)
-          : onOpen(item),
-      onLongSelect: () => onPlay(item),
+          ? widget.onPlay(item)
+          : widget.onOpen(item),
+      onLongSelect: () => widget.onPlay(item),
       child: channel
           ? ChannelCard(item: item, width: width, height: height)
-          : PosterCard(item: item, width: width, height: height),
+          : PosterCard(
+              item: item,
+              width: width,
+              height: height,
+              focused: _focused,
+            ),
     );
   }
 }

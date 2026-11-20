@@ -165,11 +165,15 @@ abstract final class PsFocus {
 /// resting cards have none or a very faint one. A modal sheet floats higher
 /// than a card, which is why it has its own entry rather than a scale factor.
 abstract final class PsElevation {
+  /// Resting cards get next to nothing. The reference casts no shadow until a
+  /// card is focused; a real poster has its own edge, so a faint drop is kept
+  /// purely to stop the artwork from looking pasted on the stage. Anything
+  /// heavier makes every card read as already focused.
   static const List<BoxShadow> cardResting = <BoxShadow>[
     BoxShadow(
-      color: Color(0x80000000),
-      blurRadius: 24,
-      offset: Offset(0, 14),
+      color: Color(0x59000000),
+      blurRadius: 20,
+      offset: Offset(0, 10),
     ),
   ];
 
@@ -226,6 +230,12 @@ abstract final class PsBlur {
 /// motion is spring-driven and has no duration — see `ps_motion.dart`.
 abstract final class PsMotion {
   static const Duration fast = Duration(milliseconds: 120);
+
+  /// One card growing into focus. The craft guide's band is 120..200 ms; the
+  /// short end keeps a held D-pad from feeling like it is dragging the artwork
+  /// behind the ring.
+  static const Duration grow = Duration(milliseconds: 160);
+
   static const Duration base = Duration(milliseconds: 200);
   static const Duration slow = Duration(milliseconds: 420);
   static const Duration reveal = Duration(milliseconds: 260);

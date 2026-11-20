@@ -151,6 +151,7 @@ class _HomeRailState extends State<HomeRail> {
                   key: ValueKey<String>(item.id),
                   focusId: FocusIds.media(item.id),
                   radius: PsRadius.card,
+                  focusedRadius: PsRadius.cardFocused,
                   accent: item.accentColor,
                   onSelect: () => widget.onSelect(item),
                   onLongSelect:
@@ -160,7 +161,12 @@ class _HomeRailState extends State<HomeRail> {
                       widget.onFocus(i);
                     }
                   },
-                  child: PosterCard(item: item, width: size, height: size),
+                  child: PosterCard(
+                    item: item,
+                    width: size,
+                    height: size,
+                    focused: i == widget.focusedIndex,
+                  ),
                 ),
               ),
             );

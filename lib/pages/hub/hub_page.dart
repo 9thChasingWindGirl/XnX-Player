@@ -329,12 +329,24 @@ class _EpisodeShelf extends StatefulWidget {
 
 class _EpisodeShelfState extends State<_EpisodeShelf> {
   final Spring _scroll = Spring(value: 0, frequency: 12);
+
+  /// Last column the player was on: kept when focus leaves so the shelf does
+  /// not jump back to the start every time the row goes dim.
   int _focus = -1;
+
+  /// The card that is focused *right now*. Separate from [_focus] because a
+  /// shelf that scrolled position and a card that is lit are two questions: the
+  /// ring only exists where focus is, so only that card may grow.
+  int _lit = -1;
   double _last = -1;
 
   static const double _cardWidth = 300;
   static const double _cardHeight = 170;
   static const double _gap = 24;
+
+  /// 6 % of a 300 px card is 18 px — 9 px into each 24 px gutter: enough to
+  /// read as a lift, not enough to touch the neighbour.
+  static const double _grow = 1.06;
 
   @override
   Widget build(BuildContext context) {
@@ -372,14 +384,24 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
                 child: TvFocusable(
                   focusId: FocusIds.media(item.id),
                   radius: PsRadius.card,
+                  focusedRadius: PsRadius.cardFocused,
                   accent: item.accentColor,
+                  highlightScale: _grow,
                   onSelect: () => widget.onSelect(item),
                   onFocused: (bool focused) {
                     if (focused) {
                       _focus = i;
+                      _lit = i;
+                    } else if (_lit == i) {
+                      _lit = -1;
                     }
                   },
-                  child: PosterCard(item: item, width: _cardWidth, height: _cardHeight),
+                  child: PosterCard(
+                    item: item,
+                    width: _cardWidth,
+                    height: _cardHeight,
+                    focused: i == _lit,
+                  ),
                 ),
               ),
             );
