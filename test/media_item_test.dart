@@ -3,17 +3,17 @@ import 'package:xnx_player/data/models/media_item.dart';
 
 void main() {
   group('MediaItem', () {
-    test('artwork colours are stable for the same id', () {
+    test('palette colours are stable for the same id', () {
       const MediaItem a = MediaItem(id: 'emby::42', title: 'A');
       const MediaItem b = MediaItem(id: 'emby::42', title: 'B');
-      expect(a.artwork, b.artwork);
+      expect(a.palette, b.palette);
     });
 
-    test('different ids usually land on different artwork', () {
+    test('different ids usually land on different palette colours', () {
       const MediaItem a = MediaItem(id: 'a', title: 'A');
       const MediaItem b = MediaItem(id: 'b', title: 'B');
-      expect(a.artwork, isNot(equals(b.artwork)));
-      expect(a.artwork.length, 3);
+      expect(a.palette, isNot(equals(b.palette)));
+      expect(a.palette.length, 3);
     });
 
     test('folders and seasons are not directly playable', () {
