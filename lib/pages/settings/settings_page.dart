@@ -33,6 +33,36 @@ class _SettingsPageState extends State<SettingsPage> {
   UpdateCandidate? _pending;
   final UpdateService _updater = UpdateService();
 
+  /// Rollback targets, read once. `installedVersions()` walks a directory on
+  /// disk and this page rebuilds every frame (MotionBuilder), so calling it
+  /// from `build` was both slow and — because the row ignored left/right — a
+  /// control that showed a version you could not actually pick.
+  List<String> _rollbackVersions = const <String>[];
+  int _rollbackIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshRollbackVersions();
+  }
+
+  void _refreshRollbackVersions() {
+    final List<String> versions = _updater.installedVersions();
+    _rollbackVersions = versions;
+    if (_rollbackIndex >= versions.length) {
+      _rollbackIndex = 0;
+    }
+  }
+
+  void _cycleRollback(int direction) {
+    if (_rollbackVersions.isEmpty) {
+      return;
+    }
+    final int next =
+        (_rollbackIndex + direction + _rollbackVersions.length) % _rollbackVersions.length;
+    setState(() => _rollbackIndex = next);
+  }
+
   AppStore get _store => AppStore.instance;
 
   void _apply(PlaybackPrefs prefs) {
@@ -284,14 +314,14 @@ class _SettingsPageState extends State<SettingsPage> {
                         value: _pending == null ? null : '待安装',
                         onSelect: () => unawaited(_checkOrInstall()),
                       ),
-                      if (_updater.installedVersions().isNotEmpty)
+                      if (_rollbackVersions.isNotEmpty)
                         _Row(
                           label: '版本回退',
                           hint: '回退到本机已保留的旧版本，用户配置不受影响',
-                          value: _updater.installedVersions().first,
-                          onAdjust: (int direction) {},
+                          value: _rollbackVersions[_rollbackIndex],
+                          onAdjust: _cycleRollback,
                           onSelect: () => unawaited(
-                            _rollBackTo(_updater.installedVersions().first),
+                            _rollBackTo(_rollbackVersions[_rollbackIndex]),
                           ),
                         ),
                     ],
