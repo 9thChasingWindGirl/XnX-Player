@@ -51,6 +51,8 @@ props = {
     'speed': 1.0,
     'aid': '1',
     'sid': '1',
+    'audio-pts': 42.0,
+    'video-pts': 42.1,
     'volume': 100.0,
     'mute': False,
     'seekable': True,
@@ -352,11 +354,12 @@ print('chrome still renders:', len(overlays[0]['data'].splitlines()), 'events')
 
 # ---- HDR passthrough -------------------------------------------------------
 #
-# The chrome is SDR content while the swapchain is PQ, so the script has to
-# thicken the outline and densify the scrim the moment `video-target-params`
-# says the output is real HDR. Nothing else in this file exercises that branch,
-# and it is the kind of change that breaks silently: the OSD still draws, it
-# just goes back to reading grey over an HDR picture.
+# The chrome is SDR content while the swapchain is PQ. mpv adapts every SDR
+# bitmap to the output colour space with no opt-out, so the compensation here
+# is *less ink*, not more: thinner scrims, no drop shadow, secondary text
+# lifted toward full white, heavy outline kept. The probe asserts the thin
+# scrims (0x30/0x40) so a revert to the old densify-the-scrim direction fails
+# loudly.
 print('---')
 for fn in handlers.get('observe-video-target-params', []):
     fn('video-target-params', _to_lua({'gamma': 'pq', 'max-luma': 1000}))
@@ -364,7 +367,66 @@ for fn in periodic:
     fn()
 hdr_lines = overlays[0]['data'].splitlines()
 scrims = [line for line in hdr_lines if '\\blur' in line and '\\1c&H000000&' in line]
+# ASS `1a` is *transparency*: 0x30 ink shows up as 1a&HCF& (255-0x30), 0x40 as
+# 1a&HBF&. The third black plate (1a&H13&) is the hover tooltip, not a scrim.
+thin = [line for line in scrims if '\\1a&HCF&' in line or '\\1a&HBF&' in line]
+print('  hdr scrims thin:', len(thin), 'of', len(scrims))
 for line in scrims:
     print('  hdr scrim:', line[:110])
 bordered = [line for line in hdr_lines if '\\bord2.4' in line]
 print('hdr text with the heavy outline:', len(bordered))
+shadowed = [line for line in hdr_lines if '\\shad0.0\\3c' not in line and '\\shad1' in line]
+print('hdr lines with drop shadow (expect 0):', len(shadowed))
+
+# ---- audio-track recovery ----------------------------------------------------
+#
+# A switch to a track that never starts (AO dead after a channel-layout change)
+# leaves playback silent, and switching back does not heal it. The watcher
+# samples audio-pts twice and rebuilds the AO by toggling the aid off and on.
+# Frozen audio while video advances must end in exactly two commandv calls.
+print('---')
+props['pause'] = False
+props['video-pts'] = 42.1
+props['audio-pts'] = 0.0  # audio never started after the switch
+timeouts.clear()
+commands.clear()
+for fn in handlers.get('observe-aid', []):
+    fn('aid', '2')
+scheduled = [t for t, _ in timeouts]
+print('watch scheduled:', sorted(scheduled))
+# Run everything in scheduled order; the second sample sees frozen audio.
+pending = list(timeouts)
+timeouts.clear()
+for _, fn in pending:
+    fn()
+# Video keeps playing (the picture advances past the frozen audio chain);
+# audio-pts stays at 0, which is exactly the dead-AO tell.
+props['video-pts'] = 42.7
+# The inner 0.5 s sample was scheduled by the first timeout; run it too.
+pending = list(timeouts)
+timeouts.clear()
+for _, fn in pending:
+    fn()
+rebuild = [c for c in commands if c and c[0] == 'set' and c[1] == 'aid']
+print('rebuild commands:', len(rebuild), rebuild)
+# The second hop restores the track 0.15 s later, forcing a fresh AO init.
+pending = list(timeouts)
+timeouts.clear()
+for _, fn in pending:
+    fn()
+rebuild = [c for c in commands if c and c[0] == 'set' and c[1] == 'aid']
+print('rebuild commands after restore hop:', len(rebuild), rebuild)
+
+# The healthy path: audio-pts advancing means the first sample returns without
+# scheduling anything else, and no rebuild is issued.
+props['audio-pts'] = 42.0
+commands.clear()
+timeouts.clear()
+for fn in handlers.get('observe-aid', []):
+    fn('aid', '2')
+pending = list(timeouts)
+timeouts.clear()
+for _, fn in pending:
+    fn()
+healthy = not [c for c in commands if c and c[0] == 'set' and c[1] == 'aid']
+print('audio healthy path suppresses rebuild:', healthy)

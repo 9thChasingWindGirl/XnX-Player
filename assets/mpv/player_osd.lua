@@ -203,14 +203,22 @@ end
 --- HDR passthrough is not. Everything this script draws is SDR content that mpv
 --- maps into PQ, so its white lands on the SDR reference (≈203 cd/m²) while the
 --- picture around it can reach 1000+. Type cannot be made brighter than white,
---- so the only lever left is contrast: a heavier outline, a real drop shadow,
---- and a denser scrim. Without it the chrome reads as grey and washed out over
---- HDR footage, which is exactly how it was reported.
+--- and mpv offers no option to exempt the OSD from that conversion (gpu-next
+--- adapts every SDR bitmap to the swapchain's colour space). The first attempt
+--- went the other way — heavier scrims and shadows — and the user reported the
+--- chrome getting *darker*: PQ already reads greys low, so extra ink compounds
+--- the loss. The working compensation is the opposite: thinner scrims (PQ black
+--- sits deeper, so less dimming is needed), no drop shadow, secondary text
+--- brightened toward full white, and the outline kept heavy for contrast.
 local TEXT_BORDER = 1.2
 local TEXT_SHADOW = 0
 local TEXT_SHADOW_ALPHA = 0x30
 local SCRIM_TOP = 0x4E
 local SCRIM_BOTTOM = 0x62
+
+--- Whether the output is really emitting PQ/HLG. Lives here — above [text] and
+--- ahead of `state` — because [text] reads it on every draw.
+local HDR_OUTPUT = false
 
 --- Draws one line of text.
 ---
@@ -219,6 +227,12 @@ local SCRIM_BOTTOM = 0x62
 --- stays readable over a bright frame. Without it, dropping the scrim would
 --- make the bar unreadable on a snowy or desert shot.
 local function text(x, y, size, color, alpha, str, align, bold, font)
+  -- PQ passthrough renders secondary text (alpha < 255) dimmer than the same
+  -- pixel in SDR: the sRGB→PQ ramp compresses mid-tones. Lifting alpha toward
+  -- full white partially restores the intended hierarchy.
+  if HDR_OUTPUT and alpha < 255 then
+    alpha = math.min(255, alpha + (255 - alpha) * 0.3)
+  end
   return string.format(
     '{\\an%d\\pos(%d,%d)\\fn%s\\fs%d\\bord%.1f\\shad%.1f\\3c&H000000&\\3a&H88&'
       .. '\\4c&H000000&\\4a&H%02X&\\%s\\c%s\\1a&H%02X&}%s',
@@ -1416,11 +1430,16 @@ local function set_output_space(hdr)
     return
   end
   state.hdr = hdr
+  HDR_OUTPUT = hdr
+  -- Contrast stays (the outline is what keeps 203-nit type legible over a
+  -- bright frame), everything that *adds ink* is reduced: a PQ swapchain
+  -- already reads darker, and stacking shadow plus dense scrims on top of it
+  -- was reported as "OSD 颜色/晕影/阴影被加深".
   TEXT_BORDER = hdr and 2.4 or 1.2
-  TEXT_SHADOW = hdr and 1.4 or 0
-  TEXT_SHADOW_ALPHA = hdr and 0x18 or 0x30
-  SCRIM_TOP = hdr and 0x66 or 0x4E
-  SCRIM_BOTTOM = hdr and 0x84 or 0x62
+  TEXT_SHADOW = 0
+  TEXT_SHADOW_ALPHA = 0x30
+  SCRIM_TOP = hdr and 0x30 or 0x4E
+  SCRIM_BOTTOM = hdr and 0x40 or 0x62
   mark_dirty()
 end
 
@@ -2579,9 +2598,64 @@ mp.observe_property('speed', 'number', function()
   mark_dirty()
 end)
 
-mp.observe_property('aid', 'string', function()
+--- Watches a track switch for a silent audio chain, and rebuilds the AO when
+--- the new track never starts.
+---
+--- Reported on real hardware: TrueHD → AC-3 switches, and back, left playback
+--- running with no sound at all — the old track was not restorable either. The
+--- log shows the switch never reaches a fresh AO init; the chain dies on the
+--- layout change (8ch → 6ch on a virtualized device) and mpv does not retry.
+--- The tell is `audio-pts` frozen while the video clock advances. A dead chain
+--- is rebuilt by switching the aid off and straight back on, which forces mpv
+--- to uninit and reinit the AO — the same recovery a manual `aid=no` toggle
+--- performs.
+local audio_watch = nil
+
+local function watch_audio_recovery(new_aid)
+  if audio_watch then
+    audio_watch:kill()
+    audio_watch = nil
+  end
+  if new_aid == nil or new_aid == 'no' then
+    return
+  end
+  -- Silence while paused is normal; only a playing chain can die.
+  audio_watch = mp.add_timeout(1.0, function()
+    audio_watch = nil
+    if mp.get_property_bool('pause') then
+      return
+    end
+    local pts = mp.get_property_number('audio-pts')
+    local video = mp.get_property_number('video-pts')
+    if pts == nil or video == nil or pts > 0 then
+      return
+    end
+    -- Two samples a half second apart: audio genuinely stuck while video runs.
+    local second = mp.add_timeout(0.5, function()
+      audio_watch = nil
+      local pts2 = mp.get_property_number('audio-pts')
+      local video2 = mp.get_property_number('video-pts')
+      if pts2 == nil or video2 == nil then
+        return
+      end
+      if pts2 > (pts or 0) or video2 <= (video or 0) then
+        return
+      end
+      local frozen = new_aid
+      toast('音频输出未响应，正在重建…')
+      mp.commandv('set', 'aid', 'no')
+      mp.add_timeout(0.15, function()
+        mp.commandv('set', 'aid', frozen == 'auto' and 'auto' or frozen)
+      end)
+    end)
+    audio_watch = second
+  end)
+end
+
+mp.observe_property('aid', 'string', function(_, value)
   refresh_menu()
   mark_dirty()
+  watch_audio_recovery(value)
 end)
 
 mp.observe_property('sid', 'string', function()
