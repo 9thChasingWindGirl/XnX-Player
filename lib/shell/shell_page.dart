@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/strings.dart';
 import '../data/models/media_item.dart';
+import '../data/prefs.dart';
 import '../data/store.dart';
 import '../design/ps_tokens.dart';
 import '../pages/home/home_page.dart';
@@ -20,6 +21,7 @@ import '../ui/core/focus_navigator.dart';
 import '../ui/core/text_entry.dart';
 import '../ui/core/tv_scale.dart';
 import '../ui/widgets/ps_backdrop.dart';
+import 'cc_panels.dart';
 import 'control_center.dart';
 import 'control_center_items.dart';
 import 'top_status_bar.dart';
@@ -46,6 +48,13 @@ class _ShellPageState extends State<ShellPage> {
   bool _ccOpen = false;
   bool _searchOpen = false;
 
+  /// Which dock panel is raised, if any. Kept separate from [_ccOpen] because
+  /// the dock stays up while a panel is open — that is the whole point.
+  CcPanelId? _ccPanel;
+
+  /// Mirrors the window state so the power panel can label its toggle.
+  bool _fullscreen = false;
+
   /// Number of pushed routes (hub, player) above the shell. While any is open
   /// the shell must stay out of the keyboard: its handlers are registered
   /// first, so otherwise it would eat F1/Space/arrows that belong to the
@@ -57,6 +66,20 @@ class _ShellPageState extends State<ShellPage> {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onKey);
     unawaited(AppStore.instance.load());
+    unawaited(_syncFullscreen());
+  }
+
+  /// The power panel labels its toggle, so it needs the real window state
+  /// rather than the assumption that the app starts windowed.
+  Future<void> _syncFullscreen() async {
+    try {
+      final bool value = await windowManager.isFullScreen();
+      if (mounted) {
+        setState(() => _fullscreen = value);
+      }
+    } on Object {
+      // Window manager can be unavailable on some sessions; ignore.
+    }
   }
 
   @override
@@ -82,6 +105,12 @@ class _ShellPageState extends State<ShellPage> {
         return true;
       }
       if (_ccOpen) {
+        // Esc backs out one level at a time: panel first, then the dock.
+        if (_ccPanel != null) {
+          setState(() => _ccPanel = null);
+          _focusZone('dock-icons');
+          return true;
+        }
         setState(() => _ccOpen = false);
         return true;
       }
@@ -99,7 +128,17 @@ class _ShellPageState extends State<ShellPage> {
       return true;
     }
     if (key == LogicalKeyboardKey.tab) {
-      setState(() => _ccOpen = !_ccOpen);
+      final bool open = !_ccOpen;
+      setState(() {
+        _ccOpen = open;
+        if (!open) {
+          _ccPanel = null;
+        }
+      });
+      if (open) {
+        // Land on the icon row, not wherever focus happened to be.
+        _focusZone('dock-icons');
+      }
       return true;
     }
     if (key == LogicalKeyboardKey.f1) {
@@ -139,39 +178,173 @@ class _ShellPageState extends State<ShellPage> {
     try {
       final bool current = await windowManager.isFullScreen();
       await windowManager.setFullScreen(!current);
+      if (mounted) {
+        setState(() => _fullscreen = !current);
+      }
     } on Object {
       // Window manager can be unavailable on some sessions; ignore.
     }
   }
 
-  void _selectTab(int index) {
-    if (index == _tab) {
+  /// Moves focus into [zoneId] once the frame that contains it has laid out.
+  void _focusZone(String zoneId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        FocusNavigator.focusIn(zoneId);
+      }
+    });
+  }
+
+  void _selectTab(int index, {bool fromDock = false}) {
+    final bool changed = index != _tab;
+    setState(() {
+      if (changed) {
+        _tab = index;
+        _visited.add(index);
+      }
+      _ccOpen = false;
+      _ccPanel = null;
+    });
+    if (!fromDock) {
       return;
     }
-    setState(() {
-      _tab = index;
-      _visited.add(index);
-      _ccOpen = false;
+    // The dock is about to stop being focusable, so the arrow keys would go
+    // nowhere. Hand them back to the page that just became visible.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        FocusNavigator.focusFirst();
+      }
     });
   }
 
   void _onControlCenter(CcItem item) {
-    setState(() => _ccOpen = false);
-    switch (item.id) {
-      case 'home' || 'switcher':
-        _selectTab(0);
-      case 'downloads' || 'music':
-        _selectTab(1);
-      case 'search':
+    switch (item.kind) {
+      case CcKind.tab:
+        _selectTab(item.tabIndex, fromDock: true);
+      case CcKind.search:
         _openSearch();
-      // 声音与个人档案落进设置页：音量/直通/画质档位都在那里。
-      case 'sound' || 'profile':
-        _selectTab(2);
-      case 'power':
-        unawaited(_quitApp());
-      default:
-        // 通知/游戏库/麦克风/外设还没有可落地的功能，保持不动。
+      case CcKind.panel:
+        _togglePanel(item.panel!);
+    }
+  }
+
+  /// Second press on the same icon closes its panel, the way the console does.
+  void _togglePanel(CcPanelId id) {
+    final bool closing = _ccPanel == id;
+    setState(() => _ccPanel = closing ? null : id);
+    _focusZone(closing ? 'dock-icons' : 'cc-panel');
+  }
+
+  /// Item id whose panel is up, so the dock icon can stay lit.
+  String? get _activeDockId {
+    final CcPanelId? id = _ccPanel;
+    if (id == null) {
+      return null;
+    }
+    for (final CcItem item in kControlCenterItems) {
+      if (item.panel == id) {
+        return item.id;
+      }
+    }
+    return null;
+  }
+
+  /// One exhaustive switch over [CcPanelId]: adding a dock panel without
+  /// implementing it is a compile error, not a dead button.
+  Widget _panelFor(CcPanelId id) {
+    final AppStore store = AppStore.instance;
+    final PlaybackPrefs prefs = store.prefs;
+    switch (id) {
+      case CcPanelId.recent:
+        return CcRecentPanel(items: _recentItems(), onPlay: _playFromDock);
+      case CcPanelId.notifications:
+        return CcNotificationsPanel(
+          errors: store.errors,
+          loading: store.loading,
+          sourceCount: store.sources.length,
+          onRefresh: () => unawaited(store.refresh()),
+          onClear: store.clearErrors,
+        );
+      case CcPanelId.sources:
+        return CcSourcesPanel(
+          sources: store.sources,
+          onRefresh: () => unawaited(store.refresh()),
+          onAdd: _addSource,
+        );
+      case CcPanelId.sound:
+        return CcSoundPanel(prefs: prefs, onChanged: _applyPrefs, hw: store.hw);
+      case CcPanelId.subtitle:
+        return CcSubtitlePanel(prefs: prefs, onChanged: _applyPrefs);
+      case CcPanelId.picture:
+        return CcPicturePanel(prefs: prefs, onChanged: _applyPrefs);
+      case CcPanelId.profile:
+        return CcProfilePanel(
+          version: S.appVersion,
+          sources: store.sources.length,
+          media: store.items.length,
+          favorites: store.items.where((MediaItem item) => item.favorite).length,
+          onOpenSettings: () => _selectTab(2, fromDock: true),
+        );
+      case CcPanelId.power:
+        return CcPowerPanel(
+          fullscreen: _fullscreen,
+          onToggleFullscreen: () => unawaited(_toggleFullScreen()),
+          onMinimize: () => unawaited(_minimize()),
+          onQuit: () => unawaited(_quitApp()),
+        );
+    }
+  }
+
+  /// Panel host, rebuilt from the store so a slider or toggle repaints the row
+  /// immediately instead of waiting for the next shell rebuild.
+  Widget? _panelHost() {
+    final CcPanelId? id = _ccPanel;
+    if (id == null) {
+      return null;
+    }
+    return AnimatedBuilder(
+      animation: AppStore.instance,
+      builder: (BuildContext context, Widget? child) => _panelFor(id),
+    );
+  }
+
+  void _applyPrefs(PlaybackPrefs value) {
+    unawaited(AppStore.instance.updatePrefs(value));
+  }
+
+  /// Resumable items first, then the rest of the catalogue: "最近" is about
+  /// what you were watching, not what was added last.
+  List<MediaItem> _recentItems() {
+    final AppStore store = AppStore.instance;
+    final List<MediaItem> out = <MediaItem>[];
+    final Set<String> seen = <String>{};
+    for (final MediaItem item in <MediaItem>[
+      ...store.continueWatching,
+      ...store.recent.reversed,
+    ]) {
+      if (seen.add(item.id)) {
+        out.add(item);
+      }
+      if (out.length >= 10) {
         break;
+      }
+    }
+    return out;
+  }
+
+  void _playFromDock(MediaItem item) {
+    setState(() {
+      _ccOpen = false;
+      _ccPanel = null;
+    });
+    unawaited(_play(item));
+  }
+
+  Future<void> _minimize() async {
+    try {
+      await windowManager.minimize();
+    } on Object {
+      // Window manager can be unavailable on some sessions; ignore.
     }
   }
 
@@ -187,6 +360,7 @@ class _ShellPageState extends State<ShellPage> {
     setState(() {
       _searchOpen = true;
       _ccOpen = false;
+      _ccPanel = null;
     });
   }
 
@@ -200,6 +374,7 @@ class _ShellPageState extends State<ShellPage> {
       _tab = 1;
       _visited.add(1);
       _ccOpen = false;
+      _ccPanel = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _libraryKey.currentState?.openSourceDialog();
@@ -377,7 +552,10 @@ class _ShellPageState extends State<ShellPage> {
                   opacity: _ccOpen ? 1 : 0,
                   duration: PsMotion.base,
                   child: GestureDetector(
-                    onTap: () => setState(() => _ccOpen = false),
+                    onTap: () => setState(() {
+                      _ccOpen = false;
+                      _ccPanel = null;
+                    }),
                     child: ColoredBox(color: const Color(0xFF000000).withValues(alpha: 0.55)),
                   ),
                 ),
@@ -387,7 +565,12 @@ class _ShellPageState extends State<ShellPage> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: ControlCenter(open: _ccOpen, onSelect: _onControlCenter),
+              child: ControlCenter(
+                open: _ccOpen,
+                onSelect: _onControlCenter,
+                activeId: _activeDockId,
+                panel: _panelHost(),
+              ),
             ),
             Positioned(
               left: 0,

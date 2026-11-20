@@ -181,6 +181,17 @@ class AppStore extends ChangeNotifier {
     _notify();
   }
 
+  /// Dismisses the collected source errors. The control center shows them as
+  /// notifications, and a notification list you cannot clear is a list nobody
+  /// reads after the first day.
+  void clearErrors() {
+    if (errors.isEmpty) {
+      return;
+    }
+    errors.clear();
+    _notify();
+  }
+
   /// Records what the capability probe learned about this machine so the next
   /// start can decide passthrough and HDR handling without probing blind.
   Future<void> updateHwProfile(HardwareProfile value) async {

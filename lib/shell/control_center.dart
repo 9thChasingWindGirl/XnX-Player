@@ -9,15 +9,28 @@ import 'control_center_items.dart';
 
 /// PS5 Control Center: a translucent dock that slides up over the current
 /// screen instead of navigating away from it.
+///
+/// Activating an entry either switches tab, opens search, or — the common case —
+/// raises an inline panel [panel] in place of the three highlight cards. The
+/// dock stays up while a panel is open, which is the behaviour that makes a
+/// control center useful: change one thing, keep watching.
 class ControlCenter extends StatelessWidget {
   const ControlCenter({
     super.key,
     required this.open,
     required this.onSelect,
+    required this.panel,
+    required this.activeId,
   });
 
   final bool open;
   final ValueChanged<CcItem> onSelect;
+
+  /// Panel content for the currently open dock entry, or null for the cards.
+  final Widget? panel;
+
+  /// Id of the entry whose panel is open, so the icon can stay lit.
+  final String? activeId;
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +46,7 @@ class ControlCenter extends StatelessWidget {
             opacity: open ? 1 : 0,
             duration: PsMotion.base,
             curve: PsMotion.curve,
-            child: _Dock(onSelect: onSelect),
+            child: _Dock(onSelect: onSelect, panel: panel, activeId: activeId),
           ),
         ),
       ),
@@ -42,17 +55,31 @@ class ControlCenter extends StatelessWidget {
 }
 
 class _Dock extends StatelessWidget {
-  const _Dock({required this.onSelect});
+  const _Dock({required this.onSelect, required this.panel, required this.activeId});
 
   final ValueChanged<CcItem> onSelect;
+  final Widget? panel;
+  final String? activeId;
+
+  static const double _closedHeight = 432;
+  static const double _openHeight = 596;
+
+  /// Height the body is laid out at, whether or not the dock has finished
+  /// growing. 596 - 24 - 12 - 132 - 8.
+  static const double _bodyHeight = 420;
 
   @override
   Widget build(BuildContext context) {
+    final Widget? body = panel;
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-        child: Container(
-          height: 432,
+        // The dock grows upwards for a panel; the icon row keeps its place so
+        // the thing you just pressed does not move out from under the cursor.
+        child: AnimatedContainer(
+          duration: PsMotion.base,
+          curve: PsMotion.out,
+          height: body == null ? _closedHeight : _openHeight,
           decoration: const BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
@@ -64,24 +91,25 @@ class _Dock extends StatelessWidget {
           child: Column(
             children: <Widget>[
               const SizedBox(height: PsSpace.lg),
-              SizedBox(
-                height: 216,
-                child: FocusZone(
-                  id: 'dock-cards',
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: PsSpace.safeX),
-                    itemCount: 3,
-                    separatorBuilder: (BuildContext context, int index) {
-                      return const SizedBox(width: PsSpace.md);
-                    },
-                    itemBuilder: (BuildContext context, int index) {
-                      return _DockCard(index: index, onSelect: onSelect);
-                    },
+              Expanded(
+                // The dock grows when a panel opens. While that height is
+                // animating the body is already laid out at full size, so it is
+                // clipped from the top instead of overflowing: an OverflowBox
+                // keeps the rows at their real size and the ClipRect hides the
+                // part that has not been revealed yet.
+                child: ClipRect(
+                  child: OverflowBox(
+                    alignment: Alignment.bottomCenter,
+                    minHeight: 0,
+                    maxHeight: _bodyHeight,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: PsSpace.safeX),
+                      child: body ?? _DockCards(onSelect: onSelect),
+                    ),
                   ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(height: PsSpace.sm),
               SizedBox(
                 height: 132,
                 child: FocusZone(
@@ -92,7 +120,11 @@ class _Dock extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: <Widget>[
                         for (final CcItem item in kControlCenterItems)
-                          _DockIcon(item: item, onSelect: onSelect),
+                          _DockIcon(
+                            item: item,
+                            active: item.id == activeId,
+                            onSelect: onSelect,
+                          ),
                       ],
                     ),
                   ),
@@ -100,6 +132,39 @@ class _Dock extends StatelessWidget {
               ),
               const SizedBox(height: PsSpace.xs),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The three highlight cards shown when no panel is open.
+///
+/// Each card names the dock entry it opens; they used to all fire the same
+/// item, which is the sort of placeholder that makes a UI feel dead.
+class _DockCards extends StatelessWidget {
+  const _DockCards({required this.onSelect});
+
+  final ValueChanged<CcItem> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: SizedBox(
+        height: 216,
+        child: FocusZone(
+          id: 'dock-cards',
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: 3,
+            separatorBuilder: (BuildContext context, int index) {
+              return const SizedBox(width: PsSpace.md);
+            },
+            itemBuilder: (BuildContext context, int index) {
+              return _DockCard(index: index, onSelect: onSelect);
+            },
           ),
         ),
       ),
@@ -118,28 +183,16 @@ class _DockCard extends StatefulWidget {
 }
 
 class _DockCardState extends State<_DockCard> {
-  static const List<String> _titles = <String>['继续观看', '最近活动', '下载与上传'];
-  static const List<String> _subtitles = <String>['接着上次的进度', '本机改动记录', '无进行中的任务'];
-  static const List<String> _targets = <String>['home', 'notifications', 'downloads'];
+  static const List<String> _titles = <String>['继续观看', '媒体来源', '通知'];
+  static const List<String> _subtitles = <String>['接着上次的进度', '接入的后端与刷新', '连接错误与运行结果'];
+  static const List<String> _targets = <String>['recent', 'sources', 'notifications'];
   static const List<List<Color>> _art = <List<Color>>[
     <Color>[Color(0xFF2B3B58), Color(0xFF101724)],
-    <Color>[Color(0xFF3A2E4E), Color(0xFF171122)],
     <Color>[Color(0xFF1F3A38), Color(0xFF0C1615)],
+    <Color>[Color(0xFF3A2E4E), Color(0xFF171122)],
   ];
 
   bool _focused = false;
-
-  /// Each card opens the dock entry it is named after. Firing the first item
-  /// for all three is the kind of placeholder that makes a UI feel dead.
-  CcItem get _target {
-    final String id = _targets[widget.index % _targets.length];
-    for (final CcItem item in kControlCenterItems) {
-      if (item.id == id) {
-        return item;
-      }
-    }
-    return kControlCenterItems.first;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,7 +201,7 @@ class _DockCardState extends State<_DockCard> {
       radius: PsRadius.cardLarge,
       highlightScale: 1.04,
       onFocused: (bool focused) => setState(() => _focused = focused),
-      onSelect: () => widget.onSelect(_target),
+      onSelect: _open,
       child: Container(
         width: 384,
         height: 216,
@@ -159,7 +212,9 @@ class _DockCardState extends State<_DockCard> {
             end: Alignment.bottomRight,
             colors: art,
           ),
-          border: Border.all(color: _focused ? const Color(0x59FFFFFF) : PsColor.hairline),
+          border: Border.all(
+            color: _focused ? const Color(0x59FFFFFF) : PsColor.hairline,
+          ),
         ),
         padding: const EdgeInsets.all(PsSpace.lg),
         child: Column(
@@ -174,12 +229,22 @@ class _DockCardState extends State<_DockCard> {
       ),
     );
   }
+
+  /// Routes through the dock entry with the same id, so a card and its icon can
+  /// never drift apart — one table of behaviour, not two.
+  void _open() {
+    final CcItem? target = ccItemById(_targets[widget.index]);
+    if (target != null) {
+      widget.onSelect(target);
+    }
+  }
 }
 
 class _DockIcon extends StatefulWidget {
-  const _DockIcon({required this.item, required this.onSelect});
+  const _DockIcon({required this.item, required this.active, required this.onSelect});
 
   final CcItem item;
+  final bool active;
   final ValueChanged<CcItem> onSelect;
 
   @override
@@ -203,19 +268,32 @@ class _DockIconState extends State<_DockIcon> {
         width: 132,
         height: 108,
         decoration: BoxDecoration(
-          color: _focused ? const Color(0x1FFFFFFF) : const Color(0x00FFFFFF),
+          color: _focused
+              ? const Color(0x1FFFFFFF)
+              : widget.active
+              ? const Color(0x14FFFFFF)
+              : const Color(0x00FFFFFF),
           borderRadius: BorderRadius.circular(PsRadius.card),
+          border: Border.all(
+            color: widget.active
+                ? PsColor.text.withValues(alpha: 0.28)
+                : const Color(0x00000000),
+          ),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            Icon(widget.item.icon, size: 38, color: PsColor.text),
+            Icon(
+              widget.item.icon,
+              size: 38,
+              color: _focused || widget.active ? PsColor.text : PsColor.textDim,
+            ),
             const SizedBox(height: PsSpace.xs),
             Text(
               widget.item.label,
               style: PsType.micro.copyWith(
                 fontSize: 15,
-                color: _focused ? PsColor.text : PsColor.textDim,
+                color: _focused || widget.active ? PsColor.text : PsColor.textDim,
               ),
             ),
           ],

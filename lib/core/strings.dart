@@ -13,19 +13,21 @@ abstract final class S {
   static const String tabLive = '直播';
   static const String tabSettings = '设置';
 
-  // Control Center
+  // Control Center. Every entry here must name a thing the player can actually
+  // do: the console reference also has 麦克风 / 周边设备 / 游戏基地, but this
+  // app has no microphone, no paired accessories and no games, and a dock
+  // button that only forwards somewhere else is worse than no button.
   static const String ccHome = '主页';
-  static const String ccSwitcher = '切换';
+  static const String ccRecent = '最近';
   static const String ccNotifications = '通知';
-  static const String ccGameBase = '游戏基地';
-  static const String ccMusic = '音乐';
-  static const String ccDownloads = '下载';
+  static const String ccSearch = '搜索';
+  static const String ccLibrary = '媒体库';
+  static const String ccSources = '来源';
   static const String ccSound = '声音';
-  static const String ccMic = '麦克风';
-  static const String ccAccessories = '周边设备';
+  static const String ccSubtitle = '字幕';
+  static const String ccPicture = '画面';
   static const String ccProfile = '个人资料';
   static const String ccPower = '电源';
-  static const String ccSearch = '搜索';
 
   // Shelves
   static const String continueWatching = '继续观看';
