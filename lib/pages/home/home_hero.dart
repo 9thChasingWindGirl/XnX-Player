@@ -7,6 +7,7 @@ import '../../data/models/media_item.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_ids.dart';
 import '../../ui/core/poster_image.dart';
+import '../../ui/core/title_treatment.dart';
 import '../../ui/widgets/ps_button.dart';
 
 /// The hero panel: key art top-right, copy on the left, one action.
@@ -75,13 +76,12 @@ class HeroPanel extends StatelessWidget {
             ),
             Positioned(
               left: PsSpace.safeX - 4 + slide,
-              top: 248,
-              width: 1160,
-              child: Text(
-                item.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              top: 240,
+              child: TitleTreatment(
+                item: item,
                 style: PsType.display,
+                maxWidth: 1000,
+                logoHeight: 116,
               ),
             ),
             Positioned(
@@ -192,7 +192,10 @@ class _HeroArt extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final List<Color> art = item.palette;
-    final String? url = item.backdropUrl ?? item.posterUrl;
+    // A square frame should hold the poster: cropping a 16:9 backdrop to a
+    // square throws away both ends of every shot. The backdrop is the fallback
+    // for items that only ever had one.
+    final String? url = item.posterUrl ?? item.heroBackdropUrl;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(PsRadius.hero),

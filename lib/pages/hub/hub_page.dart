@@ -12,6 +12,7 @@ import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_ids.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/poster_image.dart';
+import '../../ui/core/title_treatment.dart';
 import '../../ui/core/tv_focusable.dart';
 import '../../ui/widgets/ps_button.dart';
 import '../../ui/widgets/ps_page.dart';
@@ -147,11 +148,12 @@ class _HubPageState extends State<HubPage> {
                         ),
                       ),
                       const SizedBox(height: 18),
-                      Text(
-                        item.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      TitleTreatment(
+                        item: item,
                         style: PsType.hero,
+                        maxWidth: 900,
+                        logoHeight: 96,
+                        maxLines: 2,
                       ),
                       const SizedBox(height: 16),
                       Text(
@@ -270,7 +272,7 @@ class _KeyArt extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final List<Color> art = item.palette;
-    final String? url = item.backdropUrl ?? item.posterUrl;
+    final String? url = item.heroBackdropUrl;
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
