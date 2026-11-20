@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding, WidgetsBindingObserver;
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -45,7 +46,7 @@ class PlayerPage extends StatefulWidget {
   State<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends State<PlayerPage> {
+class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   static const int _maxQueue = 30;
 
   MpvPlayer? _player;
@@ -100,12 +101,23 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _input = InputRouter.instance.subscribe(_onIntent, name: 'player');
     unawaited(_boot());
   }
 
+  /// A resize delivered while the pointer is idle still has to move the OSD
+  /// layer and the video child. Polling eventually got there, but until it did
+  /// the chrome was painted at the old size — the mismatch in the screenshot.
+  @override
+  void didChangeMetrics() {
+    _surface?.refit();
+    _osd?.syncSize();
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _input?.cancel();
     _watchdog?.cancel();
     _escFallback?.cancel();
@@ -161,6 +173,7 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     _surface?.refit();
+    _osd?.syncSize();
     _player?.showUi();
   }
 
@@ -861,6 +874,10 @@ class _PlayerPageState extends State<PlayerPage> {
   /// driven by a different Material package than the one this file imports, and
   /// naming the render type would tie the two together for no benefit.
   Offset? _normalized(Offset local) {
+    // Test the pointer against the layer's *current* rectangle. A resize can
+    // land between Flutter's layout and the next size poll; syncing here makes
+    // the hit test and the painted chrome agree at the moment of the event.
+    _osd?.syncSize();
     final Size? size = _inputKey.currentContext?.size;
     if (size == null || size.isEmpty) {
       return null;
@@ -962,32 +979,37 @@ class _PlayerPageState extends State<PlayerPage> {
     final MpvPlayer? player = _player;
     final bool showVideoState = _error != null || !_fileLoaded;
 
-    return TvScale(
-      child: Scaffold(
-        backgroundColor: const Color(0xFF000000),
-        body: Listener(
-          key: _inputKey,
-          // Opaque: the picture is a native window underneath, so Flutter only
-          // receives pointer events because this subtree claims them. A
-          // transparent listener would let every click fall through to nothing.
-          behavior: HitTestBehavior.opaque,
-          onPointerHover: (PointerHoverEvent event) => _queueMove(event.localPosition),
-          onPointerMove: (PointerMoveEvent event) => _queueMove(event.localPosition),
-          onPointerDown: (PointerDownEvent event) {
-            _pressedButton =
-                (event.buttons & _secondaryButton) != 0 ? 'right' : 'left';
-            _forwardButton(event, down: true);
-          },
-          onPointerUp: (PointerUpEvent event) {
-            _forwardButton(event, down: false);
-            _pressedButton = null;
-          },
-          onPointerCancel: (PointerCancelEvent event) {
-            _forwardButton(event, down: false);
-            _pressedButton = null;
-          },
-          onPointerSignal: _forwardScroll,
-          child: MouseRegion(
+    // The listener sits *outside* TvScale on purpose: its localPosition is
+    // then in the window's real logical space, which maps proportionally onto
+    // the Win32 client area the independent OSD layer paints in. Inside
+    // TvScale the coordinates were design-space units whose scale changed on
+    // every resize, so a resized window mapped the pointer onto stale chrome.
+    return Listener(
+      key: _inputKey,
+      // Opaque: the picture is a native window underneath, so Flutter only
+      // receives pointer events because this subtree claims them. A
+      // transparent listener would let every click fall through to nothing.
+      behavior: HitTestBehavior.opaque,
+      onPointerHover: (PointerHoverEvent event) => _queueMove(event.localPosition),
+      onPointerMove: (PointerMoveEvent event) => _queueMove(event.localPosition),
+      onPointerDown: (PointerDownEvent event) {
+        _pressedButton =
+            (event.buttons & _secondaryButton) != 0 ? 'right' : 'left';
+        _forwardButton(event, down: true);
+      },
+      onPointerUp: (PointerUpEvent event) {
+        _forwardButton(event, down: false);
+        _pressedButton = null;
+      },
+      onPointerCancel: (PointerCancelEvent event) {
+        _forwardButton(event, down: false);
+        _pressedButton = null;
+      },
+      onPointerSignal: _forwardScroll,
+      child: TvScale(
+        child: Scaffold(
+          backgroundColor: const Color(0xFF000000),
+          body: MouseRegion(
             // mpv is told not to touch the cursor (`cursor-autohide=no`,
             // `input-cursor=no`); the pointer the user sees is this one.
             cursor: SystemMouseCursors.basic,

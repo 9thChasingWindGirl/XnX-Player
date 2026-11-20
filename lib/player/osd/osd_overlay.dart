@@ -82,8 +82,13 @@ class OsdOverlay {
   /// Called when the video surface changes size; the overlay follows it so
   /// chrome coordinates stay window coordinates.
   void resize(double width, double height) {
+    if (!_layer.resize(width.round(), height.round())) {
+      return;
+    }
     _applySize(width, height);
-    _layer.resize(width.round(), height.round());
+    // MoveWindow can reshuffle the sibling order. Re-raise immediately so the
+    // freshly sized layer stays above the mpv surface.
+    _layer.raise();
     _schedulePaint();
   }
 
@@ -91,7 +96,50 @@ class OsdOverlay {
     _size = ui.Size(width, height);
   }
 
+  /// The layer's current size in device pixels — the same space [OsdChrome]
+  /// paints in and the hit zones are tested against.
+  ui.Size get size => _size;
+
+  /// Brings [size] in line with the Win32 client area *right now*.
+  ///
+  /// The periodic poll is fine for painting, but pointer events must never be
+  /// mapped with a stale rectangle: after a window resize Flutter already
+  /// reports the new widget size while the layer still carried the old one.
+  /// The pointer then landed on the visible seek bar but was tested against
+  /// the pre-resize geometry (the two marks in the bug screenshot sit a whole
+  /// chrome band apart). Reading GetClientRect is cheap enough to do on every
+  /// pointer event, and the common case is one comparison.
+  void syncSize() {
+    final int? app = _appHwnd ?? Win32.appWindow();
+    if (app == null) {
+      return;
+    }
+    _appHwnd = app;
+    final WindowBox? box = Win32.clientBox(app);
+    if (box == null ||
+        box.isEmpty ||
+        (box.width == _size.width.round() && box.height == _size.height.round())) {
+      return;
+    }
+    resize(box.width.toDouble(), box.height.toDouble());
+  }
+
+  /// Cached answer to "did mpv accept the chrome handoff?". Querying the
+  /// property on every pointer move would add a synchronous IPC round-trip to
+  /// the hot path; the flag is set once during boot and never flips back.
+  bool? _ownsChrome;
+
   void setVisible(bool visible) {
+    if (visible) {
+      final bool owns = _ownsChrome ??=
+          _player.getProperty('user-data/player/osd-engine') == 'window';
+      if (!owns) {
+        // mpv builds without writable user-data properties silently ignore
+        // the handover. Painting here as well would draw the chrome twice —
+        // leave the Lua stage alone.
+        return;
+      }
+    }
     if (_visible == visible) {
       return;
     }
@@ -130,23 +178,13 @@ class OsdOverlay {
     });
   }
 
-  /// Follows the video surface's size. A 400 ms poll mirrors [VideoSurface]'s
-  /// own re-fit rhythm instead of hooking Win32 size events the runner owns.
+  /// Follows the video surface's size. The poll is only a backstop for a
+  /// window that changes while no pointer event arrives (fullscreen from a
+  /// key, a snap/restore drag); [syncSize] from the pointer forwarder is what
+  /// keeps interactive coordinates exact.
   void startSizeWatch() {
     _sizeTimer?.cancel();
-    _sizeTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
-      final int? app = _appHwnd ??= Win32.appWindow();
-      if (app == null) {
-        return;
-      }
-      final WindowBox? box = Win32.clientBox(app);
-      if (box == null ||
-          box.isEmpty ||
-          (box.width == _size.width.round() && box.height == _size.height.round())) {
-        return;
-      }
-      resize(box.width.toDouble(), box.height.toDouble());
-    });
+    _sizeTimer = Timer.periodic(const Duration(milliseconds: 200), (_) => syncSize());
   }
 
   /// Whether a normalized pointer position is over the chrome band at all —

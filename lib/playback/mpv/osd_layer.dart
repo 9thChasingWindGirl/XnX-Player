@@ -153,7 +153,15 @@ final class OsdLayer {
     if (hwnd == 0) {
       return null;
     }
-    return OsdLayer._(hwnd, width, height);
+    final OsdLayer layer = OsdLayer._(hwnd, width, height);
+    // The bitmap must exist before the first present(). Without it every
+    // frame returned at the `bits == null` guard and the caller kept believing
+    // the independent chrome was live while Lua still drew the real OSD.
+    if (!layer._rebuildDib(width, height)) {
+      _destroyWindow(hwnd);
+      return null;
+    }
+    return layer;
   }
 
   static void _registerClassOnce() {
@@ -179,11 +187,14 @@ final class OsdLayer {
 
   // --- layout ---------------------------------------------------------------
 
-  void resize(int width, int height) {
+  bool resize(int width, int height) {
+    if (!_rebuildDib(width, height)) {
+      return false;
+    }
     _width = width;
     _height = height;
-    _rebuildDib();
     _moveWindow(_hwnd, 0, 0, width, height, 0);
+    return true;
   }
 
   void show() => _showWindow(_hwnd, _swShow);
@@ -254,14 +265,16 @@ final class OsdLayer {
     }
   }
 
-  void _rebuildDib() {
-    _freeDib();
+  /// Builds the backing bitmap for [width]x[height]. The new GDI objects are
+  /// created *before* the old ones are retired, so a failed resize leaves the
+  /// previous frame usable instead of blanking the layer until recovery.
+  bool _rebuildDib(int width, int height) {
     final Pointer<_BitmapInfo> bmi = calloc<_BitmapInfo>();
     try {
       bmi.ref.bmiHeader
         ..biSize = sizeOf<_BitmapInfoHeader>()
-        ..biWidth = _width
-        ..biHeight = -_height // top-down
+        ..biWidth = width
+        ..biHeight = -height // top-down
         ..biPlanes = 1
         ..biBitCount = 32
         ..biCompression = 0 // BI_RGB
@@ -272,12 +285,14 @@ final class OsdLayer {
         final int dib = _createDibSection(dc, bmi, 0 /* DIB_RGB_COLORS */, bitsPtr, 0, 0);
         if (dib == 0 || bitsPtr.value == nullptr) {
           _deleteDc(dc);
-          return;
+          return false;
         }
         _selectObject(dc, dib);
+        _freeDib();
         _dibDc = dc;
         _dib = dib;
         _dibBits = bitsPtr.value.cast<Uint8>();
+        return true;
       } finally {
         calloc.free(bitsPtr);
       }
