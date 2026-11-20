@@ -267,7 +267,8 @@ class _ResultTile extends StatefulWidget {
 }
 
 class _ResultTileState extends State<_ResultTile> {
-  static const double _grow = 1.08;
+  /// `CardLook::focus_scale` — see `PsCard.focusScale`.
+  static const double _grow = PsCard.focusScale;
 
   bool _focused = false;
 
@@ -280,6 +281,7 @@ class _ResultTileState extends State<_ResultTile> {
       focusedRadius: PsRadius.cardFocused,
       accent: widget.item.accentColor,
       highlightScale: _grow,
+      pressScale: PsCard.pressScale,
       onFocused: (bool focused) {
         if (mounted && focused != _focused) {
           setState(() => _focused = focused);

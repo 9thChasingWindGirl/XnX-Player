@@ -99,8 +99,14 @@ class PosterCard extends StatelessWidget {
               Positioned(
                 left: 10,
                 top: 10,
+                // `CardLook::badge_size` is 16 and the pill is `size + 14`
+                // tall, inset by `edge` from the corner (`card.cpp:341-357`).
+                // Upstream fills it with the accent; a poster is already
+                // colour, so this keeps a black plate and takes only the size.
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  height: PsCard.badgeSize + 14,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: const Color(0xFF000000).withValues(alpha: 0.55),
                     borderRadius: BorderRadius.circular(PsRadius.pill),
@@ -108,8 +114,8 @@ class PosterCard extends StatelessWidget {
                   ),
                   child: Text(
                     item.badge!,
-                    style: PsType.micro.copyWith(
-                      fontSize: 12,
+                    style: PsType.label.copyWith(
+                      fontSize: PsCard.badgeSize,
                       letterSpacing: 1.2,
                       color: PsColor.text,
                       fontWeight: FontWeight.w600,
@@ -136,18 +142,31 @@ class PosterCard extends StatelessWidget {
                   ),
                 ),
               ),
+            // The watched bar sits *inside* the art, inset by
+            // `max(10, radius * 0.45)` and 6 tall, with a track at 50 %
+            // because it has to read on any picture (`card.cpp:300-318`).
+            // Ours used to run edge to edge at 4 px and 16 %, i.e. it read as
+            // a border rather than as progress.
             if (item.progress > 0.01)
               Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  height: 4,
-                  color: PsColor.text.withValues(alpha: 0.16),
-                  alignment: Alignment.centerLeft,
-                  child: FractionallySizedBox(
-                    widthFactor: item.progress.clamp(0.0, 1.0).toDouble(),
-                    child: ColoredBox(color: item.accentColor),
+                left: PsCard.progressInset,
+                right: PsCard.progressInset,
+                bottom: PsCard.progressInset - 2,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(PsCard.progressHeight / 2),
+                  child: SizedBox(
+                    height: PsCard.progressHeight,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        ColoredBox(color: PsColor.text.withValues(alpha: 0.5)),
+                        FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: item.progress.clamp(0.0, 1.0).toDouble(),
+                          child: ColoredBox(color: item.accentColor),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

@@ -106,7 +106,8 @@ motion/sound   omega, damping, sounds(声音集), dark
 
 | Token | 值 | 来源 |
 |---|---|---|
-| `PsElevation.cardResting` | 0,14 / blur 24 / 黑 50% | `home_tile.dart:225` |
+| `PsElevation.cardResting` | **无投影** | `card.cpp:256`：静止卡不画影；第四轮删掉了原来 0,10/20/35 % 的折中，见 §12.1 |
+| `PsElevation.cardLifted(focus)` | 4,10+8f / blur 22+16f / 黑 34% | `card.cpp:258-261`：集合内聚焦卡 |
 | `PsElevation.cardFocused` | 0,18 / blur 34 / 黑 60% | `aurora.cpp:500`：`shadow(…, 26, 34, black 0.6)`，26 是圆角、34 才是柔化 |
 | `PsElevation.sheet` | 0,20 / blur 60 / 黑 50% | `aurora.cpp:519` 详情抽屉 |
 | `PsElevation.heroGlow(accent)` | accent 30% / blur 60 / spread 6 + 0,26 / blur 36 | `home_hero.dart:195-206` |
@@ -120,7 +121,9 @@ motion/sound   omega, damping, sounds(声音集), dark
 | `PsBlur.subtle` | 12 | 预留（提示条、toast） |
 | `PsBlur.panel` | 24 | 控制中心 `control_center.dart:76` |
 | `PsBlur.dialog` | 28 | 来源弹窗 `source_dialog.dart:156`、搜索 `search_page.dart:147` |
-| `PsBlur.glassTint` | 0.62 | 玻璃面板底色不透明度（`aurora.cpp:520`） |
+| `PsGlass.tint` | 0.55 | 玻璃面板的 tint（`draw_overlay_panel` 默认），见 §12 |
+| `PsGlass.sheetTint` | 0.62 | 首页详情抽屉（`aurora.cpp:520`）；原来的 `PsBlur.glassTint` 已并进这里 |
+| `PsGlass.dockTintTop/Bottom` | 0.62 / 0.78 | 控制中心 dock（§12.2 说明了为什么用页面色） |
 
 ### 4.5 弹簧预设与时长（`PsMotion` 增量）
 
@@ -203,7 +206,6 @@ motion/sound   omega, damping, sounds(声音集), dark
 | 项 | 上游 | 我们 | 理由 |
 |---|---|---|---|
 | `danger` | `#E5484D` | `#FF5D6C` | 深色玻璃面板上更醒目；上游那套偏 Web 语义 |
-| 卡片静止阴影 | 无或极淡 | 0,14 / blur 24 | 我们的海报有真实图片边缘，需要一点点分离感 |
 | 主题数量 | 30 套 | 1 套 | 媒体中心不需要换肤；多套主题会稀释「一种语言」 |
 
 ---
@@ -303,7 +305,7 @@ motion/sound   omega, damping, sounds(声音集), dark
 | 状态 | 静止 | 聚焦 |
 |---|---|---|
 | 圆角 | 22 | 26（`PsRadius.cardFocused`，对应 `aurora.cpp:503` 的 30 = 26 + 4） |
-| 投影 | `cardResting`（0,10 / blur 20 / 35 %） | `cardFocused`（0,18 / blur 34 / 60 %） |
+| 投影 | **无**（§12.1 改的：`card.cpp:256` 只在 focus > 0 时才画） | `cardFocused`（0,18 / blur 34 / 60 %） |
 | 图像 | 压暗 18 %（`aurora.cpp:487` 的 0.82 alpha） | 全亮 |
 
 `focused` 传 `null` 时卡片既不压暗也不抬起（不跟踪逐卡焦点的列表沿用这个）。
@@ -319,3 +321,79 @@ motion/sound   omega, damping, sounds(声音集), dark
 控制中心原本有 `BackdropFilter`，但上面的渐变从 `0xCC` 到 `0xF2`，几乎不透光，
 看起来仍是实色板。改为 62 % → 78 % 的 tint，边框换成 `PsColor.glassEdge`（22 % 白，
 `aurora.cpp:521` 的 `light`）。模糊本身没动，仍是 `PsBlur.panel` 24。
+
+---
+
+## 12. 第四轮：控制中心与媒体延伸逐条贴源（2026-11-21）
+
+第三轮结束时，首页与卡片已经按 `aurora.cpp` 的绘制值对齐，但**控制中心**和**媒体
+延伸**这两块仍是源码到手前写的样子：dock 的玻璃、面板的底、卡片的副标题、海报的
+进度条、播放器的跳转秒数，都是「看着像」而不是「查过」。
+
+这一轮把每一个数都对着源码改了一遍。规则仍然是：**以绘制调用为准，不以结构体默认
+值为准**；没有绘制调用可查的，写明是布局约束并给出上游原值。
+
+### 12.1 改掉的偏差
+
+| 项 | 上游依据 | 改前 | 改后 |
+|---|---|---|---|
+| 集合内卡片聚焦 | `CardLook::focus_scale = 1.06f` `card.h:77` | dock 1.04 / 网格 1.08 / 搜索 1.08 | **1.06**，三处统一到 `PsCard.focusScale` |
+| 静止卡片投影 | `draw_card` 只在 `focus > 0.01` 时画 `card.cpp:256` | (0,10) / blur 20 / 35 % | **无**（`PsElevation.cardResting` 为空表） |
+| 聚焦卡投影（集合内） | `{x+4, y+10+8f, w-8, h}` / blur `22+16f` / 34 % `card.cpp:258-261` | 只有首页那套 34/60 | 新增 `PsElevation.cardLifted(focus)` |
+| 卡片按下 | `press_scale = 0.04f` `card.h:78` | 无 | `TvFocusable.pressScale`，键盘与指针都算 |
+| 卡片抬升 | `lift = 6f`，`card_lift = lift * focus` `card.h:79` | 无 | dock 卡片上移 6 px（`AnimatedSlide` 放在 `TvFocusable` **外面**，否则环留在旧基线） |
+| 卡片副标题 | `CardLook::subtitle_size = 20` `card.h:56` | 15 / 16 的 micro | **20**（`PsCard.subtitleSize`） |
+| 压在图上的文字 | `CardText::over` 先铺 78 % 黑渐变 `card.cpp:305-309` | 直接写白字 | dock 卡片底部铺 `PsCard.artScrim` |
+| 海报观看进度条 | 高 6、内缩 `max(10, r*0.45)`、轨道 50 % `card.cpp:300-318` | 高 4、贴边、轨道 16 % | 高 6、内缩 10、轨道 50 % |
+| dock 玻璃 | `draw_overlay_panel`：模糊 → surface@tint → 描边 ≥1.5 `overlay.cpp:219-250` | 黑色渐变 + **只有上边**一条 hairline | 页面色 62→78 % + **四边** 1.5（只有上边可见，但边不随布局变） |
+| 面板的底 | `PanelStyle::surface = false`「只画标题栏和分隔线」`surface.hpp:113-115` | 自带 95 % 实色卡片 + 边框 | **不画底**，坐在 dock 那块玻璃上 |
+| 面板内边距 | `padding_x 24 / padding_y 20` `surface.hpp:100-101` | 26 / 18 / 26 / 20 | 24 / 20 / 24 / 20 |
+| 面板副标题 | `subtitle_size = 19` `surface.hpp:106` | 15 的 micro | 19 |
+| 面板标题栏 | `header_rule = true` `surface.hpp:118` | 无分隔线 | 标题下一条 hairline |
+| 列表行内缩 | `ListViewStyle::padding = 26` `list.hpp:35` | 18 | 26 |
+| 空状态 | `EmptyStateStyle`：icon 96 / 30 / 22 / gap 16 `stat.hpp:113-120` | 34 / 21 / 15 / gap 18 | 44 / 24 / 17 / gap 16 |
+| 统计块 | `StatTileStyle`：label 20 / value 48 `stat.hpp:21-23` | 14 / 30 | 18 / 40（`PsType.stat`） |
+| 电平条 | 与时间轴同一条轨道：高 8、16 % `player.cpp:1028` | 硬编码 8 / 0.16 | `PsControls.trackHeight` |
+| 快进秒数 | `kSeekJump = 15` `player.cpp:68` | OSD 里 Shift+方向 **30** | **15**，帮助文本同步 |
+| 播放控件几何 | `MediaControlsStyle` `media_controls.hpp:60-104` | 无令牌 | `PsControls`：56/68/12、轨道 8、圆点 24、音量条 110、跳过 10 s、音量 5 % |
+| 连按加速 | `seek_growth 1.3` / `seek_max 60` `media_controls.hpp:96-98` | 无 | `PsSeek.growth` / `max` / `repeated(n)` |
+
+### 12.2 保留的偏离（每条都有约束，不是漏）
+
+| 项 | 上游 | 我们 | 为什么 |
+|---|---|---|---|
+| 面板行高 | 76 | 68 + 8 = 76 的同一间距 | 面板固定 420 高，`padding 40 + 标题栏 60` 之后只剩 320；76 只能放 4 行，68 能放 4 行且不贴边。间距总和仍是 76 |
+| dock 的 tint 用页面色 | `surface` 上色 | 页面底色 | 上游的 `list.glass` 在抓屏时**同时模糊并压暗**；Flutter 的 `BackdropFilter` 只模糊。用 surface 色 55 % 盖上去会发灰，所以压暗由 tint 自己承担 |
+| 空状态图标 | 96 | 44 | 420 高的面板里 96 + 标题 + 两行正文放不下；比例、间距与顺序不变 |
+| 首页货架卡片压暗 18 % | `CardLook::dim = 0` | 18 % | 首页用的是 `aurora.cpp:487` 的 `kWhite.with_alpha(0.82f)`——那是「未聚焦的封面」，与组件的 `dim` 是两个开关。组件默认 0 已经写进 `PsCard.dim` |
+
+### 12.3 新令牌
+
+| 令牌 | 值 | 出处 |
+|---|---|---|
+| `PsGlass.tint` | 0.55 | `draw_overlay_panel` 默认 tint |
+| `PsGlass.sheetTint` | 0.62 | `aurora.cpp:519` 抽屉 |
+| `PsGlass.scrim` | 0.50 | `SheetStyle::scrim` |
+| `PsGlass.edgeWidth` | 1.5 | `max(theme.border, 1.5)` |
+| `PsGlass.dockTintTop/Bottom` | 0.62 / 0.78 | 原 `control_center.dart` 里的两个十六进制色，收进令牌 |
+| `PsCard.focusScale` | 1.06 | `CardLook::focus_scale` |
+| `PsCard.lift` | 6 | `CardLook::lift` |
+| `PsCard.pressScale` | 0.04 | `CardLook::press_scale` |
+| `PsCard.artScrim` | 0.78 | `CardLook::scrim` |
+| `PsCard.titleSize/subtitleSize` | 24 / 20 | `CardLook` |
+| `PsCard.progressHeight/progressInset` | 6 / 10 | `draw_card` 的进度条 |
+| `PsPanel.*` | 24 / 20 / 24 / 19 / 52 / 26 | `PanelStyle` / `ListViewStyle` |
+| `PsControls.*` | 22 / 56 / 68 / 12 / 8 / 24 / 110 / 24 / 28 / 21 / 21 / 10 / 0.05 | `MediaControlsStyle` |
+| `PsSeek.growth/max/repeated()` | 1.3 / 60 | `MediaControlsStyle::seek_growth/seek_max` |
+
+`test/design_tokens_test.dart` 把这些数字钉住了：改任何一个，测试会指出它在跟哪一行
+源码对不上。
+
+### 12.4 这一轮没做的
+
+- **`Panel` 的 `well` 变体**（下沉区）与 `SectionHeader` 的计数徽章：控制中心没有用武
+  之地，不为了「用上」而加。
+- **`MediaControls` 的自动隐藏**（`auto_hide`）：播放器的 OSD 由 Lua 拥有，Dart 侧没有
+  绘制权，时机没到（见 `docs/OSD_ARCHITECTURE.md` 的方案 B'）。
+- **`PsDetail` / `PsQueue`**：仍只有契约没有消费方。它们是详情抽屉与队列面板的几何，
+  等详情页从整页改成抽屉、队列从 Lua 搬回来时才会被读。

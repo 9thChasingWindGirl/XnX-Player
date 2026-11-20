@@ -165,18 +165,17 @@ abstract final class PsFocus {
 /// resting cards have none or a very faint one. A modal sheet floats higher
 /// than a card, which is why it has its own entry rather than a scale factor.
 abstract final class PsElevation {
-  /// Resting cards get next to nothing. The reference casts no shadow until a
-  /// card is focused; a real poster has its own edge, so a faint drop is kept
-  /// purely to stop the artwork from looking pasted on the stage. Anything
-  /// heavier makes every card read as already focused.
-  static const List<BoxShadow> cardResting = <BoxShadow>[
-    BoxShadow(
-      color: Color(0x59000000),
-      blurRadius: 20,
-      offset: Offset(0, 10),
-    ),
-  ];
+  /// Resting cards cast nothing. `draw_card` only draws a shadow once
+  /// `focus > 0.01` (`card.cpp:256`), and the home screen's shelf calls
+  /// `list.image` with no shadow at all (`aurora.cpp:488`). We used to keep a
+  /// 35 % / blur-20 drop "so the artwork does not look pasted on"; that is a
+  /// taste call the reference does not make, and it made every card read as
+  /// already half focused.
+  static const List<BoxShadow> cardResting = <BoxShadow>[];
 
+  /// A focused card on the stage floats high: `shadow({x, y+18, w, h}, 26,
+  /// 34, black 0.6)` at `aurora.cpp:500`. The ring's own radius is passed
+  /// separately (26 is the rounded-rect radius, not a blur).
   static const List<BoxShadow> cardFocused = <BoxShadow>[
     BoxShadow(
       color: Color(0x99000000),
@@ -184,6 +183,22 @@ abstract final class PsElevation {
       offset: Offset(0, 18),
     ),
   ];
+
+  /// A focused card *inside* a collection: the kit's generic card shadow,
+  /// `{frame.x+4, y+10+8*focus, w-8, h}` blurred `22+16*focus` at 34 %
+  /// (`card.cpp:258-261`). It is narrower than the card and sits slightly to
+  /// the right because a focused card is lifted, and the light comes from the
+  /// upper left of the set.
+  static List<BoxShadow> cardLifted(double focus) {
+    final double t = focus.clamp(0.0, 1.0).toDouble();
+    return <BoxShadow>[
+      BoxShadow(
+        color: const Color(0xFF000000).withValues(alpha: 0.34 * t),
+        blurRadius: 22 + 16 * t,
+        offset: Offset(4, 10 + 8 * t),
+      ),
+    ];
+  }
 
   /// Overlays and the detail sheet.
   static const List<BoxShadow> sheet = <BoxShadow>[
@@ -212,6 +227,7 @@ abstract final class PsElevation {
 ///
 /// Full-screen multi-layer blur is the fastest way to lose frames on Windows;
 /// only modal surfaces get one, and these are the only three sizes in use.
+/// The tint that goes *on top* of the blur is not a blur — see [PsGlass].
 abstract final class PsBlur {
   /// Hint bars, toasts.
   static const double subtle = 12;
@@ -221,9 +237,116 @@ abstract final class PsBlur {
 
   /// Dialogs and the search sheet, which sit over the whole scene.
   static const double dialog = 28;
+}
 
-  /// How much of the panel's own tint is laid over the blurred copy.
-  static const double glassTint = 0.62;
+/// What a floating surface is made of.
+///
+/// Every overlay in the kit — a dialog, a sheet, a toast, a bubble — goes
+/// through one function, `draw_overlay_panel` (`overlay.cpp:219-250`):
+/// blur the screen behind (`list.glass`), cover it with the theme's surface
+/// colour made opaque and then laid down at `tint`, and close the edge with a
+/// stroke no thinner than 1.5 in the theme's outline. A sheet also lays a
+/// scrim over the whole screen behind it.
+///
+/// The dock cannot copy that literally: `list.glass` both blurs *and* darkens
+/// the scene as it captures it, and Flutter's [BackdropFilter] only blurs. So
+/// the dock uses [dockTintTop] → [dockTintBottom], a higher opacity of the page
+/// colour, to do the darkening the glass pass would have done. That is a
+/// measured deviation, not a guess: see `docs/DESIGN_TOKENS.md` §12.
+abstract final class PsGlass {
+  /// A frosted panel: dialog, sheet, toast (`OverlayStyle::frost`, 0.55).
+  static const double tint = 0.55;
+
+  /// The home screen's detail drawer, tinted with the artwork
+  /// (`aurora.cpp:519`): the panel is readable over a bright still.
+  static const double sheetTint = 0.62;
+
+  /// How much the screen behind a sheet is darkened (`SheetStyle::scrim`).
+  static const double scrim = 0.50;
+
+  /// Minimum stroke on a glass edge (`max(theme.border, 1.5)`).
+  static const double edgeWidth = 1.5;
+
+  /// The control center dock, top to bottom. Blur alone cannot hide playback
+  /// behind it, so it is the page colour at 62 → 78 % rather than surface at
+  /// 55 %. Both values were already in `control_center.dart`; they live here
+  /// now so the dock and its panels cannot drift apart.
+  static const double dockTintTop = 0.62;
+  static const double dockTintBottom = 0.78;
+}
+
+/// Sizes of a group of content and the rows inside it.
+///
+/// `PanelStyle` (`surface.hpp:99-125`) and `ListViewStyle` (`list.hpp:32-37`).
+/// The panel numbers are used; the row numbers are kept next to them because
+/// the control center compresses its rows and must say by how much.
+abstract final class PsPanel {
+  /// Between the panel's edge and its content.
+  static const double paddingX = 24;
+  static const double paddingY = 20;
+
+  static const double titleSize = 24;
+  static const double subtitleSize = 19;
+
+  /// A list's header, a row, and the room inside a row.
+  static const double headerHeight = 52;
+
+  /// 76 in the kit. A control-center panel is 420 tall; after its padding and
+  /// header bar 76 leaves four rows and no slack for a fifth, so ours is 68
+  /// with an 8 px gap — the same 76 pitch, a shorter row. See
+  /// `docs/DESIGN_TOKENS.md` §12.
+  static const double rowHeight = 68;
+  static const double rowGap = 8;
+
+  /// Between the panel's edge and its rows.
+  static const double rowInset = 26;
+}
+
+/// How a piece of content behaves, as opposed to how it looks.
+///
+/// `CardLook` (`card.h:47-88`): the knobs every collection shares. Ours were
+/// scattered across the tile, the dock card and the search result, and three
+/// of them disagreed with the reference.
+abstract final class PsCard {
+  /// Full focus. The home shelf grows 20 % (`kCardGrow`, `aurora.cpp:44`) —
+  /// that is the stage's own language, chosen because a shelf of covers has
+  /// room to breathe. A card *inside a collection* (dock, grid, search) grows
+  /// 6 %, and it is this number the kit defaults to.
+  static const double focusScale = 1.06;
+
+  /// A focused card rises this many pixels. `card_lift` returns
+  /// `look.lift * focus` (`card.cpp:151-153`), so the ring travels with it.
+  static const double lift = 6;
+
+  /// A press pushes the card back in by this much (`press_scale = 0.04`).
+  static const double pressScale = 0.04;
+
+  /// The gradient a title laid *over* artwork sits on, black at 78 %
+  /// (`CardLook::scrim`). Without it a white title on a bright poster is
+  /// unreadable, which is why the reference never writes over art bare.
+  static const double artScrim = 0.78;
+
+  static const double titleSize = 24;
+  static const double subtitleSize = 20;
+
+  /// The inset of text written over the art (`CardLook::text_inset`).
+  static const double textInset = 14;
+
+  /// A short pill in the corner of the art ("4K", "NEW").
+  static const double badgeSize = 16;
+
+  /// The watched bar along the bottom of the art, and how far it stops short
+  /// of the corners (`max(10, radius * 0.45)`, `card.cpp:300-305`).
+  static const double progressHeight = 6;
+  static const double progressInset = 10;
+
+  /// Cards without the focus fade by this much; 0 is the kit's default.
+  ///
+  /// The home shelf does dim its neighbours, but that is a different knob:
+  /// `aurora.cpp:487` draws an unfocused cover at `alpha 0.82`, i.e. 18 % wash
+  /// applied by the *screen*, not by the card. Keeping the two separate is why
+  /// this stays 0 while `PosterCard` still passes 0.18 down.
+  static const double dim = 0;
 }
 
 /// Durations for one-shot transitions (routes, fades, panel slide). Continuous

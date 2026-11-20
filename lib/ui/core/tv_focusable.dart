@@ -33,6 +33,7 @@ class TvFocusable extends StatefulWidget {
     this.autofocus = false,
     this.enabled = true,
     this.highlightScale = 1.0,
+    this.pressScale = 1.0,
     this.highlightAlignment = Alignment.center,
     this.radius = PsRadius.card,
     this.focusedRadius = PsRadius.card,
@@ -61,6 +62,16 @@ class TvFocusable extends StatefulWidget {
   /// rectangle: the card animates its own size, so the ring and the art can
   /// use independent spring stiffness.
   final double highlightScale;
+
+  /// How far the item shrinks while held. `CardLook::press_scale` is 0.04 and
+  /// `QuickActionStyle::press_scale` 0.06 (`card.h:78`, `quick_action.hpp:44`):
+  /// a press has to be felt before the action fires, otherwise a controller's
+  /// delay reads as a dropped input.
+  ///
+  /// This is the *fraction taken off*, so 0.04 means "scale to 0.96". It is
+  /// applied on top of [highlightScale] and only while the item is actually
+  /// being held, so a card that is focused but untouched stays grown.
+  final double pressScale;
 
   /// Anchor used when growing the highlight rectangle, so it tracks artwork
   /// that grows from its bottom-left corner instead of its centre.
@@ -200,12 +211,12 @@ class _TvFocusableState extends State<TvFocusable> {
 
     if (activate) {
       if (event is KeyDownEvent) {
-        _pressed = true;
+        setState(() => _pressed = true);
         return KeyEventResult.handled;
       }
       if (event is KeyUpEvent) {
         final bool fire = _pressed;
-        _pressed = false;
+        setState(() => _pressed = false);
         if (fire) {
           _select();
         }
@@ -250,10 +261,16 @@ class _TvFocusableState extends State<TvFocusable> {
     // measurement stays at rest size and `_publish` maps it with the same
     // factor: ring and artwork land on the same edge, and shelves that grow
     // their box keep `highlightScale: 1.0` so nothing grows twice.
-    if (widget.highlightScale != 1.0) {
+    //
+    // The press multiplies that scale down. It is deliberately *not* folded
+    // into the published rectangle: a 4 % shrink is below what the ring's own
+    // 4 px stroke can show, and re-measuring mid-press would make the ring
+    // twitch away from the edge it was just welded to.
+    if (widget.highlightScale != 1.0 || widget.pressScale != 1.0) {
+      final double held = _pressed ? 1.0 - widget.pressScale : 1.0;
       content = AnimatedScale(
-        scale: _focused ? widget.highlightScale : 1.0,
-        duration: PsMotion.grow,
+        scale: (_focused ? widget.highlightScale : 1.0) * held,
+        duration: _pressed ? PsMotion.fast : PsMotion.grow,
         curve: PsMotion.out,
         alignment: widget.highlightAlignment,
         child: content,
@@ -335,6 +352,15 @@ class _TvFocusableState extends State<TvFocusable> {
                   InputRouter.instance.notePointer();
                   _select();
                 }
+              : null,
+          onTapDown: widget.enabled && widget.pressScale != 1.0
+              ? (TapDownDetails details) => setState(() => _pressed = true)
+              : null,
+          onTapUp: widget.pressScale != 1.0
+              ? (TapUpDetails details) => setState(() => _pressed = false)
+              : null,
+          onTapCancel: widget.pressScale != 1.0
+              ? () => setState(() => _pressed = false)
               : null,
           onLongPress: widget.enabled ? widget.onLongSelect : null,
           child: Stack(

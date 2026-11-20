@@ -1481,7 +1481,7 @@ local function draw_help(parts)
   local lines = {
     { '空格 / K', '播放 / 暂停' },
     { '← →', '快退 / 快进 5 秒' },
-    { 'Shift + ← →', '快退 / 快进 30 秒' },
+    { 'Shift + ← →', '快退 / 快进 15 秒' },
     { '↑ ↓', '音量 ±5' },
     { 'M', '静音' },
     { 'J / Shift+J', '下一个 / 上一个字幕' },
@@ -1915,9 +1915,12 @@ local function handle_key(raw)
       show()
     end
   elseif name == 'left' then
-    seek_rel(shift and -30 or -5)
+    -- 5 s is a nudge, 15 s is the shoulder-button jump. Both numbers are
+    -- PsSeek.step / PsSeek.jump in lib/design/ps_media.dart: change them here
+    -- and there, never here alone.
+    seek_rel(shift and -15 or -5)
   elseif name == 'right' then
-    seek_rel(shift and 30 or 5)
+    seek_rel(shift and 15 or 5)
   elseif name == 'up' then
     add_volume(5)
   elseif name == 'down' then

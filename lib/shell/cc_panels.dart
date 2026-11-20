@@ -4,6 +4,7 @@ import '../core/strings.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
 import '../data/sources/media_source.dart';
+import '../design/ps_media.dart';
 import '../design/ps_tokens.dart';
 import '../playback/mpv/hw_profile.dart';
 import '../ui/core/focus_zone.dart';
@@ -25,49 +26,98 @@ class CcPanelFrame extends StatelessWidget {
     required this.title,
     required this.hint,
     required this.child,
+    this.count,
   });
 
   final String title;
   final String hint;
   final Widget child;
 
+  /// How many things the panel is about. A `Panel` has a `header_slot` of 120
+  /// for exactly this (`PanelStyle::header_slot`, `surface.hpp:105`), and a
+  /// `SectionHeader` carries the same figure as a 28 px badge at 17 px type
+  /// (`SectionHeaderStyle::count_height/count_size`, `surface.hpp:139-141`).
+  /// A negative count hides it, as upstream's does.
+  final int? count;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(PsRadius.cardLarge),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[Color(0xF21E2029), Color(0xF20B0C13)],
-        ),
-        border: Border.all(color: PsColor.hairline),
+    final int? shown = count != null && count! >= 0 ? count : null;
+    // A Panel with `surface: false` (`surface.hpp:113-115`): the surface is
+    // already there — the dock's glass — and all this adds is the padding, the
+    // title bar and the rule under it. It used to draw its own 95 % opaque
+    // card on top of that glass, which is why the panel read as a second
+    // object stuck onto the dock instead of a region of it.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        PsPanel.paddingX,
+        PsPanel.paddingY,
+        PsPanel.paddingX,
+        PsPanel.paddingY,
       ),
-      padding: const EdgeInsets.fromLTRB(26, 18, 26, 20),
-      // `stretch` matters: the body is Expanded (height only), so a loose
-      // cross-axis constraint would collapse every row to its text width.
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
-              Text(title, style: PsType.section),
+              Text(title, style: PsType.section.copyWith(fontSize: PsPanel.titleSize)),
+              if (shown != null) ...<Widget>[
+                const SizedBox(width: 12),
+                _CountBadge(count: shown),
+              ],
               const SizedBox(width: 16),
               Expanded(
                 child: Text(
                   hint,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: PsType.micro.copyWith(fontSize: 15),
+                  textAlign: TextAlign.right,
+                  // `PanelStyle::subtitle_size` — 19, not a 15 px micro label.
+                  style: PsType.label.copyWith(
+                    fontSize: PsPanel.subtitleSize,
+                    fontWeight: FontWeight.w400,
+                    color: PsColor.textFaint,
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 14),
+          // `header_rule`: a hairline, not a shadow and not a gap. Drawn as a
+          // box so the panel owes nothing to a Material ancestor.
+          Container(height: 1, color: PsColor.hairline),
+          const SizedBox(height: 14),
           // One zone for the whole panel: arrows move inside it, and the shell
           // can drop focus straight onto the first control with focusIn().
           Expanded(child: FocusZone(id: 'cc-panel', child: child)),
         ],
+      ),
+    );
+  }
+}
+
+/// A count on a title bar. `BadgeFill::tinted` at `Status::neutral`: a plate of
+/// the text colour at 12 %, the figure in full text. It never takes the focus —
+/// it is a fact, not a control.
+class _CountBadge extends StatelessWidget {
+  const _CountBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: PsColor.text.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(PsRadius.pill),
+      ),
+      child: Text(
+        '$count',
+        style: PsType.label.copyWith(fontSize: 17, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -102,7 +152,7 @@ class CcPanelRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: PsPanel.rowGap),
       child: Opacity(
         opacity: enabled ? 1 : 0.4,
         child: TvFocusable(
@@ -111,8 +161,10 @@ class CcPanelRow extends StatelessWidget {
           onSelect: onSelect,
           onAdjust: onAdjust,
           child: Container(
-            height: 68,
-            padding: const EdgeInsets.symmetric(horizontal: 18),
+            height: PsPanel.rowHeight,
+            // The kit insets a row by 26 (`ListViewStyle::padding`). The row
+            // height is the one number we shorten — see `PsPanel.rowHeight`.
+            padding: const EdgeInsets.symmetric(horizontal: PsPanel.rowInset),
             decoration: BoxDecoration(
               color: PsColor.text.withValues(alpha: 0.05),
               borderRadius: BorderRadius.circular(14),
@@ -176,11 +228,15 @@ class _CcBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The same track a transport uses: 8 tall, a rounded end, the unfilled
+    // part at 16 % (`PsScrubber.trackRest` / `trackAlphaRest`, from
+    // `player.cpp:1028`). A level bar and a timeline are the same object seen
+    // from two screens.
     return SizedBox(
       width: 220,
-      height: 8,
+      height: PsControls.trackHeight,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(PsControls.trackHeight / 2),
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
@@ -237,19 +293,23 @@ class _CcEmpty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // `EmptyStateStyle` (`stat.hpp:113-125`): a 96 px icon, a 30 px title, a
+    // 22 px body, 16 between them. A 420-tall panel cannot hold 96 plus three
+    // lines, so the icon comes down to 44 and the type to 24/17 — the same
+    // order and the same gaps, one step smaller. Recorded in §12.
     return Center(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: <Widget>[
-          Icon(icon, size: 34, color: PsColor.textFaint),
-          const SizedBox(width: 18),
+          Icon(icon, size: 44, color: PsColor.textFaint),
+          const SizedBox(width: 16),
           Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Text(title, style: PsType.label.copyWith(fontSize: 21)),
-              const SizedBox(height: 4),
-              Text(body, style: PsType.micro.copyWith(fontSize: 15)),
+              Text(title, style: PsType.card.copyWith(fontSize: 24)),
+              const SizedBox(height: 6),
+              Text(body, style: PsType.body.copyWith(fontSize: 17, color: PsColor.textFaint)),
             ],
           ),
         ],
@@ -433,6 +493,7 @@ class CcRecentPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return CcPanelFrame(
       title: S.ccRecent,
+      count: items.length,
       hint: items.isEmpty ? '看过的东西会出现在这里' : '继续上次的进度，选中即播',
       child: items.isEmpty
           ? const _CcEmpty(
@@ -469,7 +530,8 @@ class _RecentCard extends StatelessWidget {
     final double progress = item.progress.clamp(0.0, 1.0).toDouble();
     return TvFocusable(
       radius: PsRadius.card,
-      highlightScale: 1.03,
+      highlightScale: PsCard.focusScale,
+      pressScale: PsCard.pressScale,
       showShine: false,
       onSelect: () => onPlay(item),
       debugLabel: 'cc-recent:${item.id}',
@@ -488,7 +550,7 @@ class _RecentCard extends StatelessWidget {
           ),
           border: Border.all(color: PsColor.hairline),
         ),
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(PsCard.textInset),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.end,
@@ -497,17 +559,20 @@ class _RecentCard extends StatelessWidget {
               item.title,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: PsType.card.copyWith(fontSize: 20, height: 1.25),
+              style: PsType.card.copyWith(fontSize: PsCard.titleSize, height: 1.25),
             ),
             const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
               child: SizedBox(
-                height: 5,
+                height: PsCard.progressHeight,
                 child: Stack(
                   fit: StackFit.expand,
                   children: <Widget>[
-                    ColoredBox(color: PsColor.text.withValues(alpha: 0.22)),
+                    // The track takes the tone that reads against the fill
+                    // (`Painter::on(accent).with_alpha(0.5)`, `card.cpp:313`),
+                    // so the bar shows on any artwork.
+                    ColoredBox(color: PsColor.text.withValues(alpha: 0.5)),
                     FractionallySizedBox(
                       alignment: Alignment.centerLeft,
                       widthFactor: progress <= 0 ? 0.02 : progress,
@@ -553,6 +618,7 @@ class CcNotificationsPanel extends StatelessWidget {
     final String status = loading ? '正在刷新媒体来源…' : '$sourceCount 个来源已连接 · $health';
     return CcPanelFrame(
       title: S.ccNotifications,
+      count: errors.length,
       hint: status,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -762,12 +828,21 @@ class _Stat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // `StatTileStyle` (`stat.hpp:21-24`): a 20 px label over a 48 px figure.
+    // Ours was 14 over 30 — the label was unreadable a metre from the screen.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(label, style: PsType.micro.copyWith(fontSize: 14, letterSpacing: 1.6)),
+        Text(
+          label,
+          style: PsType.label.copyWith(
+            fontSize: 18,
+            color: PsColor.textFaint,
+            letterSpacing: 1.6,
+          ),
+        ),
         const SizedBox(height: 6),
-        Text(value, style: PsType.stat.copyWith(fontSize: 30)),
+        Text(value, style: PsType.stat),
       ],
     );
   }

@@ -59,6 +59,11 @@ abstract final class PsScrubber {
 }
 
 /// Transport row: play/pause in the middle, the smaller controls around it.
+///
+/// This is the *Now Playing screen* (`concepts/player.cpp:53-56`), where a
+/// 46 px play button is drawn as a circle on a full-bleed stage. A transport
+/// that sits in a panel, a sheet or a video overlay is a different object with
+/// its own numbers — see [PsControls].
 abstract final class PsTransport {
   static const double playRadius = 46;
   static const double buttonRadius = 32;
@@ -70,17 +75,79 @@ abstract final class PsTransport {
   static const double rowY = 888;
 }
 
+/// The transport as a reusable component: `MediaControlsStyle`
+/// (`src/ui/components/media_controls.hpp:60-104`).
+///
+/// Where [PsTransport] describes one hand-composed screen, these are the rules
+/// a player overlay follows wherever it is put — the small control bar under a
+/// video, a sheet's player, the compact row in the control center. They differ
+/// from the Now Playing screen on purpose: 56 px buttons instead of 64 px
+/// circles, a 24 px thumb instead of a bare 9 px dot, and a 10 s skip rather
+/// than the 15 s shoulder jump.
+abstract final class PsControls {
+  /// Between the bounds and the content.
+  static const double padding = 22;
+
+  static const double buttonSize = 56;
+  static const double playSize = 68;
+  static const double buttonGap = 12;
+
+  /// The scrubber: 8 tall, a 24 px thumb at full focus, `skip_seconds` 10 on
+  /// the rewind/forward buttons, and a volume bar 110 wide beside the button.
+  static const double trackHeight = 8;
+  static const double thumbSize = 24;
+  static const double volumeWidth = 110;
+
+  /// Between the artwork square and the text column (full layout).
+  static const double artGap = 24;
+
+  static const double titleSize = 28;
+  static const double artistSize = 21;
+  static const double timeSize = 21; // tabular digits, as in the scrubber
+
+  /// Rewind / forward. Distinct from `PsSeek.jump`, which is the shoulder
+  /// button: 10 s is a nudge, 15 s is a jump.
+  static const double skipSeconds = 10;
+
+  /// One press on the volume button while it is being adjusted. A 5 % step is
+  /// 20 presses across the range — fine enough for a quiet night, coarse
+  /// enough to reach the end without holding.
+  static const double volumeStep = 0.05;
+}
+
 /// Seeking. These are behavioural, not cosmetic: the same numbers must hold
 /// whether the user has a controller, a keyboard or a mouse wheel.
 abstract final class PsSeek {
   /// Left/right on the focused timeline.
   static const double step = 5;
 
-  /// A page-step from anywhere: shoulder buttons, PageUp/PageDown.
+  /// A page-step from anywhere: shoulder buttons, PageUp/PageDown, Shift +
+  /// arrow. `player.cpp:68` (`kSeekJump`). The player's OSD must use this and
+  /// not a larger number of its own — it used to jump 30 s here while every
+  /// other control said 15.
   static const double jump = 15;
 
   /// "Previous" restarts the item when it is already past this many seconds.
   static const double restartAfter = 3;
+
+  /// Holding a direction on the scrubber seeks further each repeat: 5 s, then
+  /// ×1.3 per repeat, capped at 60 s a step (`MediaControlsStyle::seek_growth`
+  /// / `seek_max`, `media_controls.hpp:96-98`). Without the cap, a long hold
+  /// crosses a two-hour film in a second and a half.
+  static const double growth = 1.3;
+  static const double max = 60;
+
+  /// How far a single seek step may accelerate to after `n` holds.
+  static double repeated(int holds) {
+    double step = PsSeek.step;
+    for (int i = 0; i < holds; i++) {
+      step *= growth;
+      if (step >= max) {
+        return max;
+      }
+    }
+    return step;
+  }
 }
 
 /// The detail sheet: artwork, eyebrow, title, two lines of synopsis, then the

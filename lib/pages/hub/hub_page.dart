@@ -347,8 +347,9 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
   static const double _gap = 24;
 
   /// 6 % of a 300 px card is 18 px — 9 px into each 24 px gutter: enough to
-  /// read as a lift, not enough to touch the neighbour.
-  static const double _grow = 1.06;
+  /// read as a lift, not enough to touch the neighbour. This is
+  /// `CardLook::focus_scale`, not a local opinion.
+  static const double _grow = PsCard.focusScale;
 
   @override
   Widget build(BuildContext context) {
@@ -389,6 +390,7 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
                   focusedRadius: PsRadius.cardFocused,
                   accent: item.accentColor,
                   highlightScale: _grow,
+                  pressScale: PsCard.pressScale,
                   onSelect: () => widget.onSelect(item),
                   onFocused: (bool focused) {
                     if (focused) {

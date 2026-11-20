@@ -186,9 +186,9 @@ class _GridCard extends StatefulWidget {
 class _GridCardState extends State<_GridCard> {
   /// The grid keeps its layout fixed, so focus grows the artwork instead of the
   /// box. `highlightScale` must carry the same factor or the ring ends up
-  /// floating 8 % outside the resting card — which is what "the ring is a bit
-  /// away from the tile" was.
-  static const double _grow = 1.08;
+  /// floating outside the resting card — which is what "the ring is a bit away
+  /// from the tile" was. 6 % is `CardLook::focus_scale` (`card.h:77`); anything
+  /// larger starts eating the 26 px gutter between tiles.
 
   bool _focused = false;
 
@@ -206,7 +206,8 @@ class _GridCardState extends State<_GridCard> {
       accent: item.accentColor,
       // A live-channel tile keeps its size (its logo is laid out to the box),
       // so its ring must hug the resting edge.
-      highlightScale: channel ? 1.0 : _grow,
+      highlightScale: channel ? 1.0 : PsCard.focusScale,
+      pressScale: PsCard.pressScale,
       onFocused: (bool focused) {
         if (mounted && focused != _focused) {
           setState(() => _focused = focused);

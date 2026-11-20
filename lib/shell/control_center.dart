@@ -81,21 +81,29 @@ class _Dock extends StatelessWidget {
           duration: PsMotion.base,
           curve: PsMotion.out,
           height: body == null ? _closedHeight : _openHeight,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             // Glass, not a solid panel: the blur above does the work and the
             // tint only has to keep text legible over whatever is behind it.
-            // The reference lays `tint 0.62` on the blurred copy and closes the
-            // edge with a 22 % hairline (`aurora.cpp:518-521`); a top-heavy
-            // gradient is kept because the bottom of the dock sits on video.
+            // The reference builds every overlay from one function
+            // (`overlay.cpp:219`): blur, then the theme's surface laid down at
+            // `tint`, then a stroke of at least 1.5 in the outline. Its glass
+            // pass darkens the scene as it captures it; Flutter's
+            // BackdropFilter only blurs, so the darkening is done by the tint
+            // itself — the page colour, not the (lighter) surface colour.
+            // Values: `PsGlass.dockTintTop` / `dockTintBottom`.
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: <Color>[
-                Color(0x9E0A0B10),
-                Color(0xC70A0B10),
+                PsColor.bg.withValues(alpha: PsGlass.dockTintTop),
+                PsColor.bg.withValues(alpha: PsGlass.dockTintBottom),
               ],
             ),
-            border: Border(top: BorderSide(color: PsColor.glassEdge)),
+            // A dock is an attached sheet: it runs off the bottom of the
+            // screen, so only the top edge is ever visible. The other three
+            // are drawn anyway — a rounded or inset dock would need them, and
+            // a border that changes with the layout is how edges drift.
+            border: Border.all(color: PsColor.glassEdge, width: PsGlass.edgeWidth),
           ),
           child: Column(
             children: <Widget>[
@@ -196,6 +204,12 @@ class _DockCard extends StatefulWidget {
 }
 
 class _DockCardState extends State<_DockCard> {
+  /// The two highlight cards' geometry. 384 x 216 is the 16:9 card the dock
+  /// has room for (`_bodyHeight` 420 minus the icon row); the rail keeps its
+  /// own numbers because a shelf is a different object.
+  static const double _cardWidth = 384;
+  static const double _cardHeight = 216;
+
   static const List<String> _titles = <String>['继续观看', '媒体来源', '通知'];
   static const List<String> _subtitles = <String>['接着上次的进度', '接入的后端与刷新', '连接错误与运行结果'];
   static const List<String> _targets = <String>['recent', 'sources', 'notifications'];
@@ -210,34 +224,84 @@ class _DockCardState extends State<_DockCard> {
   @override
   Widget build(BuildContext context) {
     final List<Color> art = _art[widget.index % _art.length];
-    return TvFocusable(
-      radius: PsRadius.cardLarge,
-      highlightScale: 1.04,
-      onFocused: (bool focused) => setState(() => _focused = focused),
-      onSelect: _open,
-      child: Container(
-        width: 384,
-        height: 216,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(PsRadius.cardLarge),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: art,
+    // A focused card rises 6 px (`CardLook::lift`, `card.h:79`). The slide is
+    // applied *outside* TvFocusable on purpose: the highlight rectangle is
+    // measured from the focusable's own render box, so a lift inside it would
+    // leave the ring behind on the old baseline.
+    return AnimatedSlide(
+      offset: _focused ? const Offset(0, -PsCard.lift / _cardHeight) : Offset.zero,
+      duration: PsMotion.grow,
+      curve: PsMotion.out,
+      child: TvFocusable(
+        radius: PsRadius.cardLarge,
+        focusedRadius: PsRadius.cardLarge + 4,
+        highlightScale: PsCard.focusScale,
+        pressScale: PsCard.pressScale,
+        onFocused: (bool focused) => setState(() => _focused = focused),
+        onSelect: _open,
+        child: Container(
+          width: _cardWidth,
+          height: _cardHeight,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(PsRadius.cardLarge),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: art,
+            ),
+            border: Border.all(
+              color: _focused ? const Color(0x59FFFFFF) : PsColor.hairline,
+            ),
+            // Nothing at rest; the kit only casts once a card has the focus
+            // (`card.cpp:256`).
+            boxShadow: _focused ? PsElevation.cardLifted(1) : const <BoxShadow>[],
           ),
-          border: Border.all(
-            color: _focused ? const Color(0x59FFFFFF) : PsColor.hairline,
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              // Text written over artwork always sits on a scrim: the
+              // reference's `CardText::over` darkens the lower edge at 78 %
+              // before it writes a word, never bare (`card.cpp:305-309`).
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: <Color>[
+                      const Color(0x00000000),
+                      const Color(0xFF000000).withValues(alpha: PsCard.artScrim),
+                    ],
+                    stops: const <double>[0.42, 1],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(PsSpace.lg),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: <Widget>[
+                    Text(
+                      _titles[widget.index],
+                      style: PsType.card.copyWith(fontSize: PsCard.titleSize),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _subtitles[widget.index],
+                      // 20, not the 15/16 of a micro label: a card's subtitle
+                      // is `CardLook::subtitle_size` (`card.h:56`).
+                      style: PsType.label.copyWith(
+                        fontSize: PsCard.subtitleSize,
+                        fontWeight: FontWeight.w400,
+                        color: PsColor.textDim,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ),
-        padding: const EdgeInsets.all(PsSpace.lg),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: <Widget>[
-            Text(_titles[widget.index], style: PsType.card),
-            const SizedBox(height: 4),
-            Text(_subtitles[widget.index], style: PsType.micro),
-          ],
         ),
       ),
     );
@@ -272,6 +336,7 @@ class _DockIconState extends State<_DockIcon> {
     return TvFocusable(
       radius: PsRadius.card,
       highlightScale: 1.08,
+      pressScale: PsCard.pressScale,
       showShine: false,
       focusId: FocusIds.dock(widget.item.id),
       onFocused: (bool focused) => setState(() => _focused = focused),
