@@ -1,6 +1,7 @@
-import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:xnx_player/ui/core/focus_navigator.dart';
+import 'package:xnx_player/ui/core/focus_zone.dart';
 import 'package:xnx_player/ui/core/motion_clock.dart';
 import 'package:xnx_player/ui/core/tv_focusable.dart';
 
@@ -13,13 +14,16 @@ import 'package:xnx_player/ui/core/tv_focusable.dart';
 /// `focus_memory_test` on CI. Screens, on the other hand, must not lose their
 /// springs in silence, so the strict builder keeps throwing.
 void main() {
+  setUp(FocusRegistry.instance.reset);
+  tearDown(FocusRegistry.instance.reset);
+
   testWidgets('a focusable outside the app still takes focus and builds',
       (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Center(
           child: TvFocusable(
-            autofocus: true,
+            focusId: 'probe',
             onSelect: () {},
             child: const SizedBox(width: 100, height: 40),
           ),
@@ -27,15 +31,17 @@ void main() {
       ),
     );
 
-    // A second frame so the focused branch — the one that asks for a clock —
-    // is actually built.
+    expect(FocusNavigator.focusById('probe'), isTrue);
+    // One frame to apply the focus change, a second for the focused branch —
+    // the one that asks for a clock — to be built.
+    await tester.pump();
     await tester.pump();
 
     expect(tester.takeException(), isNull);
-    expect(FocusManager.instance.primaryFocus?.hasFocus, isTrue);
+    expect(FocusRegistry.instance.entryById('probe')?.node.hasFocus, isTrue);
   });
 
-  testWidgets('a screen that needs the clock fails loudly instead of standing still',
+  testWidgets('a screen that needs the clock fails instead of standing still',
       (WidgetTester tester) async {
     await tester.pumpWidget(
       const Directionality(
