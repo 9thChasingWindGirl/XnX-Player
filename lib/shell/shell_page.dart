@@ -158,14 +158,28 @@ class _ShellPageState extends State<ShellPage> {
   void _onControlCenter(CcItem item) {
     setState(() => _ccOpen = false);
     switch (item.id) {
-      case 'home':
+      case 'home' || 'switcher':
         _selectTab(0);
       case 'downloads' || 'music':
         _selectTab(1);
       case 'search':
         _openSearch();
+      // 声音与个人档案落进设置页：音量/直通/画质档位都在那里。
+      case 'sound' || 'profile':
+        _selectTab(2);
+      case 'power':
+        unawaited(_quitApp());
       default:
+        // 通知/游戏库/麦克风/外设还没有可落地的功能，保持不动。
         break;
+    }
+  }
+
+  Future<void> _quitApp() async {
+    try {
+      await windowManager.destroy();
+    } on Object {
+      // Window manager can be unavailable on some sessions; ignore.
     }
   }
 
