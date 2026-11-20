@@ -2,9 +2,10 @@ import 'dart:async';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/input/input_action.dart';
+import '../core/input/input_router.dart';
 import '../core/strings.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
@@ -18,7 +19,6 @@ import '../pages/settings/settings_page.dart';
 import '../player/player_page.dart';
 import '../ui/core/focus_highlight.dart';
 import '../ui/core/focus_navigator.dart';
-import '../ui/core/text_entry.dart';
 import '../ui/core/tv_scale.dart';
 import '../ui/widgets/ps_backdrop.dart';
 import 'cc_panels.dart';
@@ -61,10 +61,14 @@ class _ShellPageState extends State<ShellPage> {
   /// player's own bindings.
   int _routes = 0;
 
+  /// This screen's place in the input stack. Cancelled on dispose, which is
+  /// what makes 'the last route pushed wins' true without any ordering luck.
+  InputSubscription? _input;
+
   @override
   void initState() {
     super.initState();
-    HardwareKeyboard.instance.addHandler(_onKey);
+    _input = InputRouter.instance.subscribe(_onIntent, name: 'shell');
     unawaited(AppStore.instance.load());
     unawaited(_syncFullscreen());
   }
@@ -84,94 +88,113 @@ class _ShellPageState extends State<ShellPage> {
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_onKey);
+    _input?.cancel();
     _hero.dispose();
     super.dispose();
   }
 
-  bool _onKey(KeyEvent event) {
-    if (event is! KeyDownEvent) {
-      return false;
+  /// One handler per screen, fed by [InputRouter]. The shell only sees intents
+  /// that no route above it claimed.
+  bool _onIntent(InputIntent intent) {
+    // Navigation and activation are generic: they act on whatever holds focus,
+    // which is the topmost route when one is open. Moving focus is not "shell
+    // chrome", so a pushed route does not disable it — otherwise a gamepad
+    // could open the hub and never move inside it.
+    switch (intent.action) {
+      case InputAction.navigateUp:
+        return FocusNavigator.move(NavDir.up);
+      case InputAction.navigateDown:
+        return FocusNavigator.move(NavDir.down);
+      case InputAction.navigateLeft:
+        return FocusNavigator.move(NavDir.left);
+      case InputAction.navigateRight:
+        return FocusNavigator.move(NavDir.right);
+      case InputAction.confirm:
+        // A keyboard presses through the focused widget and a pointer through
+        // its tap handler, so both have already happened by the time this runs.
+        // A gamepad has no key event at all — this is that path.
+        return FocusNavigator.activate();
+      case InputAction.contextMenu:
+        return FocusNavigator.menu();
+      default:
+        break;
     }
+
+    // Everything else belongs to the shell, and a pushed route covers it: the
+    // player must not inherit Ctrl+F, Tab or F1 from the screen underneath.
     if (_routes > 0) {
       return false;
     }
-    final LogicalKeyboardKey key = event.logicalKey;
 
-    if (key == LogicalKeyboardKey.escape) {
-      if (_searchOpen) {
-        setState(() => _searchOpen = false);
-        FocusNavigator.focusFirst();
+    switch (intent.action) {
+      case InputAction.back:
+        return _onBack();
+      case InputAction.search:
+        _openSearch();
         return true;
-      }
-      if (_ccOpen) {
-        // Esc backs out one level at a time: panel first, then the dock.
-        if (_ccPanel != null) {
-          setState(() => _ccPanel = null);
-          _focusZone('dock-icons');
-          return true;
-        }
-        setState(() => _ccOpen = false);
+      case InputAction.toggleDock:
+        _setDock(!_ccOpen);
         return true;
-      }
-      return false;
+      case InputAction.openFile:
+        unawaited(_openFile());
+        return true;
+      case InputAction.fullscreen:
+        unawaited(_toggleFullScreen());
+        return true;
+      default:
+        return false;
     }
-
-    // A dialog owns the keyboard: arrows must move the caret, not the focus.
-    if (TextEntry.active.value) {
-      return false;
-    }
-
-    if (key == LogicalKeyboardKey.slash ||
-        (key == LogicalKeyboardKey.keyF && HardwareKeyboard.instance.isControlPressed)) {
-      _openSearch();
-      return true;
-    }
-    if (key == LogicalKeyboardKey.tab) {
-      final bool open = !_ccOpen;
-      setState(() {
-        _ccOpen = open;
-        if (!open) {
-          _ccPanel = null;
-        }
-      });
-      if (open) {
-        // Land on the icon row, not wherever focus happened to be.
-        _focusZone('dock-icons');
-      }
-      return true;
-    }
-    if (key == LogicalKeyboardKey.f1) {
-      unawaited(_openFile());
-      return true;
-    }
-    if (key == LogicalKeyboardKey.f11) {
-      unawaited(_toggleFullScreen());
-      return true;
-    }
-
-    final NavDir? direction = _directionFor(key);
-    if (direction != null) {
-      FocusNavigator.move(direction);
-      return true;
-    }
-    return false;
   }
 
-  NavDir? _directionFor(LogicalKeyboardKey key) {
-    if (key == LogicalKeyboardKey.arrowUp) {
-      return NavDir.up;
+  /// Every transient layer the shell owns, bottom first.
+  ///
+  /// Back pops exactly one rung, so "close the panel, then the dock" is a
+  /// property of this list instead of a ladder of nested ifs that every new
+  /// overlay has to be taught separately.
+  List<String> get _overlays => <String>[
+    if (_ccOpen) 'dock',
+    if (_ccPanel != null) 'panel',
+    if (_searchOpen) 'search',
+  ];
+
+  bool _onBack() {
+    final List<String> stack = _overlays;
+    if (stack.isEmpty) {
+      return false;
     }
-    if (key == LogicalKeyboardKey.arrowDown) {
-      return NavDir.down;
+    final String top = stack.last;
+    setState(() {
+      switch (top) {
+        case 'search':
+          _searchOpen = false;
+        case 'panel':
+          _ccPanel = null;
+        case 'dock':
+          _ccPanel = null;
+          _ccOpen = false;
+      }
+    });
+    if (top == 'search') {
+      FocusNavigator.focusFirst();
+    } else if (top == 'panel') {
+      // Focus was inside the panel that just went away.
+      _focusZone('dock-icons');
     }
-    if (key == LogicalKeyboardKey.arrowLeft) {
-      return NavDir.left;
+    return true;
+  }
+
+  /// Opens or closes the dock, landing on its icon row when it appears rather
+  /// than wherever focus happened to be.
+  void _setDock(bool open) {
+    setState(() {
+      _ccOpen = open;
+      if (!open) {
+        _ccPanel = null;
+      }
+    });
+    if (open) {
+      _focusZone('dock-icons');
     }
-    if (key == LogicalKeyboardKey.arrowRight) {
-      return NavDir.right;
-    }
-    return null;
   }
 
   Future<void> _toggleFullScreen() async {

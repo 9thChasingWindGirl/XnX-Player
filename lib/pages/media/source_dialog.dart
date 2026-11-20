@@ -2,8 +2,9 @@ import 'dart:ui' as ui;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:flutter/services.dart';
 
+import '../../core/input/input_action.dart';
+import '../../core/input/input_router.dart';
 import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
 import '../../data/sources/media_source.dart';
@@ -47,6 +48,9 @@ class _SourceDialogState extends State<SourceDialog> {
       TextEditingController(text: widget.initial?.path ?? '');
   String? _error;
 
+  /// This dialog's place in the input stack.
+  InputSubscription? _inputSub;
+
   static const List<(SourceKind, String)> _choices = <(SourceKind, String)>[
     (SourceKind.emby, 'Emby'),
     (SourceKind.jellyfin, 'Jellyfin'),
@@ -61,13 +65,13 @@ class _SourceDialogState extends State<SourceDialog> {
   void initState() {
     super.initState();
     TextEntry.active.value = true;
-    HardwareKeyboard.instance.addHandler(_onKey);
+    _inputSub = InputRouter.instance.subscribe(_onIntent, name: 'source-dialog');
   }
 
   @override
   void dispose() {
     TextEntry.active.value = false;
-    HardwareKeyboard.instance.removeHandler(_onKey);
+    _inputSub?.cancel();
     _name.dispose();
     _url.dispose();
     _user.dispose();
@@ -76,12 +80,15 @@ class _SourceDialogState extends State<SourceDialog> {
     super.dispose();
   }
 
-  bool _onKey(KeyEvent event) {
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
-      widget.onCancel();
-      return true;
+  /// Back is the one action a dialog takes globally: every other key belongs to
+  /// the text fields it contains, and the router does not even deliver them
+  /// while `TextEntry.active` is set.
+  bool _onIntent(InputIntent intent) {
+    if (intent.action != InputAction.back) {
+      return false;
     }
-    return false;
+    widget.onCancel();
+    return true;
   }
 
   bool get _needsUrl => _kind != SourceKind.local;

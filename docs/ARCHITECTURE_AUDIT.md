@@ -14,8 +14,8 @@
 |---|---|---|
 | Focus Manager | 完成 | `lib/ui/core/focus_navigator.dart` 几何寻路 + `focus_zone.dart` 区域 + `focus_highlight.dart` 单环滑动 |
 | Animation Engine | 完成 | `lib/ui/core/motion_clock.dart` 全局单 ticker；`lib/design/ps_motion.dart` 弹簧积分器 |
-| Overlay Manager | 一半 | 只有控制中心一种浮层，用 `bool` 标志手工管理（`shell_page.dart:46-53`） |
-| Input Manager | **缺失** | 没有任何动作抽象；键盘在 5 处各自监听，手柄 0 行代码 |
+| Overlay Manager | 一半 → P1 已收口 | 退栈改成 `_overlays` 列表（dock → panel → search），Back 永远只弹一层（`shell_page.dart` 的 `_onBack`）。仍只有控制中心一类浮层 |
+| Input Manager | **缺失 → P1 已补** | `lib/core/input/`：25 个动作、表驱动键位、分层栈、XInput 手柄、三套设备规则。见 `docs/INPUT_MODEL.md` |
 | Sound Manager | **缺失** | 全仓无音效实现（`S.ccSound` 只是控制中心的面板标题） |
 
 播放层另有一处结构性偏差，影响比上面两项加起来都大：**播放界面不在 Flutter 里**，在 mpv 的 Lua 脚本里（详见 §三.3）。
@@ -184,3 +184,18 @@
 本机无 Dart/Flutter SDK（`flutter`、`dart` 均不在 PATH，也没有 `.dart_tool`），所有 Dart 改动的编译与测试只能靠 GitHub Actions。Lua 与资产侧有本地探针：`tool/osd_probe.py`（真点进度条）、`tool/logo_probe.py`（徽章资源完整性）、`tool/osd_render.py`（离线预览 ASS 输出）。
 
 因此 P1 及之后的每一步都以「一次 CI 全绿」为交付单位，不做跨多阶段的批量重构。
+
+
+---
+
+## 五、P1 落地（2026-11-20）
+
+审计里标为「最大实际缺口」的输入层已经补上，**但刻意没有照搬规范里的一刀切做法**：
+
+- `lib/core/input/input_action.dart` — 25 个动作 + `InputDevice`。动作是共享词汇，设备的产生方式不是。
+- `lib/core/input/input_router.dart` — 唯一的键盘入口 + 分层栈。五个文件各自的 `HardwareKeyboard.addHandler` 收敛成一处，`dispose` 时取消订阅即退栈。
+- `lib/core/input/keymap.dart` — 物理键 → 动作的唯一定义处。
+- `lib/core/input/held_repeat.dart` + `gamepad.dart` — 手柄方向重复（350/110/50ms）与摇杆死区 0.16。手柄不重复用键盘的 OS 重复，键盘也不套用手柄的合成节奏。
+- 退栈：`_onBack` 依据 `_overlays` 弹一层，替代原来嵌套的 `if (_ccPanel)` / `if (_ccOpen)` 阶梯。
+
+**仍未做**：手柄设置项（`swapConfirm` 是常量）、震动、掉线提示、音效、`Sound Manager`。**仍未验证**：本机没有任何手柄（XInput 四个槽位全部 1167 未连接），所以「按下 A 激活焦点」只是静态推理；出包后需实机确认。

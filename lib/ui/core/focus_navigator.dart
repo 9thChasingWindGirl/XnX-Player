@@ -102,6 +102,38 @@ class FocusNavigator {
     return false;
   }
 
+  /// Fires the focused item's primary action.
+  ///
+  /// Only the gamepad needs this: a keyboard hits the focused widget's own key
+  /// handler and a pointer hits its tap handler, so both would fire twice if
+  /// they also went through here.
+  static bool activate() {
+    final FocusEntry? entry = _focusedEntry();
+    final VoidCallback? action = entry?.activate;
+    if (action == null) {
+      return false;
+    }
+    action();
+    return true;
+  }
+
+  /// Same for the secondary "more" action.
+  static bool menu() {
+    final FocusEntry? entry = _focusedEntry();
+    final VoidCallback? action = entry?.menu;
+    if (action == null) {
+      return false;
+    }
+    action();
+    return true;
+  }
+
+  static FocusEntry? _focusedEntry() {
+    final FocusRegistry registry = FocusRegistry.instance;
+    registry.prune();
+    return registry.entryFor(FocusManager.instance.primaryFocus);
+  }
+
   /// Requests focus for [entry] and scrolls it into view.
   static void reveal(FocusEntry entry) {
     if (!entry.context.mounted) {

@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import '../core/input/input_action.dart';
+
 /// Maps Flutter key identities onto the key names the Lua OSD understands.
 ///
 /// The lookup is keyed by [LogicalKeyboardKey.keyId], **not** by `debugName`:
@@ -74,6 +76,40 @@ abstract final class OsdKeys {
     LogicalKeyboardKey.keyX.keyId: 'x',
     LogicalKeyboardKey.keyY.keyId: 'y',
     LogicalKeyboardKey.keyZ.keyId: 'z',
+  };
+
+  /// The OSD name for an action that did *not* come from a keyboard.
+  ///
+  /// A pad has no keys, so it cannot use [compose]; this is the small subset of
+  /// the OSD's vocabulary that a pad can reach. Keys keep their own rich map on
+  /// purpose — folding `[`, `]`, digits and `alt+n` into actions would lose them.
+  static String? nameForAction(InputAction action) => switch (action) {
+    InputAction.navigateUp => 'up',
+    InputAction.navigateDown => 'down',
+    InputAction.navigateLeft => 'left',
+    InputAction.navigateRight => 'right',
+    InputAction.adjustBack => 'left',
+    InputAction.adjustForward => 'right',
+    InputAction.confirm => 'enter',
+    InputAction.back => 'esc',
+    // The pad has no Tab, so the secondary button (Y) raises the chrome instead;
+    // inside a menu `tab` closes it, which is the same thing.
+    InputAction.contextMenu => 'tab',
+    InputAction.toggleDock => 'tab',
+    InputAction.playPause => 'space',
+    InputAction.seekBack => 'left',
+    InputAction.seekForward => 'right',
+    InputAction.seekJumpBack => 'shift+left',
+    InputAction.seekJumpForward => 'shift+right',
+    InputAction.jumpPrev => 'shift+left',
+    InputAction.jumpNext => 'shift+right',
+    InputAction.pagePrev => 'pageup',
+    InputAction.pageNext => 'pagedown',
+    InputAction.volumeUp => 'up',
+    InputAction.volumeDown => 'down',
+    InputAction.mute => 'm',
+    InputAction.fullscreen => 'f11',
+    _ => null,
   };
 
   /// The OSD name for one physical key, ignoring modifiers.

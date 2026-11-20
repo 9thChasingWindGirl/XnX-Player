@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
+import '../../core/input/input_action.dart';
+import '../../core/input/input_router.dart';
 import 'motion_clock.dart';
 
 /// Callback used by focusables to publish where the one highlight should go.
@@ -58,6 +60,9 @@ class _GlideFocusStageState extends State<GlideFocusStage> {
   final Spring _radius = Spring(value: PsRadius.card, frequency: 18);
   final SpringColor _accent = SpringColor(PsColor.focusRing, frequency: 8);
 
+  /// Whether the last focus change came from a pointing device.
+  bool get _pointerIsAiming => InputRouter.instance.device.value.points;
+
   Object? _owner;
   Rect? _target;
   bool _placed = false;
@@ -83,6 +88,14 @@ class _GlideFocusStageState extends State<GlideFocusStage> {
       _accent.snap(accent);
       _radius.snap(radius);
       _placed = true;
+    } else if (_pointerIsAiming) {
+      // A pointer already shows where the user is aiming, so gliding to the card
+      // under the cursor reads as lag: the ring arrives after the eye does. That
+      // is what "the mouse feels drifty" looks like. With a stick or the arrow
+      // keys there is no other cue, so motion *is* the cue and the glide stays.
+      _rect.snap(rect);
+      _radius.snap(radius);
+      _accent.snap(accent);
     } else {
       _rect.setTarget(rect);
     }

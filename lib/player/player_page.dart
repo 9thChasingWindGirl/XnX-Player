@@ -60,6 +60,10 @@ class _PlayerPageState extends State<PlayerPage> {
   /// commands per second, each triggering a full OSD re-render.
   static const Duration _mouseInterval = Duration(milliseconds: 12);
   final GlobalKey _inputKey = GlobalKey(debugLabel: 'player-input');
+
+  /// This route's place in the input stack; cancelling it on dispose is what
+  /// hands the keyboard back to the shell.
+  InputSubscription? _input;
   Timer? _mouseTimer;
   Offset? _pendingMouse;
 
@@ -89,13 +93,13 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
-    HardwareKeyboard.instance.addHandler(_onKey);
+    _input = InputRouter.instance.subscribe(_onIntent, name: 'player');
     unawaited(_boot());
   }
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_onKey);
+    _input?.cancel();
     _watchdog?.cancel();
     _escFallback?.cancel();
     _mouseTimer?.cancel();
@@ -692,13 +696,42 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  bool _onKey(KeyEvent event) {
-    if (event is! KeyDownEvent) {
+  /// A route on top of the shell sees every intent first.
+  ///
+  /// Keyboard events keep their original identity: the OSD has a far larger
+  /// keymap than our action vocabulary (`[`, `]`, digits, `alt+n`), so mapping
+  /// keys to actions and back would silently drop most of it. A pad has no keys
+  /// at all, which is what the other branch is for.
+  bool _onIntent(InputIntent intent) {
+    final KeyEvent? event = intent.key;
+    if (event != null) {
+      return _onKeyEvent(event);
+    }
+    return _onPadIntent(intent);
+  }
+
+  /// The direction keys repeat because the OS repeats them; nothing is
+  /// synthesized here. Only seek and volume keys are in the list — holding `s`
+  /// must not spool a hundred screenshots.
+  static final Set<int> _repeatingKeys = <int>{
+    LogicalKeyboardKey.arrowLeft.keyId,
+    LogicalKeyboardKey.arrowRight.keyId,
+    LogicalKeyboardKey.arrowUp.keyId,
+    LogicalKeyboardKey.arrowDown.keyId,
+  };
+
+  bool _onKeyEvent(KeyEvent event) {
+    if (event is KeyUpEvent) {
       return false;
     }
+    final bool repeat = event is KeyRepeatEvent;
     final LogicalKeyboardKey key = event.logicalKey;
 
-    if (key == LogicalKeyboardKey.f1) {
+    if (repeat && !_repeatingKeys.contains(key.keyId)) {
+      return false;
+    }
+
+    if (key == LogicalKeyboardKey.f1 && !repeat) {
       final bool open = !_showDiagnostics;
       setState(() => _showDiagnostics = open);
       // The video container is a native child window: it always paints above
@@ -737,18 +770,49 @@ class _PlayerPageState extends State<PlayerPage> {
       return false;
     }
 
-    // Escape has a fallback: if the OSD never answers, the user must not be
-    // trapped in a fullscreen native surface.
     if (key == LogicalKeyboardKey.escape) {
-      _escFallback?.cancel();
-      _escFallback = Timer(const Duration(milliseconds: 450), () {
-        if (mounted) {
-          _close();
-        }
-      });
+      _armEscFallback();
     }
 
     player.sendKey(composed);
+    return true;
+  }
+
+  /// If the OSD never answers, the user must not be trapped in a fullscreen
+  /// native surface with no way back.
+  void _armEscFallback() {
+    _escFallback?.cancel();
+    _escFallback = Timer(const Duration(milliseconds: 450), () {
+      if (mounted) {
+        _close();
+      }
+    });
+  }
+
+  /// A pad produces actions, not keys. Only the overlap between the two
+  /// vocabularies can be served, and [OsdKeys.nameForAction] owns that table.
+  bool _onPadIntent(InputIntent intent) {
+    final InputAction? action = intent.action;
+    if (action == null) {
+      return false;
+    }
+    final MpvPlayer? player = _player;
+    if (player == null || _error != null) {
+      // Nothing to forward to: keep the route escapable.
+      if (action == InputAction.back) {
+        _close();
+        return true;
+      }
+      return false;
+    }
+    final String? name = OsdKeys.nameForAction(action);
+    if (name == null) {
+      return false;
+    }
+    if (action == InputAction.back) {
+      _armEscFallback();
+    }
+    player.sendKey(name);
     return true;
   }
 
@@ -804,6 +868,7 @@ class _PlayerPageState extends State<PlayerPage> {
     if (unit == null) {
       return;
     }
+    InputRouter.instance.notePointer();
     _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
   }
 
@@ -816,6 +881,7 @@ class _PlayerPageState extends State<PlayerPage> {
     if (unit == null || player == null) {
       return;
     }
+    InputRouter.instance.notePointer();
     _pendingMouse = null;
     player.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
     player.sendMouse(

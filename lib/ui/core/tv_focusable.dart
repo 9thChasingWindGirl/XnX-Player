@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../core/input/input_router.dart';
 import '../../design/ps_tokens.dart';
 import 'focus_highlight.dart';
 import 'focus_shine.dart';
@@ -97,6 +98,19 @@ class _TvFocusableState extends State<TvFocusable> {
       context: context,
       zoneId: FocusZone.idOf(context),
       order: FocusRegistry.instance.nextOrder(),
+      // The focus tree handles Enter/Space and the tap handler handles the
+      // pointer; these exist so a gamepad, which produces neither, can still
+      // press the item it just highlighted.
+      activate: () {
+        if (widget.enabled) {
+          widget.onSelect?.call();
+        }
+      },
+      menu: () {
+        if (widget.enabled) {
+          widget.onMenu?.call();
+        }
+      },
     );
     FocusRegistry.instance.register(_entry!);
   }
@@ -234,13 +248,24 @@ class _TvFocusableState extends State<TvFocusable> {
       child: MouseRegion(
         cursor: widget.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         onEnter: (PointerEnterEvent event) {
+          // The pointer is now the device in use, which turns off the ring's
+          // glide (see _publish) until a key or a pad is touched again.
+          InputRouter.instance.notePointer();
           if (widget.enabled && !_focused) {
             _node.requestFocus();
           }
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: widget.enabled ? widget.onSelect : null,
+          // A click is also a pointer event: note it before acting so a press
+          // that never entered (the cursor was already over the tile when the
+          // pad was last used) still counts as the pointer being in charge.
+          onTap: widget.enabled
+              ? () {
+                  InputRouter.instance.notePointer();
+                  widget.onSelect?.call();
+                }
+              : null,
           onLongPress: widget.enabled ? widget.onLongSelect : null,
           child: Stack(
             clipBehavior: Clip.none,

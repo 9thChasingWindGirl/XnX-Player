@@ -1,8 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
-import 'package:flutter/services.dart';
 
+import '../../core/input/input_action.dart';
+import '../../core/input/input_router.dart';
 import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
 import '../../data/store.dart';
@@ -46,25 +47,29 @@ class _HubPageState extends State<HubPage> {
 
   late bool _favorite = widget.item.favorite;
 
+  InputSubscription? _input;
+
   @override
   void initState() {
     super.initState();
-    HardwareKeyboard.instance.addHandler(_onKey);
+    _input = InputRouter.instance.subscribe(_onIntent, name: 'hub');
     _load();
   }
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_onKey);
+    _input?.cancel();
     super.dispose();
   }
 
-  bool _onKey(KeyEvent event) {
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
-      Navigator.of(context).maybePop();
-      return true;
+  /// A hub sits above the shell, so it gets first refusal — but it only claims
+  /// Back. Everything else falls through to whatever is below it.
+  bool _onIntent(InputIntent intent) {
+    if (intent.action != InputAction.back) {
+      return false;
     }
-    return false;
+    Navigator.of(context).maybePop();
+    return true;
   }
 
   Future<void> _load() async {

@@ -33,12 +33,23 @@ class FocusEntry {
     required this.context,
     required this.zoneId,
     required this.order,
+    this.activate,
+    this.menu,
   });
 
   final FocusNode node;
   final BuildContext context;
   final String? zoneId;
   final int order;
+
+  /// The item's primary action. A keyboard reaches it through the focus tree
+  /// (Enter/Space) and a pointer through the tap handler, but a gamepad raises
+  /// no key event at all — without this the pad could move the highlight and
+  /// never press anything.
+  final VoidCallback? activate;
+
+  /// The secondary "more" action, if the item has one.
+  final VoidCallback? menu;
 
   bool get isMounted => context.mounted && node.context != null;
 
