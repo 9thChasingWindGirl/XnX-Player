@@ -111,7 +111,7 @@ class UpdateService {
     final String root = _updateRoot();
     final String versionDir = '$root${Platform.pathSeparator}'
         '${_safeName(candidate.version)}';
-    final Directory(versionDir).createSync(recursive: true);
+    Directory(versionDir).createSync(recursive: true);
     final String zipPath = '$versionDir${Platform.pathSeparator}update.zip';
     await _download(candidate.assetUrl, zipPath);
     await Process.run(

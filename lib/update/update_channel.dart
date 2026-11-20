@@ -22,8 +22,8 @@ enum UpdateChannel { stable, beta, dev }
 class UpdateCandidate {
   const UpdateCandidate({
     required this.version,
-    required this.name,
-    required this.assetUrl,
+    this.name = '',
+    this.assetUrl = '',
     this.notes = '',
     this.publishedAt = '',
     this.isPrerelease = false,

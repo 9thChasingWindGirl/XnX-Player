@@ -61,7 +61,7 @@ class _SettingsPageState extends State<SettingsPage> {
       };
 
   Future<void> _cycleChannel(int direction) async {
-    final List<UpdateChannel> values = UpdateChannel.values;
+    const List<UpdateChannel> values = UpdateChannel.values;
     final int index = values.indexOf(_channel);
     _channel = values[(index + direction + values.length) % values.length];
     _pending = null;
