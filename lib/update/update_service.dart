@@ -47,11 +47,14 @@ class UpdateService {
   /// Asks GitHub what the newest build on [channel] is.
   ///
   /// stable/beta read Releases (beta = prerelease); dev reads the newest
-  /// successful Actions artifact on the beta branch — that build exists before
-  /// anyone has validated it, which is exactly what the channel means.
+  /// `nightly-*` prerelease the beta branch publishes. It used to read
+  /// Actions artifacts directly, which is why every dev install failed with
+  /// HTTP 401: the artifact download endpoint requires authentication even
+  /// on a public repository, and the client has no token. Release assets are
+  /// the one download URL that works without credentials.
   Future<UpdateCandidate?> fetchLatest(UpdateChannel channel) async {
     if (channel == UpdateChannel.dev) {
-      return _fetchDevArtifact();
+      return _fetchNightly();
     }
     final List<dynamic> releases =
         await Http.getJson(releasesUri) as List<dynamic>;
@@ -83,45 +86,35 @@ class UpdateService {
     );
   }
 
-  Future<UpdateCandidate?> _fetchDevArtifact() async {
-    final Map<String, dynamic> payload = await Http.getJson(
-      _endpoint(
-        <String>['actions', 'artifacts'],
-        <String, String>{
-          'branch': 'beta',
-          'status': 'success',
-          'per_page': '30',
-        },
-      ),
-    );
-    final List<dynamic> artifacts = payload['artifacts'] as List<dynamic>? ?? <dynamic>[];
-    Map<String, dynamic>? best;
-    for (final Object? entry in artifacts) {
-      final Map<String, dynamic> artifact = entry! as Map<String, dynamic>;
-      if (best == null) {
-        best = artifact;
+  /// The newest `nightly-*` prerelease, if any. The workflow publishes one per
+  /// successful beta push; the version is the tag minus its prefix, and the
+  /// zip rides as an ordinary release asset — anonymous-downloadable.
+  Future<UpdateCandidate?> _fetchNightly() async {
+    final List<dynamic> releases =
+        await Http.getJson(releasesUri) as List<dynamic>;
+    UpdateCandidate? best;
+    for (final Object? entry in releases) {
+      final Map<String, dynamic> release = entry! as Map<String, dynamic>;
+      final String tag = release['tag_name'] as String? ?? '';
+      if (!tag.startsWith('nightly-')) {
         continue;
       }
-      final DateTime current = DateTime.parse(
-        best['created_at'] as String? ?? '1970-01-01T00:00:00Z',
-      );
-      final DateTime candidate = DateTime.parse(
-        artifact['created_at'] as String? ?? '1970-01-01T00:00:00Z',
-      );
-      if (candidate.isAfter(current)) {
-        best = artifact;
+      final UpdateCandidate candidate = _releaseCandidate(release)
+        ..version = tag.substring('nightly-'.length);
+      if (best == null || compareVersions(candidate.version, best.version) > 0) {
+        best = candidate;
       }
     }
     if (best == null) {
       return null;
     }
-    final String name = best['name'] as String? ?? '';
     return UpdateCandidate(
-      version: 'dev-${best['id']}-$name',
-      name: 'Dev 构建 #$name',
-      assetUrl: '$_apiBase/actions/artifacts/${best['id']}/zip',
-      notes: 'beta 分支 Actions 未验证产物（构建于 ${best['created_at']}）',
-      publishedAt: best['created_at'] as String? ?? '',
+      version: best.version,
+      name: best.name,
+      assetUrl: best.assetUrl,
+      notes: 'beta 分支自动构建（未验证）· 构建于 ${best.publishedAt}',
+      publishedAt: best.publishedAt,
+      isPrerelease: true,
     );
   }
 

@@ -60,9 +60,9 @@ jobs:
     if: needs.gate.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 45
-    # 只有它需要删旧产物。
+    # 只有它需要删旧产物；beta push 还要发布 nightly prerelease。
     permissions:
-      contents: read
+      contents: write
       actions: write
 
     steps:
@@ -140,6 +140,9 @@ jobs:
           Write-Host "format badges: $badges bitmaps"
           if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
           "$env:RESOLVED_VERSION" | Out-File -FilePath "$rel/version.txt" -Encoding utf8
+          # 预留目录随包发布：运行时在 Program Files 下创建目录会撞权限，
+          # 空目录先占位（zip -r 会收录目录条目）。
+          New-Item -ItemType Directory -Force -Path "$rel/log", "$rel/updates" | Out-Null
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifact
@@ -150,6 +153,22 @@ jobs:
           if-no-files-found: error
           # main 正式产物收敛保留（14 天）；beta 的 dev 产物保留更宽（30 天）。
           retention-days: ${{ github.ref_name == 'beta' && 30 || 14 }}
+
+      # beta push 的构建同时发布为 nightly prerelease：客户端 dev 通道读
+      # Release 资产而不是 Actions artifact——artifact 的下载端点即使公开
+      # 仓库也要求认证，无 token 的客户端永远 401；Release 资产匿名可下。
+      - name: Publish nightly release (beta push)
+        if: success() && github.ref_name == 'beta' && github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "nightly-$env:RESOLVED_VERSION"
+          $zip = "XnX-Player-windows-x64-$env:RESOLVED_VERSION.zip"
+          gh release delete "$tag" --yes --cleanup-tag 2>$null
+          if ($LASTEXITCODE -ne 0) { Write-Host "no previous nightly, creating fresh" }
+          Compress-Archive -Path "$env:REL_DIR\*" -DestinationPath $zip -Force
+          gh release create "$tag" $zip --prerelease --title "Dev $env:RESOLVED_VERSION" --notes "beta 分支自动构建（未验证），构建于 $(Get-Date -AsUtc -Format 'yyyy-MM-ddTHH:mm:ssZ')"
 
       # 产物会一直堆积在 Actions 里：构建成功后按分支清理旧 artifact
       # （beta 保留更宽：10 个；main 保留 3 个）。

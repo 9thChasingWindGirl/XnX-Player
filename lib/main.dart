@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
@@ -26,5 +27,27 @@ Future<void> main() async {
     // unavailable (for example in a headless smoke test).
   }
 
+  _ensureInstallDirs();
+
   runApp(const XnXApp());
+}
+
+/// Creates the install-side directories up front instead of waiting for the
+/// first writer.
+///
+/// Two reasons this runs at startup and ships as empty folders in the package:
+/// the mpv log only exists if `log/` does (a user asked for a log file that
+/// had never been written), and creating directories inside Program Files at
+/// *write time* can fail under a standard token. The zip carries empty
+/// `log/` and `updates/` so the permission-sensitive creation already
+/// happened at install time; this is the portable-install fallback.
+void _ensureInstallDirs() {
+  try {
+    final String dir = File(Platform.resolvedExecutable).parent.path;
+    Directory('$dir${Platform.pathSeparator}log').createSync(recursive: true);
+    Directory('$dir${Platform.pathSeparator}updates').createSync(recursive: true);
+  } on Object {
+    // Read-only install location: writers fall back to their own strategies
+    // (mpv logs to %TEMP%, the updater reports the failure).
+  }
 }

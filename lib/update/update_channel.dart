@@ -3,10 +3,10 @@
 ///
 /// Three channels, mirroring how the project actually ships:
 /// - **stable** — release 产物 off `main`（GitHub Release，非 prerelease）。
-/// - **beta** — 未来 beta 分支的 Release 产物（prerelease）。beta 分支尚未
-///   开出，但通道从第一天就预留。
-/// - **dev** — beta 分支的 GitHub Actions 产物，未经人工验证、未发布为
-///   Release，只能作为"尝鲜"入口。
+/// - **beta** — beta 分支的 Release 产物（prerelease）。
+/// - **dev** — beta 分支每次 push 的自动构建，发布为 `nightly-*` prerelease。
+///   早期版本直接读 Actions artifact，但 artifact 下载端点即使公开仓库也
+///   要求认证（客户端无 token，恒 401）；nightly Release 资产匿名可下。
 ///
 /// Rollback is a first-class operation: every version that has been applied
 /// keeps its extracted build, so applying an older copy is the same code path

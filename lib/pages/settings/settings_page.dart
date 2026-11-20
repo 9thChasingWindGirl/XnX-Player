@@ -85,20 +85,10 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   static String _channelLabel(UpdateChannel channel) => switch (channel) {
-        UpdateChannel.stable => '正式版',
-        UpdateChannel.beta => 'Beta',
-        UpdateChannel.dev => 'Dev（未验证构建）',
+        UpdateChannel.stable => '正式版Stable',
+        UpdateChannel.beta => '测试版Beta',
+        UpdateChannel.dev => '开发者测试版Dev',
       };
-
-  Future<void> _cycleChannel(int direction) async {
-    const List<UpdateChannel> values = UpdateChannel.values;
-    final int index = values.indexOf(_channel);
-    _channel = values[(index + direction + values.length) % values.length];
-    _pending = null;
-    setState(() {
-      _updateStatus = '${_channelLabel(_channel)}：请重新检查更新';
-    });
-  }
 
   /// One row, two stages: first press checks the channel, the second installs
   /// what was found (or reports why it can't). Rollback candidates surface
@@ -320,12 +310,22 @@ class _SettingsPageState extends State<SettingsPage> {
                             _apply(prefs.copyWith(startFullscreen: !prefs.startFullscreen)),
                       ),
                       _section('软件更新'),
-                      _Row(
+                      _DropdownRow(
                         label: '更新通道',
-                        hint: '当前版本 ${S.appVersion} · 正式版 / Beta（预留）/ Dev（beta 分支未验证构建）',
-                        value: _channelLabel(_channel),
-                        onAdjust: _cycleChannel,
-                        onSelect: () => _cycleChannel(1),
+                        hint: '当前版本 ${S.appVersion}\n正式版Stable = main 发布 · 测试版Beta = 预发布 · 开发者测试版Dev = beta 分支自动构建',
+                        options: const <String>[
+                          '正式版Stable',
+                          '测试版Beta',
+                          '开发者测试版Dev',
+                        ],
+                        selectedIndex: _channel.index,
+                        onPick: (int index) {
+                          setState(() {
+                            _channel = UpdateChannel.values[index];
+                            _pending = null;
+                            _updateStatus = '${_channelLabel(_channel)}：请重新检查更新';
+                          });
+                        },
                       ),
                       _Row(
                         label: _pending == null ? '检查更新' : '安装 ${_pending!.version}',
@@ -366,6 +366,157 @@ class _SettingsPageState extends State<SettingsPage> {
       child: Text(
         title,
         style: PsType.micro.copyWith(fontSize: 15, letterSpacing: 2.6, color: PsColor.textFaint),
+      ),
+    );
+  }
+}
+
+/// A settings row whose value is picked from an expanding list instead of a
+/// cycle arrow. Expanded options render inline under the row — TV focus
+/// navigation can reach them without any overlay plumbing, and picking one
+/// collapses the list again.
+class _DropdownRow extends StatefulWidget {
+  const _DropdownRow({
+    required this.label,
+    required this.hint,
+    required this.options,
+    required this.selectedIndex,
+    required this.onPick,
+  });
+
+  final String label;
+  final String hint;
+  final List<String> options;
+  final int selectedIndex;
+  final ValueChanged<int> onPick;
+
+  @override
+  State<_DropdownRow> createState() => _DropdownRowState();
+}
+
+class _DropdownRowState extends State<_DropdownRow> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          TvFocusable(
+            radius: 16,
+            onSelect: () => setState(() => _open = !_open),
+            child: Container(
+              height: 96,
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              decoration: BoxDecoration(
+                color: PsColor.text.withValues(alpha: 0.045),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: PsColor.text.withValues(alpha: 0.07)),
+              ),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          widget.label,
+                          style: PsType.label.copyWith(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        // The hint carries two lines now: the running version,
+                        // then what each channel means.
+                        Text(
+                          widget.hint,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: PsType.micro.copyWith(
+                            fontSize: 15,
+                            height: 1.35,
+                            color: PsColor.textFaint,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 18),
+                  Text(
+                    widget.options[widget.selectedIndex],
+                    style: PsType.label.copyWith(
+                      fontSize: 22,
+                      color: PsColor.text.withValues(alpha: 0.92),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  AnimatedRotation(
+                    turns: _open ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: Icon(
+                      Icons.expand_more_rounded,
+                      size: 26,
+                      color: PsColor.text.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_open)
+            Container(
+              margin: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              decoration: BoxDecoration(
+                color: PsColor.text.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: PsColor.text.withValues(alpha: 0.09)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  for (int i = 0; i < widget.options.length; i++)
+                    TvFocusable(
+                      radius: 12,
+                      onSelect: () {
+                        setState(() => _open = false);
+                        widget.onPick(i);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                        child: Row(
+                          children: <Widget>[
+                            Icon(
+                              i == widget.selectedIndex
+                                  ? Icons.radio_button_checked_rounded
+                                  : Icons.radio_button_off_rounded,
+                              size: 20,
+                              color: i == widget.selectedIndex
+                                  ? PsColor.accent
+                                  : PsColor.text.withValues(alpha: 0.45),
+                            ),
+                            const SizedBox(width: 14),
+                            Text(
+                              widget.options[i],
+                              style: PsType.label.copyWith(
+                                fontSize: 20,
+                                color: PsColor.text.withValues(
+                                  alpha: i == widget.selectedIndex ? 1 : 0.72,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
