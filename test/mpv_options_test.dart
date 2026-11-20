@@ -61,6 +61,23 @@ void main() {
       final Map<String, String> options = buildMpvOptions();
       expect(options.keys.toSet().length, options.length);
     });
+
+    test('points the badge script at a plain forward-slash asset folder', () {
+      // `overlay-add` needs a real path, and `script-opts` splits on commas, so
+      // a Windows path has to arrive with forward slashes and no separators.
+      final Map<String, String> options = buildMpvOptions(
+        formatLogoDir: r'C:\Users\someone\AppData\Local\XnX Player\format-logos',
+      );
+
+      expect(options['script-opts'],
+          'startup_format_logos:asset_dir=C:/Users/someone/AppData/Local/XnX Player/format-logos');
+      expect(options['script-opts'], isNot(contains(r'\')));
+      expect(options['script-opts'], isNot(contains(',')));
+    });
+
+    test('omits script-opts when no badge folder was resolved', () {
+      expect(buildMpvOptions().containsKey('script-opts'), isFalse);
+    });
   });
 
   group('audio passthrough', () {

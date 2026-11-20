@@ -138,19 +138,30 @@ def render(data_path: str, bg_kind: str, out_path: str) -> None:
         info = parse_tags(tags)
         pos = info.get('pos', (0, 0))
         opacity = 255 - info['alpha']
-        if opacity <= 0:
-            continue
+        stroke = int(round(info.get('border', 0)))
+        border_alpha = 255 - info.get('border_alpha', 0)
 
         layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
         drawer = ImageDraw.Draw(layer)
 
         if info.get('draw'):
+            # Stroke-only shapes (`\1a&HFF&` + `\bord`) are how every "not
+            # delivered yet" badge is drawn. Skipping them on opacity alone
+            # made the outline pills invisible in the preview and very nearly
+            # got the Lua changed for a bug that did not exist.
             poly = [(x + pos[0], y + pos[1]) for x, y in path_polygon(body)]
             if len(poly) >= 3:
-                drawer.polygon(poly, fill=(*info['color'], opacity))
+                if opacity > 0:
+                    drawer.polygon(poly, fill=(*info['color'], opacity))
+                if stroke > 0 and border_alpha > 0:
+                    bc = info.get('border_color', (0, 0, 0))
+                    drawer.line(poly + [poly[0]], fill=(*bc, border_alpha),
+                                width=stroke, joint='curve')
             if info['blur'] > 0 and len(poly) >= 3:
                 layer = layer.filter(ImageFilter.GaussianBlur(info['blur'] * 0.5))
         else:
+            if opacity <= 0:
+                continue
             text = body.replace('\\N', '\n')
             if not text:
                 continue
@@ -158,7 +169,6 @@ def render(data_path: str, bg_kind: str, out_path: str) -> None:
             size = int(info.get('size', 20))
             font = ImageFont.truetype(font_path, size)
             anchor = {7: 'la', 8: 'ma', 9: 'ra', 5: 'mm', 4: 'lm', 6: 'rm'}.get(info['align'], 'la')
-            stroke = int(round(info.get('border', 0)))
             stroke_fill = None
             if stroke > 0:
                 bc = info.get('border_color', (0, 0, 0))

@@ -261,6 +261,7 @@ local state = {
   stats = false,
   help = false,
   toast = nil,
+  mouse_seen = false,
   audio_mode = false,
   has_video = true,
   ui_scale = 1,
@@ -344,13 +345,29 @@ end
 
 --- One pill in the meta row.
 ---
---- `lit` is the whole point: colour means the pipeline *confirmed* the format,
---- not that the file merely contains it. A DTS-HD MA source played through
---- software decode shows a dim pill; once WASAPI accepts the bitstream the same
---- pill turns amber. Same for HDR: `video-out-params` decides, so a tone-mapped
---- HDR10 film reads as dim instead of pretending.
-local function badge(text, color, lit)
-  return { text = text, color = color, lit = lit == true }
+--- `tier` is the whole point, and there are three of them so the row has a
+--- hierarchy instead of reading as six identical grey blocks:
+---
+---   'fact'  — resolution, codec, frame rate, decoder. Not a claim that needs
+---             confirming, so it gets a faint plate and no ring.
+---   'lit'   — the pipeline *confirmed* this format. Tinted plate + bright ring
+---             + full-strength label.
+---   'dim'   — the file contains the format but the output chain is not
+---             carrying it: an HDR10 film being tone-mapped to SDR, a DTS-HD MA
+---             track decoded in software instead of bitstreamed. Outline only,
+---             so "present" and "delivered" stay visibly different.
+---
+--- `video-out-params` / `audio-out-params` decide 'lit', never the source
+--- container — the whole point is that a tone-mapped HDR film must not pretend.
+local function badge(label, color, tier)
+  if tier == true then
+    tier = 'lit'
+  elseif tier == false then
+    tier = 'dim'
+  elseif tier == nil then
+    tier = 'fact'
+  end
+  return { text = label, color = color, tier = tier }
 end
 
 local function audio_badge_label()
@@ -410,23 +427,23 @@ local function badge_items()
   local w = mp.get_property_number('video-params/w') or 0
   local h = mp.get_property_number('video-params/h') or 0
   if w >= 7600 or h >= 4300 then
-    out[#out + 1] = badge('8K', WHITE, true)
+    out[#out + 1] = badge('8K', WHITE, 'fact')
   elseif w >= 3800 or h >= 2100 then
-    out[#out + 1] = badge('4K', WHITE, true)
+    out[#out + 1] = badge('4K', WHITE, 'fact')
   elseif w >= 2500 or h >= 1400 then
-    out[#out + 1] = badge('1440p', WHITE, true)
+    out[#out + 1] = badge('1440p', WHITE, 'fact')
   elseif w >= 1900 or h >= 1060 then
-    out[#out + 1] = badge('1080p', WHITE, true)
+    out[#out + 1] = badge('1080p', WHITE, 'fact')
   elseif w >= 1260 or h >= 700 then
-    out[#out + 1] = badge('720p', WHITE, true)
+    out[#out + 1] = badge('720p', WHITE, 'fact')
   elseif w > 0 then
-    out[#out + 1] = badge(w .. '×' .. h, WHITE, true)
+    out[#out + 1] = badge(w .. '×' .. h, WHITE, 'fact')
   end
 
   local codec = (mp.get_property('video-format') or ''):upper()
   local depth = mp.get_property_number('video-params/plane-depth') or 0
   if codec ~= '' then
-    out[#out + 1] = badge(codec .. (depth >= 10 and ' 10BIT' or ''), GREY, true)
+    out[#out + 1] = badge(codec .. (depth >= 10 and ' 10BIT' or ''), GREY, 'fact')
   end
 
   local prim = (mp.get_property('video-params/primaries') or ''):lower()
@@ -436,27 +453,27 @@ local function badge_items()
   local out_hdr = ((oprim:find('bt%.2020') or oprim:find('2020')) ~= nil)
     and (ogamma == 'pq' or ogamma == 'hlg' or ogamma:find('st2084') ~= nil)
   if prim:find('dolbyvision') then
-    out[#out + 1] = badge('DOLBY VISION', DV_PURPLE, out_hdr)
+    out[#out + 1] = badge('DOLBY VISION', DV_PURPLE, out_hdr and 'lit' or 'dim')
   elseif gamma == 'hlg' then
-    out[#out + 1] = badge('HLG', HLG_CYAN, out_hdr)
+    out[#out + 1] = badge('HLG', HLG_CYAN, out_hdr and 'lit' or 'dim')
   elseif gamma == 'pq' or gamma:find('st2084') then
     local peak = mp.get_property_number('video-params/sig-peak') or 0
-    out[#out + 1] = badge(peak >= 900 and 'HDR10' or 'HDR', HDR_GOLD, out_hdr)
+    out[#out + 1] = badge(peak >= 900 and 'HDR10' or 'HDR', HDR_GOLD, out_hdr and 'lit' or 'dim')
   end
 
   local audio = audio_badge_label()
   if audio ~= '' then
-    out[#out + 1] = badge(audio, DTS_AMBER, audio_is_passthrough())
+    out[#out + 1] = badge(audio, DTS_AMBER, audio_is_passthrough() and 'lit' or 'dim')
   end
 
   local fps = mp.get_property_number('container-fps') or 0
   if fps > 0 then
-    out[#out + 1] = badge(string.format('%.3gFPS', fps), DIM, true)
+    out[#out + 1] = badge(string.format('%.3gFPS', fps), DIM, 'fact')
   end
 
   local hw = mp.get_property('hwdec-current')
   local hw_on = hw ~= nil and hw ~= '' and hw ~= 'no'
-  out[#out + 1] = badge(hwdec_label(hw), hw_on and GREY or DIM, hw_on)
+  out[#out + 1] = badge(hwdec_label(hw), hw_on and GREY or DIM, hw_on and 'fact' or 'dim')
 
   return out
 end
@@ -1437,7 +1454,11 @@ local function draw_stats(parts)
   local ph = 34 + per_col * 40 + 24
   local px, py = SAFE, MENU_BOTTOM - ph
   parts[#parts + 1] = rect(px, py, pw, ph, 26, BLACK, 0xF2)
-  parts[#parts + 1] = text(px + 28, py + 20, 20, DIM, 0x00, '统计信息 · I 关闭', 7, true)
+  -- "The controls do not respond" has two very different causes: mpv never saw a
+  -- pointer event, or it saw one and the hitboxes were wrong. This line tells
+  -- them apart without a debugger attached.
+  local mouse_note = state.mouse_seen and '  ·  鼠标已连接' or '  ·  鼠标未收到事件'
+  parts[#parts + 1] = text(px + 28, py + 20, 20, DIM, 0x00, '统计信息 · I 关闭' .. mouse_note, 7, true)
   for i, row in ipairs(rows) do
     local col = i <= per_col and 0 or 1
     local line = col == 0 and i or (i - per_col)
@@ -1649,30 +1670,35 @@ end
 --- Badge row: pills, not a dot-separated string.
 ---
 --- The reference build lights up the formats it is actually delivering; the
---- same information as one grey text line reads as a log dump. A lit pill gets
---- a tinted fill plus a 1px accent ring, a dim one gets an outline only, so
---- "DTS-HD MA by software decode" is visibly different from "DTS-HD MA out over
---- HDMI" at a glance.
+--- same information as one grey text line reads as a log dump. Three tiers:
+--- a fact gets a barely-there plate, a lit format gets a tinted plate plus an
+--- accent ring and a full-strength label, and a format the chain is *not*
+--- delivering gets an outline with a dimmed label. That keeps "the file has
+--- DTS-HD MA" visibly apart from "DTS-HD MA is leaving over HDMI".
 local function draw_badges(parts, x, y)
   local pad, gap, hgt, size = 11, 7, 28, 17
-  local last = nil
   local seen = {}
   for _, item in ipairs(badge_items()) do
     -- `video-format` and `hwdec-current` can both resolve to "D3D11"; showing
     -- the same pill twice wastes the row.
     if not seen[item.text] then
       seen[item.text] = true
-      last = item.text
       local bw = measure(item.text, size) + pad * 2
-      if item.lit then
-        parts[#parts + 1] = rect(x, y, bw, hgt, hgt / 2, item.color, 0x3C)
-        parts[#parts + 1] = rect_line(x, y, bw, hgt, hgt / 2, item.color, 0x80, 1.2)
+      local base = y + 6
+      if item.tier == 'lit' then
+        parts[#parts + 1] = rect(x, y, bw, hgt, hgt / 2, item.color, 0x40)
+        parts[#parts + 1] = rect_line(x, y, bw, hgt, hgt / 2, item.color, 0xB4, 1.2)
         -- `text()` takes the ASS alpha (0 = opaque), unlike `rect()` which takes
         -- an opacity. 0x00 here, not 0xFF.
-        parts[#parts + 1] = text(x + pad, y + 6, size, item.color, 0x00, item.text, 7, true, MONO)
+        parts[#parts + 1] = text(x + pad, base, size, item.color, 0x00, item.text, 7, true, MONO)
+      elseif item.tier == 'dim' then
+        -- A ring this faint vanishes over dark footage, which left the row
+        -- looking ragged: one label floating with no pill around it.
+        parts[#parts + 1] = rect_line(x, y, bw, hgt, hgt / 2, DIM, 0x8C, 1.1)
+        parts[#parts + 1] = text(x + pad, base, size, DIM, 0x00, item.text, 7, false, MONO)
       else
-        parts[#parts + 1] = rect_line(x, y, bw, hgt, hgt / 2, DIM, 0x6E, 1.1)
-        parts[#parts + 1] = text(x + pad, y + 6, size, DIM, 0x00, item.text, 7, false, MONO)
+        parts[#parts + 1] = rect(x, y, bw, hgt, hgt / 2, WHITE, 0x14)
+        parts[#parts + 1] = text(x + pad, base, size, item.color, 0x18, item.text, 7, false, MONO)
       end
       x = x + bw + gap
     end
@@ -1700,6 +1726,9 @@ local function draw_chrome(parts)
     7, false
   )
 end
+
+--- `startup_format_logos.lua` owns the light-up badging; the OSD keeps only
+--- the always-on pill row above the progress bar.
 
 function render()
   hits = {}
@@ -2064,6 +2093,8 @@ mp.observe_property('mouse-pos', 'native', function(_, value)
     return
   end
   if value.hover == false then
+    -- The pointer left our surface — still proof that mpv receives mouse input.
+    state.mouse_seen = true
     state.pointer = nil
     state.hover = nil
     mark_dirty()
@@ -2071,9 +2102,13 @@ mp.observe_property('mouse-pos', 'native', function(_, value)
   end
   local x, y = to_design(value.x, value.y)
   state.pointer = { x = x, y = y }
+  state.mouse_seen = true
 
   if drag_bar then
     bar_seek(x)
+    -- Dragging is still "using" the bar, so the auto-hide clock restarts; a
+    -- slow scrub would otherwise pop the chrome away under the pointer.
+    schedule_hide()
     return
   end
 
@@ -2142,8 +2177,13 @@ local function on_primary_up()
     return
   end
   -- A click only counts when the pointer comes up over the same control it
-  -- went down on, so a press-and-slide off a button does not fire it.
-  local hit = hit_at(press.x, press.y)
+  -- went down on, so a press-and-slide off a button does not fire it. The test
+  -- is made against where the pointer *is now* — testing the press position
+  -- would make press-then-drag-away-release still fire the button.
+  local up = pointer_design()
+  local ux = up and up[1] or press.x
+  local uy = up and up[2] or press.y
+  local hit = hit_at(ux, uy)
   if hit and hit.id == press.id and hit.onClick and (now() - press.at) < 1.2 then
     hit.onClick()
     mark_dirty()

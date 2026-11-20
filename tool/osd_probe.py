@@ -146,7 +146,10 @@ mp_tbl['add_key_binding'] = lambda *a, **k: None
 mp_tbl['set_key_bindings'] = lambda *a, **k: None
 mp_tbl['enable_key_bindings'] = lambda *a, **k: None
 mp_tbl['disable_key_bindings'] = lambda *a, **k: None
-mp_tbl['get_time'] = lambda: 100.0
+# A frozen clock makes every fade-in compute 0 and previews come out
+# invisible; advance it on each simulated event instead.
+clock = [100.0]
+mp_tbl['get_time'] = lambda: clock[0]
 mp_tbl['get_script_name'] = lambda: 'player_osd'
 mp_tbl['get_script_directory'] = lambda: '.'
 mp_tbl['osd_message'] = lambda *a: None
@@ -237,6 +240,18 @@ send('{"cmd":"key","key":"h"}')  # close the help sheet
 send('{"cmd":"key","key":"i"}')  # close the stats panel
 send('{"cmd":"hide"}')
 send('{"cmd":"show"}')
+# Fire the deferred callbacks the script registered (the intro cards wait 0.4s
+# for the decoder to report). Without this the preview never shows them.
+for _t, fn in timeouts:
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 - a stub may be missing
+        print('timeout skipped:', exc)
+clock[0] += 1.2  # past the intro fade-in, before its fade-out
+# One of those timers is the auto-hide; bring the chrome back before dumping.
+send('{"cmd":"show"}')
+for fn in periodic:
+    fn()
 chrome = overlays[0]['data'].splitlines()
 print('---')
 print('chrome events:', len(chrome))

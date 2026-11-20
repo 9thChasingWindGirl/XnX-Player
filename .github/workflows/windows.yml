@@ -133,6 +133,11 @@ jobs:
           Write-Host "Release dir: $rel"
           Copy-Item third_party/mpv/libmpv-2.dll "$rel/libmpv-2.dll" -Force
           if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/player_osd.lua")) { throw "OSD lua missing from bundle" }
+          if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/startup_format_logos.lua")) { throw "format-logo lua missing from bundle" }
+          if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/format-logos/manifest.json")) { throw "format-logo manifest missing from bundle" }
+          $badges = (Get-ChildItem "$rel/data/flutter_assets/assets/mpv/format-logos" -Filter "*.bgra" | Measure-Object).Count
+          if ($badges -lt 84) { throw "format-logo bitmaps incomplete: $badges (expected 84)" }
+          Write-Host "format badges: $badges bitmaps"
           if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
           "$env:RESOLVED_VERSION" | Out-File -FilePath "$rel/version.txt" -Encoding utf8
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append

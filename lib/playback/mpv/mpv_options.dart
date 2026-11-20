@@ -91,6 +91,7 @@ Map<String, String> buildMpvOptions({
   String? logFile,
   String? watchLaterDir,
   String? screenshotDir,
+  String? formatLogoDir,
 }) {
   final Map<String, String> options = <String, String>{
     // Isolate from any user mpv configuration: the player owns every setting.
@@ -190,6 +191,15 @@ Map<String, String> buildMpvOptions({
   }
   if (screenshotDir != null) {
     options['screenshot-directory'] = screenshotDir;
+  }
+
+  // The badge script reads BGRA frames with `overlay-add`, which needs a real
+  // path — no asset bundle, no `~~` (it expands to a relative path when
+  // `--config=no`). Forward slashes keep the value free of separators that
+  // `script-opts` parses.
+  if (formatLogoDir != null && formatLogoDir.isNotEmpty) {
+    final String portable = formatLogoDir.replaceAll('\\', '/');
+    options['script-opts'] = 'startup_format_logos:asset_dir=$portable';
   }
 
   return options;

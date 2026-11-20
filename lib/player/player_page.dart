@@ -173,6 +173,13 @@ class _PlayerPageState extends State<PlayerPage> {
       }
 
       final String? scriptPath = await MpvAssets.osdScriptPath();
+      // The badge script is optional: when its assets are missing it simply
+      // finds no manifest and draws nothing, so a failure here must never stop
+      // playback. Both Lua files are unpacked together because the badge script
+      // locates its companion through `mp.get_script_directory()`.
+      final String? logoScriptPath = await MpvAssets.scriptPath(MpvAssets.logoScript);
+      await MpvAssets.scriptPath(MpvAssets.logoBounds);
+      final String? logoDir = await MpvAssets.formatLogoDir();
       final String sep = Platform.pathSeparator;
 
       // Logs belong next to the exe: %TEMP% gets cleaned by disk tools and is
@@ -233,6 +240,7 @@ class _PlayerPageState extends State<PlayerPage> {
           wid: host,
           logFile: logPath,
           screenshotDir: shotDir,
+          formatLogoDir: logoDir,
           settings: _settingsFor(
             prefs,
             passthroughOverride: initialPassthrough(hw, wantedPassthrough),
@@ -262,10 +270,16 @@ class _PlayerPageState extends State<PlayerPage> {
             return;
           }
           final MpvPlayer? live = _player;
-          if (live != null && live.scriptLoaded(MpvAssets.scriptName)) {
+          if (live != null && live.scriptLoaded(MpvAssets.osdScript)) {
             setState(() => _scriptNote = '已加载');
           }
         });
+      }
+
+      // Startup format badges. Separate script, separate failure mode: it only
+      // paints the light-up logo for a few seconds after each file opens.
+      if (logoScriptPath != null) {
+        player.loadScript(logoScriptPath);
       }
 
       surface.start();

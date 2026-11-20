@@ -25,3 +25,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/mpv/
+    # Subdirectories are not included by a folder entry; the format badges need
+    # their own line or `overlay-add` finds no manifest at runtime.
+    - assets/mpv/format-logos/
