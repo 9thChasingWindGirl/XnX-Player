@@ -317,11 +317,41 @@ class _Info extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Text(
-          _HubPageState._sourceLabel(item),
-          style: PsType.eyebrow.copyWith(
-            color: Color.lerp(item.accentColor, PsColor.text, 0.45),
-          ),
+        // Breadcrumb instead of a back button: where you are reads as a path,
+        // and every earlier level is a click target rather than an escape
+        // hatch you only notice when lost.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            TvFocusable(
+              radius: 10,
+              onSelect: onBack,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  S.tabHome,
+                  style: PsType.eyebrow.copyWith(
+                    color: Color.lerp(item.accentColor, PsColor.text, 0.45),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                '›',
+                style: PsType.eyebrow.copyWith(
+                  color: PsColor.text.withValues(alpha: 0.35),
+                ),
+              ),
+            ),
+            Text(
+              _HubPageState._sourceLabel(item),
+              style: PsType.eyebrow.copyWith(
+                color: PsColor.text.withValues(alpha: 0.62),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 14),
         TitleTreatment(

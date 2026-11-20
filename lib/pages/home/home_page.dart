@@ -166,6 +166,12 @@ class _HomePageState extends State<HomePage> {
         }
 
         if (_rows.isEmpty) {
+          // A network source can take seconds to enumerate. A skeleton keeps
+          // the page's shape visible during that wait — a blank stage with one
+          // line of text reads as "nothing here", which is a different claim.
+          if (AppStore.instance.loading && AppStore.instance.errors.isEmpty) {
+            return _Skeleton(time: clock.time, entrance: clamp01(_age / PsMotion.entrance));
+          }
           return _EmptyState(
             loading: AppStore.instance.loading,
             error: AppStore.instance.errors.isEmpty ? null : AppStore.instance.errors.first,
@@ -272,6 +278,103 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     ];
+  }
+}
+
+/// Loading placeholder: the page's own silhouette, breathing.
+///
+/// Every block sits where real content will sit — hero copy, three shelves —
+/// so arrival is a fill-in rather than a relayout. Opacity breathes slowly;
+/// nothing here justifies the cost of shimmer shaders.
+class _Skeleton extends StatelessWidget {
+  const _Skeleton({required this.time, required this.entrance});
+
+  final double time;
+  final double entrance;
+
+  @override
+  Widget build(BuildContext context) {
+    final double pulse = 0.5 + 0.5 * breathe(time, speed: 1.1);
+    final Color block = PsColor.text.withValues(alpha: 0.055 + 0.045 * pulse);
+    final Color soft = PsColor.text.withValues(alpha: 0.04 + 0.03 * pulse);
+
+    Widget shelf(double top, {required double cardSize, required int count}) {
+      return Positioned(
+        left: PsSpace.safeX,
+        top: top,
+        child: Opacity(
+          opacity: entrance,
+          child: Row(
+            children: <Widget>[
+              for (int i = 0; i < count; i++)
+                Padding(
+                  padding: const EdgeInsets.only(right: PsSpace.cardGap),
+                  child: Container(
+                    width: cardSize,
+                    height: cardSize,
+                    decoration: BoxDecoration(
+                      color: block,
+                      borderRadius: BorderRadius.circular(PsRadius.card),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        // Hero copy blocks, top-left.
+        Positioned(
+          left: PsSpace.safeX,
+          top: 240,
+          child: Opacity(
+            opacity: entrance,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Container(width: 520, height: 64, color: block),
+                const SizedBox(height: 22),
+                Container(width: 760, height: 26, color: soft),
+                const SizedBox(height: 14),
+                Container(width: 660, height: 26, color: soft),
+                const SizedBox(height: 44),
+                Row(
+                  children: <Widget>[
+                    Container(
+                      width: 220,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: block,
+                        borderRadius: BorderRadius.circular(PsRadius.pill),
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: soft,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Three shelves of resting cards.
+        shelf(PsSpace.shelfY - 40, cardSize: PsSpace.tileSize, count: 6),
+        shelf(PsSpace.shelfY + PsSpace.shelfPitch - 40,
+            cardSize: PsSpace.tileSize, count: 6),
+        shelf(PsSpace.shelfY + PsSpace.shelfPitch * 2 - 40,
+            cardSize: PsSpace.tileSize, count: 6),
+      ],
+    );
   }
 }
 
