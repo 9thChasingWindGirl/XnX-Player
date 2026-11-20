@@ -77,7 +77,7 @@ final class OsdLayer {
   static final int Function(int) _isWindow =
       _user32.lookupFunction<Int32 Function(IntPtr), int Function(int)>('IsWindow');
 
-  static final int Function(int, int, int, int, int) _moveWindow = _user32
+  static final int Function(int, int, int, int, int, int) _moveWindow = _user32
       .lookupFunction<Int32 Function(IntPtr, Int32, Int32, Int32, Int32, Int32), int Function(
           int, int, int, int, int, int)>('MoveWindow');
 
@@ -92,10 +92,10 @@ final class OsdLayer {
       .lookupFunction<IntPtr Function(Pointer<Utf16>), int Function(Pointer<Utf16>)>(
           'GetModuleHandleW');
 
-  static final int Function(int, int, int, int, int, int, int, Pointer<_Point>, Pointer<_Point>,
+  static final int Function(int, int, Pointer<_Point>, Pointer<_Point>, int, Pointer<_Point>,
           int, Pointer<_Blend>, int) _updateLayeredWindow = _user32.lookupFunction<
           Int32 Function(IntPtr, IntPtr, Pointer<_Point>, Pointer<_Point>, IntPtr,
-              Pointer<_Point>, int, Pointer<_Blend>, Uint32),
+              Pointer<_Point>, IntPtr, Pointer<_Blend>, Uint32),
           int Function(int, int, Pointer<_Point>, Pointer<_Point>, int, Pointer<_Point>, int,
               Pointer<_Blend>, int)>('UpdateLayeredWindow');
 
@@ -114,7 +114,7 @@ final class OsdLayer {
   static final int Function(int, Pointer<_BitmapInfo>, int, Pointer<Pointer<Void>>, int, int)
       _createDibSection = _gdi32.lookupFunction<
           IntPtr Function(IntPtr, Pointer<_BitmapInfo>, Uint32, Pointer<Pointer<Void>>, IntPtr,
-              int),
+              IntPtr),
           int Function(int, Pointer<_BitmapInfo>, int, Pointer<Pointer<Void>>, int,
               int)>('CreateDIBSection');
 
@@ -391,10 +391,8 @@ final class _WndClassEx extends Struct {
   @IntPtr()
   external int hbrBackground;
 
-  @Pointer<Utf16>()
   external Pointer<Utf16> lpszMenuName;
 
-  @Pointer<Utf16>()
   external Pointer<Utf16> lpszClassName;
 
   @IntPtr()

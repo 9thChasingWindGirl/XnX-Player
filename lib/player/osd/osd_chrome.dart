@@ -1,7 +1,5 @@
 import 'dart:ui' as ui;
 
-import '../../design/ps_tokens.dart';
-
 /// One frame of the independent OSD chrome, drawn with plain `dart:ui`.
 ///
 /// The values come from `MpvViewState`, the layout is the chrome the Lua side
@@ -42,7 +40,7 @@ abstract final class OsdChrome {
     final ui.Paint scrim = ui.Paint()
       ..shader = ui.Gradient.linear(
         const ui.Offset(0, 0),
-        ui.Offset(0, bandHeight),
+        const ui.Offset(0, bandHeight),
         const <ui.Color>[
           ui.Color(0x00000000),
           ui.Color(0x7805060C),
@@ -68,7 +66,7 @@ abstract final class OsdChrome {
         color: const ui.Color(0x9EF2F4F8));
 
     // Seek line between the two clocks.
-    final double seekLeft = safeX + 96;
+    const double seekLeft = safeX + 96;
     final double seekRight = size.width - safeX - 96 - totalWidth - 40;
     final double seekY = innerBottom - 8;
     final double progress =
@@ -214,7 +212,7 @@ abstract final class OsdChrome {
     final int h = total ~/ 3600;
     final int m = (total % 3600) ~/ 60;
     final int s = total % 60;
-    final String two(int v) => v.toString().padLeft(2, '0');
+    String two(int v) => v.toString().padLeft(2, '0');
     return h > 0 ? '$h:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
   }
 }
