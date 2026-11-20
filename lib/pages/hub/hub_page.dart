@@ -14,6 +14,7 @@ import '../../ui/core/motion_clock.dart';
 import '../../ui/core/poster_image.dart';
 import '../../ui/core/title_treatment.dart';
 import '../../ui/core/tv_focusable.dart';
+import '../../ui/core/tv_scale.dart';
 import '../../ui/widgets/ps_button.dart';
 import '../../ui/widgets/ps_page.dart';
 import '../home/home_tile.dart';
@@ -186,7 +187,7 @@ class _HubPageState extends State<HubPage> {
                 Positioned(
                   left: 0,
                   top: 742,
-                  width: 1920,
+                  width: TvScale.widthOf(context),
                   child: Opacity(
                     opacity: shelfArrive,
                     child: _EpisodeShelf(
@@ -199,7 +200,7 @@ class _HubPageState extends State<HubPage> {
                 Positioned(
                   left: 0,
                   top: 742,
-                  width: 1920,
+                  width: TvScale.widthOf(context),
                   child: Opacity(
                     opacity: shelfArrive,
                     child: _CastShelf(people: item.cast),
@@ -730,7 +731,8 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
               const double anchor = PsSpace.safeX + pitch * 1.5;
               final double left = PsSpace.safeX + _focus * pitch;
               final double contentRight = PsSpace.safeX + widget.items.length * pitch;
-              final double maxScroll = math.max(0.0, contentRight + PsSpace.safeX - 1920);
+              final double maxScroll =
+                  math.max(0.0, contentRight + PsSpace.safeX - TvScale.widthOf(context));
               _scroll.target = (left - anchor).clamp(0.0, maxScroll).toDouble();
             }
             _scroll.update(dt);

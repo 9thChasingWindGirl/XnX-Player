@@ -8,6 +8,7 @@ import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_highlight.dart';
+import '../../ui/core/tv_scale.dart';
 import '../../ui/core/focus_zone.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/widgets/ps_button.dart';
@@ -240,7 +241,7 @@ class _HomePageState extends State<HomePage> {
       Positioned(
         left: 0,
         top: railTop,
-        width: 1920,
+        width: TvScale.widthOf(context),
         height: PsSpace.tileSize * PsSpace.cardGrow + 40,
         child: Opacity(
           opacity: presence,

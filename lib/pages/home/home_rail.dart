@@ -8,6 +8,7 @@ import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_ids.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/tv_focusable.dart';
+import '../../ui/core/tv_scale.dart';
 import 'home_tile.dart';
 
 /// One shelf of covers.
@@ -55,7 +56,11 @@ class _HomeRailState extends State<HomeRail> {
 
   double _last = -1;
 
-  static const double _designWidth = 1920;
+  /// The stage width in design units. Inside [TvScale] this is the window
+  /// width divided by the scale factor: 1920 for a 16:9 window, wider when
+  /// the window is, so the shelf scrolls against what is actually on screen
+  /// instead of an assumed size.
+  double get _designWidth => TvScale.widthOf(context);
 
   double get _pitch => widget.cardSize + PsSpace.cardGap;
 
