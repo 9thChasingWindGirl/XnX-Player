@@ -77,14 +77,6 @@ extension InputActionNature on InputAction {
     InputAction.volumeDown => true,
     _ => false,
   };
-
-  /// Navigation on exactly one axis. Used to fold "which way is the stick
-  /// pushed" into a single direction instead of four independent bits.
-  bool get isNavigation =>
-      this == InputAction.navigateUp ||
-      this == InputAction.navigateDown ||
-      this == InputAction.navigateLeft ||
-      this == InputAction.navigateRight;
 }
 
 /// Which physical thing produced an intent.
