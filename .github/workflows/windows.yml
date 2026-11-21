@@ -148,10 +148,12 @@ jobs:
       - name: Upload dev artifact
         uses: actions/upload-artifact@v4
         with:
-          # dev 只产出便携版（Actions 下载到的就是 zip）。版本不带 run；
-          # artifact 名带 run 只为区分多次构建，晋升时按最新读取。
-          name: XnX-Player-Portable-${{ env.RESOLVED_VERSION }}-${{ github.run_number }}
+          # dev 只产出便携版（Actions 下载到的就是 zip）。名字里只有版本号：
+          # run 序号是 CI 内部概念，不该出现在用户看到的产物名上。
+          # 同一个版本重跑会覆盖同名产物，而不是生成 `...-41-1`。
+          name: XnX-Player-Portable-${{ env.RESOLVED_VERSION }}
           path: ${{ env.REL_DIR }}
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
@@ -223,7 +225,7 @@ jobs:
           $items = @($rows | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object {
             $parts = $_ -split "`t"
             [pscustomobject]@{ id = $parts[0]; name = $parts[1]; created = $parts[2] }
-          } | Where-Object { $_.name -like 'XnX-Player-Portable-*.Dev-*' } | Sort-Object created -Descending)
+          } | Where-Object { $_.name -like 'XnX-Player-Portable-*.Dev*' } | Sort-Object created -Descending)
           if ($items.Count -le $keep) {
             Write-Host "nothing to delete"
             exit 0

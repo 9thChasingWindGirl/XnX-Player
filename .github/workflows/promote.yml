@@ -70,13 +70,15 @@ jobs:
           # 下载最新的 dev 便携版；$want 有值时就只找那个基版本。
           # 返回 $null 表示没找到，版本号保持 dev 产物里的值，不再加一。
           function Get-DevPayload($want) {
+            # 产物名现在只有版本（XnX-Player-Portable-0.00.05.Dev）；旧产物还
+            # 带 `-<run>` 后缀，所以匹配 ".Dev" 前缀而不是 ".Dev-"，两种都能认。
             $rows = gh api --paginate "repos/$env:GITHUB_REPOSITORY/actions/artifacts?per_page=100" `
-              --jq '.artifacts[] | select(.expired==false) | select(.name | startswith("XnX-Player-Portable-")) | select(.name | contains(".Dev-")) | [.id, .name, .created_at] | @tsv'
+              --jq '.artifacts[] | select(.expired==false) | select(.name | startswith("XnX-Player-Portable-")) | select(.name | contains(".Dev")) | [.id, .name, .created_at] | @tsv'
             $items = @($rows | Where-Object { $_ -and $_.Trim() } | ForEach-Object {
               $p = $_ -split "`t"
               [pscustomobject]@{ id = $p[0]; name = $p[1]; created = $p[2] }
             })
-            if ($want) { $items = @($items | Where-Object { $_.name.StartsWith("$prefix$want.Dev-") }) }
+            if ($want) { $items = @($items | Where-Object { $_.name -like "$prefix$want.Dev*" }) }
             $pick = $items | Sort-Object created -Descending | Select-Object -First 1
             if (-not $pick) { return $null }
 

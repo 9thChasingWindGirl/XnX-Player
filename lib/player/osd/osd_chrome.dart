@@ -139,7 +139,10 @@ abstract final class OsdChrome {
     final double sy = _sy(size);
     double x(double v) => v * sx;
     double y(double v) => v * sy;
-    double font(double v) => v * sy;
+    // Positions scale with the video, text does not below 12 px: in a 1088×613
+    // window the 16-unit badges land on 9 px, which reads as noise rather than
+    // a label. A floor keeps the chrome legible without moving anything.
+    double font(double v) => math.max(v * sy, 12);
 
     // Scrim: the chrome must read over a bright frame.
     final ui.Paint scrim = ui.Paint()

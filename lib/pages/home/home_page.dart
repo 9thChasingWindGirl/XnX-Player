@@ -545,10 +545,43 @@ class _HomePageState extends State<HomePage> {
               },
             ),
             const SizedBox(height: 26),
+            // A portal that returns nothing must not look like a missing
+            // feature: without this the home simply reads as a local file
+            // list, and "TMDB 首页不见了" is the only conclusion available.
+            if (_tmdbKey.isNotEmpty && _tmdbTried && _tmdbHome == null)
+              _tmdbNotice(),
             if (categories.isNotEmpty) _categoryRow(categories),
             for (int i = 0; i < _rows.length; i++) _shelfRow(i),
           ],
         ),
+      ),
+    );
+  }
+
+  /// TMDB is opt-in, and when it silently returns nothing the home screen just
+  /// looks like a local file list. Name the two causes that actually happen —
+  /// an invalid key, and a network that cannot reach api.themoviedb.org — so
+  /// the difference between "broken" and "no catalogue" is visible.
+  Widget _tmdbNotice() {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(_margin, 0, _margin, 18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Icon(Icons.cloud_off_rounded, size: 18, color: PsColor.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'TMDB 内容未载入：API Key 可能无效，或当前网络无法访问 '
+              'api.themoviedb.org。本地媒体库不受影响。',
+              style: PsType.micro.copyWith(
+                fontSize: 15,
+                height: 1.5,
+                color: PsColor.warning,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
