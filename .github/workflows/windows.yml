@@ -223,7 +223,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $keep = 5
+          # Promotion is manual and usually happens after some review, by which
+          # time several more dev builds may exist. Keeping only the newest few
+          # meant "the build that passed" could be deleted before it was
+          # promoted; 10 covers a normal review window.
+          $keep = 10
           $rows = @()
           try {
             $rows = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '.artifacts[] | [.id, .name, .created_at] | @tsv'

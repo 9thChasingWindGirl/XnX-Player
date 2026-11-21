@@ -11,6 +11,10 @@
 # dev 产物来自 windows.yml（beta 分支 push），只有 Actions artifact。
 # stable 优先取最新 beta prerelease；该基版本没有 beta 时，回退到最新 dev
 # 产物，即 dev -> stable 直通。两条路径都不改版本号。
+#
+# 数字在整条链上不变，只换后缀：
+#   0.00.12.Dev  --promote beta-->  0.00.12.Beta  --promote stable-->  0.00.12
+# 想晋升的不是最新 dev 版本时，在 INPUT_VERSION 填那组数字（0.00.12）。
 # 正式发布前请先手动触发 merge-main.yml，把 beta 合并进 main；
 # 本工作流复用已有产物，不重建代码。
 #
@@ -78,9 +82,20 @@ jobs:
               $p = $_ -split "`t"
               [pscustomobject]@{ id = $p[0]; name = $p[1]; created = $p[2] }
             })
+            $all = $items
             if ($want) { $items = @($items | Where-Object { $_.name -like "$prefix$want.Dev*" }) }
             $pick = $items | Sort-Object created -Descending | Select-Object -First 1
-            if (-not $pick) { return $null }
+            if (-not $pick) {
+              # Promotion often runs days after the build that passed review, so
+              # "not found" alone leaves the operator guessing. Name what is
+              # still on the server: a dev artifact expires after 30 days and
+              # only the newest few are kept.
+              if ($all.Count -gt 0) {
+                Write-Host "::warning::no dev artifact matched '$prefix$want.Dev*'; still available:"
+                $all | Select-Object -First 12 | ForEach-Object { Write-Host "  $($_.name)" }
+              }
+              return $null
+            }
 
             # XnX-Player-Portable-0.00.03.Dev-42 -> 0.00.03.Dev -> 0.00.03
             $rest = $pick.name.Substring($prefix.Length)
