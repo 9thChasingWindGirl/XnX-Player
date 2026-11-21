@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xnx_player/update/update_channel.dart';
 import 'package:xnx_player/update/update_service.dart';
 
 void main() {
@@ -70,10 +71,11 @@ void main() {
         },
       ];
 
-      final UpdateCandidate? best = UpdateService.pickNightly(releases);
+      final UpdateCandidate? picked = UpdateService.pickNightly(releases);
 
-      expect(best, isNotNull);
-      expect(best!.version, '0.00.03.Dev');
+      expect(picked, isNotNull);
+      final UpdateCandidate best = picked!;
+      expect(best.version, '0.00.03.Dev');
       expect(best.assetUrl, 'https://example/nightly3.zip');
       expect(best.isPrerelease, isTrue);
     });

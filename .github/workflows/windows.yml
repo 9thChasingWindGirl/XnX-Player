@@ -92,7 +92,22 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Analyze (gate)
-        run: flutter analyze --fatal-warnings
+        shell: pwsh
+        run: |
+          # Echo every diagnostic and re-emit it as a GitHub annotation. The
+          # raw log is only visible to signed-in users in the web UI, while
+          # annotations are readable from the checks API — which is what an
+          # external tool needs to report "file:line: message" instead of a
+          # bare "exit code 1".
+          $lines = & flutter analyze --fatal-warnings 2>&1
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $lines |
+              Where-Object { $_ -match '\b(error|warning)\b' -and $_ -match '•' } |
+              ForEach-Object { Write-Host "::error::$_" }
+            exit $code
+          }
 
       - name: Unit tests
         run: flutter test --reporter expanded
