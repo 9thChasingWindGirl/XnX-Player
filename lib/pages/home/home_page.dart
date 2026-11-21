@@ -12,7 +12,6 @@ import '../../shell/shell_page.dart' show shellSourceFilter;
 import '../../ui/core/focus_highlight.dart';
 import '../../ui/core/tv_scale.dart';
 import '../../ui/core/tv_focusable.dart';
-import '../../ui/core/focus_zone.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/widgets/ps_button.dart';
 import 'home_hero.dart';
