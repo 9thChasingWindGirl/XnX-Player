@@ -1054,9 +1054,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             break;
           case 'back10':
             player.seekBy(-10);
+            // Kodi answers every transport key; a silent jump leaves the user
+            // unsure whether the press landed.
+            osd.toast('快退 10 秒', duration: const Duration(milliseconds: 900));
             break;
           case 'fwd10':
             player.seekBy(10);
+            osd.toast('快进 10 秒', duration: const Duration(milliseconds: 900));
             break;
           default:
             if (action != null && action.startsWith('menu:')) {

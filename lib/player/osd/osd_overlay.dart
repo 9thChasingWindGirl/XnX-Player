@@ -212,6 +212,17 @@ class OsdOverlay {
         _lastAudioFormat = audioFormat;
         refreshFormat();
       }
+      // How far mpv has demuxed, in seconds. A stream reports a real lead; a
+      // local file reports nothing useful, and the paint drops the lead-in
+      // when it is not ahead of the playhead.
+      final double cache =
+          double.tryParse((_player.getProperty('demuxer-cache-time') ?? '').trim()) ?? 0;
+      if (cache != _buffered) {
+        _buffered = cache;
+        if (_visible) {
+          _schedulePaint();
+        }
+      }
     });
   }
 
@@ -231,6 +242,7 @@ class OsdOverlay {
   void dispose() {
     _idleTimer?.cancel();
     _sizeTimer?.cancel();
+    _volumeTimer?.cancel();
     _player.state.removeListener(_invalidate);
     _layer.destroy();
     if (_live == this) {
@@ -249,18 +261,48 @@ class OsdOverlay {
   }
 
   void _invalidate() {
+    // Volume is the one state tick the chrome has to answer for itself: it is
+    // not a position change, and if the band is hidden there is nothing else on
+    // screen to say the level moved.
+    final MpvViewState now = _player.state.value;
+    final double effective = now.muted ? 0 : now.volume;
+    if (_lastVolumeSeen >= 0 && (effective - _lastVolumeSeen).abs() >= 0.5) {
+      _showVolume();
+    }
+    _lastVolumeSeen = effective;
+
     if (!_visible) {
       return;
     }
     // Pause holds the chrome; resuming restarts the countdown, so the band
     // does not linger over playback the user has already stepped away from.
-    if (_player.state.value.paused) {
+    if (now.paused) {
       _idleTimer?.cancel();
     } else if (_idleTimer == null || !_idleTimer!.isActive) {
       _armIdleTimer();
     }
     _schedulePaint();
   }
+
+  /// Brings the band up just long enough to show the volume bar.
+  void _showVolume() {
+    _volumeUntil = DateTime.now().add(const Duration(milliseconds: 1600));
+    _volumeTimer?.cancel();
+    _volumeTimer = Timer(const Duration(milliseconds: 1700), () {
+      _volumeUntil = null;
+      _schedulePaint();
+    });
+    poke();
+  }
+
+  /// Last volume the chrome drew, so the first tick after boot does not flash a
+  /// bar for a level the user did not change.
+  double _lastVolumeSeen = -1;
+  DateTime? _volumeUntil;
+  Timer? _volumeTimer;
+
+  /// Seconds mpv has demuxed ahead. 0 for a local file that reports nothing.
+  double _buffered = 0;
 
   void _schedulePaint() {
     if (_paintScheduled || _size.isEmpty) {
@@ -312,6 +354,10 @@ class OsdOverlay {
       scrubbing: _scrubbing,
       hoverSeek: _hoverSeek,
       toast: toast,
+      volumeHint: _volumeUntil != null && DateTime.now().isBefore(_volumeUntil!)
+          ? (state.muted ? 0.0 : (state.volume / 100).clamp(0.0, 1.0).toDouble())
+          : null,
+      buffered: _buffered,
     );
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();

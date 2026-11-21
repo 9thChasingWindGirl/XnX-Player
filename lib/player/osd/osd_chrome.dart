@@ -229,11 +229,24 @@ abstract final class OsdChrome {
     final double progress =
         model.duration > 0 ? (model.position / model.duration).clamp(0.0, 1.0) : 0;
     final double knob = model.scrubbing ?? progress;
+    // Demuxed lead-in, the way Kodi shows what a stream has buffered. A local
+    // file reports nothing useful here, so it stays at 0 and draws nothing.
+    final double bufferedFraction = model.duration > 0
+        ? (model.buffered / model.duration).clamp(0.0, 1.0).toDouble()
+        : 0;
     // The knob is a shape, not text: it keeps its own scale so the 12 px font
     // floor does not turn a 4.5 px dot into a 24 px disc.
     _seekLine(canvas, track, knob, model.accent,
         hover: model.hoverSeek || model.scrubbing != null,
-        radius: math.max(8 * sy, 5));
+        radius: math.max(8 * sy, 5),
+        buffered: math.max(bufferedFraction, progress));
+
+    // Dragging the bar answers with the time it is dragging to — the only
+    // readout that makes a long seek predictable.
+    if (model.scrubbing != null) {
+      _scrubBubble(canvas, track, knob,
+          _clock(model.scrubbing! * model.duration), font(18));
+    }
 
     // Transport and menus, drawn from the same zones input tests.
     final List<OsdZone> buttonZones = zones(size);
@@ -272,6 +285,13 @@ abstract final class OsdChrome {
     _text(canvas, hint, ui.Offset(x(safeX), y(hintY)), font(16),
         color: const ui.Color(0x8AFFFFFF));
 
+    // Above the pause badge (y 500) so the two never share a line.
+    final double? volume = model.volumeHint;
+    if (volume != null) {
+      _volumeBar(canvas, size, volume,
+          muted: model.muted, ink: font(18), sx: sx, sy: sy);
+    }
+
     if (model.paused) {
       _centeredText(
         canvas,
@@ -308,12 +328,27 @@ abstract final class OsdChrome {
     ui.Color accent, {
     required bool hover,
     required double radius,
+    double buffered = 0,
   }) {
     final double height = track.height / 2;
     canvas.drawRRect(
       ui.RRect.fromRectAndRadius(track, ui.Radius.circular(height)),
       ui.Paint()..color = const ui.Color(0x2EFFFFFF),
     );
+    // Buffered lead-in sits between the empty track and the played fill: light
+    // enough not to compete with the accent, bright enough to read as "ready".
+    if (buffered > 0.001) {
+      final ui.Rect lead = ui.Rect.fromLTRB(
+        track.left,
+        track.top,
+        track.left + track.width * math.min(buffered, 1.0),
+        track.bottom,
+      );
+      canvas.drawRRect(
+        ui.RRect.fromRectAndRadius(lead, ui.Radius.circular(height)),
+        ui.Paint()..color = const ui.Color(0x59FFFFFF),
+      );
+    }
     final ui.Rect fill = ui.Rect.fromLTRB(
       track.left,
       track.top,
@@ -329,6 +364,112 @@ abstract final class OsdChrome {
       hover ? radius * 1.6 : radius,
       ui.Paint()..color = const ui.Color(0xFFFFFFFF),
     );
+  }
+
+  /// A time tag above the knob while the bar is being dragged.
+  ///
+  /// Kodi answers a scrub with the target time; without it a long seek is a
+  /// guess until the picture catches up.
+  static void _scrubBubble(
+      ui.Canvas canvas, ui.Rect track, double fraction, String label, double ink) {
+    final double w = _textWidth(label, ink) + 24;
+    final double h = ink + 12;
+    final double wanted = track.left + track.width * fraction - w / 2;
+    final double left =
+        wanted.clamp(track.left, math.max(track.left, track.right - w)).toDouble();
+    final ui.Rect box = ui.Rect.fromLTWH(left, track.top - h - 10, w, h);
+    canvas.drawRRect(
+      ui.RRect.fromRectAndRadius(box, ui.Radius.circular(h / 2)),
+      ui.Paint()..color = const ui.Color(0xE605060C),
+    );
+    _text(canvas, label, ui.Offset(box.left + 12, box.top + 6), ink,
+        color: const ui.Color(0xFFFFFFFF));
+  }
+
+  /// The volume readout: speaker, level, percentage.
+  ///
+  /// This is the one piece of state the chrome always carried but never showed.
+  /// Kodi answers every volume key with this bar, which is why a change there
+  /// never feels like it went nowhere.
+  static void _volumeBar(
+    ui.Canvas canvas,
+    ui.Size size,
+    double value, {
+    required bool muted,
+    required double ink,
+    required double sx,
+    required double sy,
+  }) {
+    double x(double v) => v * sx;
+    double y(double v) => v * sy;
+    final double h = math.max(y(56), 40);
+    final ui.Rect box = ui.Rect.fromCenter(
+      center: ui.Offset(size.width / 2, y(430)),
+      width: x(420),
+      height: h,
+    );
+    canvas.drawRRect(
+      ui.RRect.fromRectAndRadius(box, ui.Radius.circular(h / 2)),
+      ui.Paint()..color = const ui.Color(0xD905060C),
+    );
+
+    final ui.Offset c = ui.Offset(box.left + x(34), box.center.dy);
+    final double icon = math.max(y(22), 15);
+    final ui.Paint body = ui.Paint()..color = const ui.Color(0xFFF2F4F8);
+    canvas.drawRRect(
+      ui.RRect.fromRectAndRadius(
+        ui.Rect.fromCenter(
+          center: ui.Offset(c.dx - icon * 0.26, c.dy),
+          width: icon * 0.32,
+          height: icon * 0.42,
+        ),
+        ui.Radius.circular(icon * 0.08),
+      ),
+      body,
+    );
+    canvas.drawPath(
+      ui.Path()
+        ..moveTo(c.dx - icon * 0.12, c.dy - icon * 0.2)
+        ..lineTo(c.dx + icon * 0.24, c.dy - icon * 0.46)
+        ..lineTo(c.dx + icon * 0.24, c.dy + icon * 0.46)
+        ..lineTo(c.dx - icon * 0.12, c.dy + icon * 0.2)
+        ..close(),
+      body,
+    );
+    if (muted) {
+      canvas.drawLine(
+        ui.Offset(c.dx - icon * 0.08, c.dy + icon * 0.12),
+        ui.Offset(c.dx + icon * 0.46, c.dy - icon * 0.46),
+        ui.Paint()
+          ..color = const ui.Color(0xFFF05A5A)
+          ..strokeWidth = math.max(sy * 2, 2)
+          ..strokeCap = ui.StrokeCap.round,
+      );
+    }
+
+    final double barH = math.max(y(8), 5);
+    final double left = box.left + x(70);
+    final double right = box.right - x(86);
+    final ui.Rect track = ui.Rect.fromLTRB(
+        left, box.center.dy - barH / 2, right, box.center.dy + barH / 2);
+    final double radius = barH / 2;
+    canvas.drawRRect(
+      ui.RRect.fromRectAndRadius(track, ui.Radius.circular(radius)),
+      ui.Paint()..color = const ui.Color(0x2EFFFFFF),
+    );
+    final double fraction = value.clamp(0.0, 1.0).toDouble();
+    canvas.drawRRect(
+      ui.RRect.fromRectAndRadius(
+        ui.Rect.fromLTRB(left, track.top, left + track.width * fraction, track.bottom),
+        ui.Radius.circular(radius),
+      ),
+      ui.Paint()
+        ..color = muted ? const ui.Color(0xFF8C8C94) : const ui.Color(0xFFF2F4F8),
+    );
+
+    final String label = muted ? '静音' : '${(fraction * 100).round()}%';
+    _text(canvas, label, ui.Offset(right + x(14), box.center.dy - ink / 2), ink,
+        color: const ui.Color(0xFFC8CDD6));
   }
 
   static void _playGlyph(ui.Canvas canvas, ui.Rect zone, bool paused, double size) {
@@ -485,6 +626,8 @@ class OsdChromeModel {
     this.scrubbing,
     this.hoverSeek = false,
     this.toast,
+    this.volumeHint,
+    this.buffered = 0,
   });
 
   final String title;
@@ -495,6 +638,16 @@ class OsdChromeModel {
   final bool muted;
   final List<String> badges;
   final ui.Color accent;
+
+  /// 0..1 while the volume bar is on screen, null when it is not.
+  ///
+  /// Kodi answers every volume key with a bar instead of moving a number
+  /// somewhere; the chrome otherwise has no way to say "this got quieter".
+  final double? volumeHint;
+
+  /// Seconds already demuxed, drawn as a lighter lead-in on the seek line.
+  /// Zero means "unknown or local file" and draws nothing.
+  final double buffered;
 
   /// Which labels carry an accent and a truthfulness tier. Labels absent from
   /// this map fall back to a neutral `fact` badge, so callers that only supply
