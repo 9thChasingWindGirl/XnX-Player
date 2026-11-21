@@ -72,6 +72,16 @@ class _XnXAppState extends State<XnXApp> {
         title: 'XnX Player',
         debugShowCheckedModeBanner: false,
         theme: buildPsTheme(),
+        // Global guard against stray text decorations. A widget that forgets
+        // to set an explicit PsType style inherits DefaultTextStyle; if any
+        // upstream theme ever carries an underline, it lands on every line of
+        // copy as an orange rule. Merging `none` here makes that impossible
+        // regardless of which style a leaf ends up using, while leaving every
+        // explicit style (all PsType.*) untouched.
+        builder: (BuildContext context, Widget? child) => DefaultTextStyle.merge(
+          style: const TextStyle(decoration: TextDecoration.none),
+          child: child ?? const SizedBox.shrink(),
+        ),
         home: const ShellPage(),
       ),
     );
