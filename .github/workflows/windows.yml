@@ -140,6 +140,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # The dev channel reads a Release, not an Actions artifact: the artifact
+      # download endpoint authenticates even on a public repository, so a
+      # normal desktop install could never self-update. A nightly prerelease
+      # carries the same portable zip as an anonymous-downloadable asset.
+      - name: Publish nightly release
+        if: success() && github.ref_name == 'beta' && github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "nightly-$env:RESOLVED_VERSION"
+          $zip = Join-Path $env:RUNNER_TEMP "XnX-Player-Portable-$env:RESOLVED_VERSION.zip"
+          Compress-Archive -Path "$env:REL_DIR\*" -DestinationPath $zip -Force
+          gh release delete $tag --yes --cleanup-tag 2>$null
+          if ($LASTEXITCODE -ne 0) { Write-Host "no previous nightly; creating fresh" }
+          gh release create $tag $zip --prerelease `
+            --title "Dev $env:RESOLVED_VERSION" `
+            --notes "beta 分支自动构建（未验证）· 构建于 $(Get-Date -AsUtc -Format 'yyyy-MM-ddTHH:mm:ssZ')"
+          Write-Host "published $tag"
+
       # Record the version this run actually produced back in the repository.
       # The build artifact already carries it in its name and version.txt, but
       # nothing on the repo side did — so the next build had to re-derive the

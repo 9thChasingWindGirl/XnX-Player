@@ -430,7 +430,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         hint: '当前版本 ${S.appVersion}\n'
                             '正式版Stable = main 正式 Release（便携版 zip + 安装包）· '
                             '测试版Beta = beta 预发布（便携版 zip + 安装包）· '
-                            '开发者测试版Dev = beta 分支 Actions 便携版（应用内更新需配置 XNX_GITHUB_TOKEN）',
+                            '开发者测试版Dev = beta 分支每次构建发布的 nightly 预发布（便携版 zip，无需 token）',
                         options: const <String>[
                           '正式版Stable',
                           '测试版Beta',

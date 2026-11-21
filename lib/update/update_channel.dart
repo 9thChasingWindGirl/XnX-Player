@@ -4,9 +4,9 @@
 /// Three channels, mirroring how the project actually ships:
 /// - **stable** — `main` 晋升出的正式 Release：便携版 zip + 安装包。
 /// - **beta** — beta 分支晋升出的 prerelease：便携版 zip + 安装包。
-/// - **dev** — beta 分支每次 push 的自动构建，只作为 Actions 产物（便携版
-///   zip），不进入 Release。Actions 产物下载即使公开仓库也要求认证，
-///   因此 dev 通道的应用内更新需要 `XNX_GITHUB_TOKEN`。
+/// - **dev** — beta 分支每次 push 自动发布的 `nightly-*` prerelease，携带
+///   便携版 zip。用 Release 资产而非 Actions 产物是因为后者的下载端点即使
+///   公开仓库也要认证，无 token 的客户端永远 401。
 ///
 /// 应用内更新只消费便携版 zip；安装包只用于首次安装与手动重装。
 ///
@@ -20,7 +20,8 @@ enum UpdateChannel { stable, beta, dev }
 /// One installable candidate, whatever its source.
 ///
 /// `assetUrl` points at the portable zip that contains the application
-/// payload; for [UpdateChannel.dev] it is a GitHub Actions artifact download.
+/// payload — for every channel, including [UpdateChannel.dev], it is an
+/// anonymous-downloadable GitHub Release asset.
 class UpdateCandidate {
   const UpdateCandidate({
     required this.version,
@@ -59,8 +60,8 @@ class UpdateCandidate {
 
 /// Picks the release that a channel offers.
 ///
-/// stable 只认正式发布；beta 认 prerelease。Dev 走 Actions 产物，由服务层
-/// 单独取，这里返回 null 表示"该通道不用 Release 列表"。
+/// stable 只认正式发布；beta 认 prerelease。Dev 的 `nightly-*` 由服务层从
+/// 同一 Release 列表里单独筛选，这里返回 null 表示"交给服务层处理"。
 UpdateCandidate? pickRelease(List<UpdateCandidate> releases, UpdateChannel channel) {
   if (channel == UpdateChannel.dev) {
     return null;

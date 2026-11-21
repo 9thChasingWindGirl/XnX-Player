@@ -12,9 +12,10 @@ import 'update_channel.dart';
 /// Artifact types differ per channel:
 /// - stable/beta: a Release with a **portable zip** (used for self-update) and
 ///   an installer. The updater deliberately picks the portable zip.
-/// - dev: the newest portable zip from the beta branch's Actions artifacts.
-///   Artifact downloads require a token, so dev in-app updates need
-///   `XNX_GITHUB_TOKEN`; without it the UI reports that dev updates are manual.
+/// - dev: the newest `nightly-*` prerelease published by every beta push. Its
+///   zip is an ordinary Release asset, so it downloads anonymously — the
+///   Actions artifact endpoint requires a token even on a public repository,
+///   which made dev updates impossible for a normal desktop install.
 ///
 /// Data safety is structural: user data lives in [AppPaths.dataDir], which can
 /// be a custom folder or the portable `userdata/` next to the exe. Updates only
@@ -68,13 +69,13 @@ class UpdateService {
 
   /// Asks GitHub what the newest build on [channel] is.
   ///
-  /// stable/beta read Releases (beta = prerelease); dev reads the newest
-  /// portable artifact from the beta branch. Dev artifact downloads require a
-  /// token, so a missing `XNX_GITHUB_TOKEN` is reported instead of silently
-  /// returning "no build".
+  /// All three channels read Releases now. stable/beta pick from ordinary
+  /// releases/prereleases; dev picks the newest `nightly-*` prerelease the beta
+  /// workflow publishes. Reading artifacts here used to throw "needs token"
+  /// because their download endpoint authenticates even on public repos.
   Future<UpdateCandidate?> fetchLatest(UpdateChannel channel) async {
     if (channel == UpdateChannel.dev) {
-      return _fetchDevArtifact();
+      return _fetchNightly();
     }
     final List<dynamic> releases = await Http.getJsonList(
       releasesUri,
@@ -115,74 +116,26 @@ class UpdateService {
     );
   }
 
-  /// The newest portable artifact from the beta branch's Actions runs.
-  ///
-  /// The dev channel deliberately does not create Releases, so the artifact
-  /// endpoint is the only source. It requires authentication even on a public
-  /// repository, hence the explicit token requirement.
-  Future<UpdateCandidate?> _fetchDevArtifact() async {
-    if (githubToken.isEmpty) {
-      throw StateError(
-        'Dev 通道的构建产物位于 Actions，应用内更新需要配置 XNX_GITHUB_TOKEN；'
-        '也可以从 Actions 页面手动下载便携版 zip。',
-      );
-    }
-    final Map<String, dynamic> data = await Http.getJson(
-      _endpoint(<String>['actions', 'artifacts'], <String, String>{'per_page': '50'}),
+  /// The newest `nightly-*` prerelease, if any. The beta workflow publishes one
+  /// per successful push; the version is the tag minus its prefix and the zip
+  /// rides as an ordinary release asset — anonymous-downloadable.
+  Future<UpdateCandidate?> _fetchNightly() async {
+    final List<dynamic> releases = await Http.getJsonList(
+      releasesUri,
       headers: _apiHeaders,
     );
-    final Object? raw = data['artifacts'];
-    if (raw is! List) {
-      return null;
-    }
-    Map<String, dynamic>? best;
-    String bestVersion = '';
-    for (final Object? entry in raw) {
-      if (entry is! Map) {
-        continue;
-      }
-      final Map<String, dynamic> artifact = entry.cast<String, dynamic>();
-      if (artifact['expired'] == true) {
-        continue;
-      }
-      final String name = artifact['name'] as String? ?? '';
-      if (!name.startsWith('XnX-Player-Portable-') ||
-          !name.contains('.Dev')) {
-        continue;
-      }
-      final String version = _versionFromArtifact(name);
-      if (version.isEmpty) {
-        continue;
-      }
-      if (best == null || compareVersions(version, bestVersion) > 0) {
-        best = artifact;
-        bestVersion = version;
-      }
-    }
+    final UpdateCandidate? best = pickNightly(releases);
     if (best == null) {
       return null;
     }
-    final Object? id = best['id'];
-    final String created = best['created_at'] as String? ?? '';
     return UpdateCandidate(
-      version: bestVersion,
-      name: best['name'] as String? ?? bestVersion,
-      assetUrl: 'https://api.github.com/repos/$repository/actions/artifacts/$id/zip',
-      notes: 'beta 分支自动构建（未验证）· $created',
-      publishedAt: created,
+      version: best.version,
+      name: best.name,
+      assetUrl: best.assetUrl,
+      notes: 'beta 分支自动构建（未验证）· 构建于 ${best.publishedAt}',
+      publishedAt: best.publishedAt,
       isPrerelease: true,
     );
-  }
-
-  /// `XnX-Player-Portable-0.01.00.Dev-42` -> `0.01.00.Dev`.
-  static String _versionFromArtifact(String name) {
-    const String prefix = 'XnX-Player-Portable-';
-    if (!name.startsWith(prefix)) {
-      return '';
-    }
-    final String rest = name.substring(prefix.length);
-    final int dash = rest.lastIndexOf('-');
-    return dash > 0 ? rest.substring(0, dash) : rest;
   }
 
   /// Downloads and unpacks the candidate into
@@ -363,6 +316,48 @@ Remove-Item -Force \$self
   Future<Map<String, dynamic>?> fetchLatestJson(UpdateChannel channel) async {
     final UpdateCandidate? candidate = await fetchLatest(channel);
     return candidate?.toJson();
+  }
+
+  /// Picks the newest `nightly-*` release from a decoded release list.
+  ///
+  /// Kept pure so the dev-channel selection is testable without network: the
+  /// tag prefix is stripped from [UpdateCandidate.version] and the highest
+  /// version wins. Non-nightly releases (beta prereleases, stable) are ignored.
+  static UpdateCandidate? pickNightly(List<dynamic> releases) {
+    UpdateCandidate? best;
+    for (final Object? entry in releases) {
+      if (entry is! Map) {
+        continue;
+      }
+      final Map<String, dynamic> release = entry.cast<String, dynamic>();
+      final String tag = release['tag_name'] as String? ?? '';
+      if (!tag.startsWith('nightly-')) {
+        continue;
+      }
+      String? zipUrl;
+      for (final Object? asset in release['assets'] as List<dynamic>? ?? <dynamic>[]) {
+        if (asset is! Map) {
+          continue;
+        }
+        final String name = asset['name'] as String? ?? '';
+        if (name.endsWith('.zip')) {
+          zipUrl = asset['browser_download_url'] as String?;
+          break;
+        }
+      }
+      final UpdateCandidate candidate = UpdateCandidate(
+        version: tag.substring('nightly-'.length),
+        name: release['name'] as String? ?? tag,
+        assetUrl: zipUrl ?? '',
+        publishedAt: release['published_at'] as String? ?? '',
+        notes: release['body'] as String? ?? '',
+        isPrerelease: true,
+      );
+      if (best == null || compareVersions(candidate.version, best.version) > 0) {
+        best = candidate;
+      }
+    }
+    return best;
   }
 
   /// Parses an artifact/release list body — kept small and testable.

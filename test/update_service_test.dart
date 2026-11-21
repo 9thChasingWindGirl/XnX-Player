@@ -31,4 +31,60 @@ void main() {
       expect(uri.queryParameters['per_page'], '30');
     });
   });
+
+  group('dev channel nightly selection', () {
+    // dev used to read Actions artifacts, whose download endpoint requires a
+    // token even on public repos — a normal desktop install could never
+    // self-update. Release assets are anonymous, so nightly tags are the
+    // single source now.
+    test('picks the highest nightly and strips the tag prefix', () {
+      final List<dynamic> releases = <dynamic>[
+        <String, dynamic>{
+          'tag_name': 'v1.00.00',
+          'name': 'stable',
+          'prerelease': false,
+        },
+        <String, dynamic>{
+          'tag_name': 'nightly-0.00.02.Dev',
+          'name': 'Dev 0.00.02.Dev',
+          'prerelease': true,
+          'published_at': '2026-11-21T00:00:00Z',
+          'assets': <dynamic>[
+            <String, dynamic>{
+              'name': 'XnX-Player-Portable-0.00.02.Dev.zip',
+              'browser_download_url': 'https://example/nightly2.zip',
+            },
+          ],
+        },
+        <String, dynamic>{
+          'tag_name': 'nightly-0.00.03.Dev',
+          'name': 'Dev 0.00.03.Dev',
+          'prerelease': true,
+          'published_at': '2026-11-22T00:00:00Z',
+          'assets': <dynamic>[
+            <String, dynamic>{
+              'name': 'XnX-Player-Portable-0.00.03.Dev.zip',
+              'browser_download_url': 'https://example/nightly3.zip',
+            },
+          ],
+        },
+      ];
+
+      final UpdateCandidate? best = UpdateService.pickNightly(releases);
+
+      expect(best, isNotNull);
+      expect(best!.version, '0.00.03.Dev');
+      expect(best.assetUrl, 'https://example/nightly3.zip');
+      expect(best.isPrerelease, isTrue);
+    });
+
+    test('returns null when no nightly release exists', () {
+      expect(
+        UpdateService.pickNightly(<dynamic>[
+          <String, dynamic>{'tag_name': 'v1.00.00', 'prerelease': false},
+        ]),
+        isNull,
+      );
+    });
+  });
 }
