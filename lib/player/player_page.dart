@@ -365,6 +365,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           _escFallback?.cancel();
           if (payload['type'] == 'chrome') {
             _chromeReply?.call(payload['mode'] == 'window');
+          } else if (payload['type'] == 'menu') {
+            // The menu model stays owned by Lua; this layer only mirrors it.
+            _osd?.setMenu(payload);
           }
         }
         ..attach();
@@ -1022,6 +1025,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         return;
       }
       osd.setSeekHover(osd.inSeekZone(unit.dx, unit.dy));
+      osd.updateMenuHover(unit.dx, unit.dy);
     }
     _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
   }
@@ -1045,6 +1049,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       // finishes the drag instead of falling through as a stray click.
       if (down) {
         osd.poke();
+        // A press anywhere but a menu row or a menu button dismisses the panel,
+        // the way every popup behaves; the press still does its normal job.
+        if (osd.hasMenu &&
+            !(action?.startsWith('menurow:') ?? false) &&
+            !(action?.startsWith('menu:') ?? false)) {
+          osd.menuClose();
+        }
         switch (action) {
           case 'seek':
             osd.scrub(osd.seekFraction(unit.dx));
@@ -1063,8 +1074,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             osd.toast('快进 10 秒', duration: const Duration(milliseconds: 900));
             break;
           default:
-            if (action != null && action.startsWith('menu:')) {
-              // Menus stay in the Lua stage; the SDR chrome only opens them.
+            if (action != null && action.startsWith('menurow:')) {
+              // Lua owns the row's action; this layer only reports the choice.
+              final int row = int.tryParse(action.substring('menurow:'.length)) ?? -1;
+              if (row >= 0) {
+                osd.menuChoose(row);
+              }
+            } else if (action != null && action.startsWith('menu:')) {
               player.sendScriptMessage(<String, Object?>{
                 'cmd': 'menu',
                 'id': action.substring(5),
@@ -1098,6 +1114,14 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       return;
     }
     final OsdOverlay? osd = _osd;
+    if (osd != null && osd.inMenuZone(unit.dx, unit.dy)) {
+      // Over the panel the wheel walks the list, the way Kodi's does; volume
+      // would be the wrong answer for a wheel aimed at a menu.
+      osd
+        ..poke()
+        ..menuStep(dy < 0 ? -1 : 1);
+      return;
+    }
     if (osd != null && osd.inChromeZone(unit.dx, unit.dy)) {
       // Over the chrome band the wheel is the volume, handled locally.
       osd

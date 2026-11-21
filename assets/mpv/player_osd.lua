@@ -1304,8 +1304,63 @@ osd.z = 1000
 local hits = {}
 local dirty = true
 
+-- ==== MENU HAND-OFF ========================================================
+-- When the Dart layer owns the chrome it also draws the menu. Lua stays the
+-- model: `row.act` is a closure and cannot cross the IPC boundary, so the whole
+-- interaction (move/choose/adjust) is forwarded back here and this side keeps
+-- deciding what a row means.
+local menu_fingerprint = ''
+
+local function push_menu()
+  -- Audio-only keeps the full Lua stage (`dart_chrome` is false there), so the
+  -- menu must not be handed over as well or two panels would stack.
+  if state.audio_mode then
+    if menu_fingerprint ~= '' then
+      menu_fingerprint = ''
+      mp.commandv('script-message', 'player-event',
+        utils.format_json({ type = 'menu', open = false }))
+    end
+    return
+  end
+  if not state.chrome_window then
+    return
+  end
+  local menu = state.menu
+  if not menu then
+    if menu_fingerprint ~= '' then
+      menu_fingerprint = ''
+      mp.commandv('script-message', 'player-event',
+        utils.format_json({ type = 'menu', open = false }))
+    end
+    return
+  end
+  local rows = {}
+  local pieces = { menu.id or '', tostring(menu.index) }
+  for i, row in ipairs(menu.rows) do
+    local kind = row.kind or 'item'
+    local label = row.label or ''
+    local value = row.value and tostring(row.value) or ''
+    local active = row.active and true or false
+    rows[i] = { kind = kind, label = label, value = value, active = active }
+    pieces[#pieces + 1] = kind .. '\x1f' .. label .. '\x1f' .. value .. (active and '\x01' or '')
+  end
+  local fp = table.concat(pieces, '\x1e')
+  if fp == menu_fingerprint then
+    return
+  end
+  menu_fingerprint = fp
+  mp.commandv('script-message', 'player-event', utils.format_json({
+    type = 'menu',
+    open = true,
+    title = menu.title or '',
+    index = menu.index,
+    rows = rows,
+  }))
+end
+
 function mark_dirty()
   dirty = true
+  push_menu()
 end
 
 local function add_hit(entry)
@@ -1889,7 +1944,10 @@ function render()
     draw_controls(parts)
   end
 
-  if state.menu then
+  -- The menu moved to the Dart layer when it owns the chrome: it pushed the
+  -- model through `push_menu`, and drawing it here as well would stack two
+  -- panels with two different hit maps.
+  if state.menu and not dart_chrome then
     draw_menu(parts)
   end
 
@@ -2539,6 +2597,28 @@ mp.register_script_message('player-cmd', function(json)
     toast(payload.text or '')
   elseif cmd == 'menu' and payload.id then
     open_menu(payload.id)
+  elseif cmd == 'menu-op' then
+    -- Forwarded from the Dart panel: it draws and hit-tests, this side owns
+    -- what each row does.
+    local op = payload.op
+    local menu = state.menu
+    if op == 'close' then
+      close_menu()
+    elseif menu and op == 'move' then
+      local target = tonumber(payload.index)
+      if target then
+        menu.index = math.max(1, math.min(#menu.rows, math.floor(target)))
+        mark_dirty()
+      end
+    elseif menu and op == 'choose' then
+      local target = tonumber(payload.index)
+      if target then
+        menu.index = math.max(1, math.min(#menu.rows, math.floor(target)))
+      end
+      activate_row()
+    elseif menu and op == 'adjust' then
+      adjust_row((tonumber(payload.direction) or 1) < 0 and -1 or 1)
+    end
   elseif cmd == 'mouse' then
     handle_mouse(payload)
   end

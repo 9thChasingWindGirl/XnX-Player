@@ -36,6 +36,57 @@ class OsdBadge {
   static const ui.Color plainWhite = ui.Color(0xFFFFFFFF);
 }
 
+/// One row of the popup menu, as Lua reports it.
+///
+/// `act` never crosses the boundary — it is a Lua closure. Dart draws the row
+/// and forwards the click; Lua still decides what the row does.
+class OsdMenuRow {
+  const OsdMenuRow({
+    required this.kind,
+    required this.label,
+    this.value = '',
+    this.active = false,
+  });
+
+  /// `item`, `adjust` or `header`.
+  final String kind;
+  final String label;
+
+  /// Right-aligned value (`开启`, `1.5x`, `简体中文`). Empty when absent.
+  final String value;
+
+  /// The row is the currently applied choice; drawn with a dot.
+  final bool active;
+
+  bool get isHeader => kind == 'header';
+  bool get isAdjust => kind == 'adjust';
+}
+
+/// The popup menu state: title, selected row, rows. Index is 0-based here and
+/// converted back to Lua's 1-based indexing when a command is sent.
+class OsdMenu {
+  const OsdMenu({
+    required this.title,
+    required this.index,
+    required this.rows,
+  });
+
+  final String title;
+  final int index;
+  final List<OsdMenuRow> rows;
+
+  int get selected => rows.isEmpty ? 0 : index.clamp(0, rows.length - 1).toInt();
+}
+
+/// One chapter mark: a start time and the name mpv reports for it.
+class OsdChapter {
+  const OsdChapter(this.time, this.title);
+
+  /// Seconds from the start of the file.
+  final double time;
+  final String title;
+}
+
 /// One frame of the independent OSD chrome, drawn with plain `dart:ui`.
 ///
 /// The layout mirrors the Lua stage in design units: the same title, badge and
@@ -58,6 +109,14 @@ abstract final class OsdChrome {
   static const double bandHeight = 380;
 
   static const double seekHitHeight = 56;
+
+  /// Menu geometry, identical to the Lua stage's so the panel lands where the
+  /// old one did: right-aligned above the transport, 520 design units wide.
+  static const double menuW = 520;
+  static const double menuRowH = 60;
+  static const double menuHeaderH = 40;
+  static const double menuBottom = 862;
+  static const double menuBudget = 620;
 
   static const Map<String, String> menuLabels = <String, String>{
     'audio': '音轨',
@@ -108,7 +167,7 @@ abstract final class OsdChrome {
 
   /// Every interactive rectangle, in paint coordinates. Painting and input use
   /// this one list, so a drawn button is always the button that answers.
-  static List<OsdZone> zones(ui.Size size) {
+  static List<OsdZone> zones(ui.Size size, {OsdMenu? menu}) {
     final double sx = _sx(size);
     final double sy = _sy(size);
     final List<OsdZone> out = <OsdZone>[];
@@ -130,6 +189,84 @@ abstract final class OsdChrome {
       right -= labelWidth;
       out.add(OsdZone('menu:$id', ui.Rect.fromLTWH(right, top, labelWidth, height)));
       right -= 6 * sx;
+    }
+    if (menu != null) {
+      out.addAll(menuZones(size, menu));
+    }
+    return out;
+  }
+
+  /// Rows visible around the selection, as an inclusive index range.
+  ///
+  /// A 40-chapter file must not push the panel off the top of the screen, so
+  /// the list is windowed around the cursor exactly as the Lua stage did.
+  static (int, int) menuWindow(OsdMenu menu) {
+    double rowH(OsdMenuRow row) => row.isHeader ? menuHeaderH : menuRowH;
+    final int sel = menu.selected;
+    int first = sel;
+    int last = sel;
+    double used = rowH(menu.rows[sel]);
+    for (int i = sel - 1; i >= 0; i--) {
+      final double h = rowH(menu.rows[i]);
+      if (used + h > menuBudget) {
+        break;
+      }
+      used += h;
+      first = i;
+    }
+    for (int j = sel + 1; j < menu.rows.length; j++) {
+      final double h = rowH(menu.rows[j]);
+      if (used + h > menuBudget) {
+        break;
+      }
+      used += h;
+      last = j;
+    }
+    return (first, last);
+  }
+
+  /// The panel rectangle: right-aligned, sitting above the transport row.
+  static ui.Rect menuPanel(ui.Size size, OsdMenu menu) {
+    if (menu.rows.isEmpty) {
+      return ui.Rect.zero;
+    }
+    final double sx = _sx(size);
+    final double sy = _sy(size);
+    final (int first, int last) = menuWindow(menu);
+    double used = 0;
+    for (int i = first; i <= last; i++) {
+      used += menu.rows[i].isHeader ? menuHeaderH : menuRowH;
+    }
+    final double height = (62 + used + 20) * sy;
+    return ui.Rect.fromLTWH(
+      size.width - safeX * sx - menuW * sx,
+      menuBottom * sy - height,
+      menuW * sx,
+      height,
+    );
+  }
+
+  /// Clickable row rectangles, keyed `menurow:<index>` with a 0-based index.
+  static List<OsdZone> menuZones(ui.Size size, OsdMenu menu) {
+    if (menu.rows.isEmpty) {
+      return const <OsdZone>[];
+    }
+    final double sx = _sx(size);
+    final double sy = _sy(size);
+    final ui.Rect panel = menuPanel(size, menu);
+    final (int first, int last) = menuWindow(menu);
+    final List<OsdZone> out = <OsdZone>[];
+    double y = panel.top + 62 * sy;
+    for (int i = first; i <= last; i++) {
+      final OsdMenuRow row = menu.rows[i];
+      final double h = (row.isHeader ? menuHeaderH : menuRowH) * sy;
+      if (!row.isHeader) {
+        out.add(OsdZone(
+          'menurow:$i',
+          ui.Rect.fromLTWH(panel.left + 12 * sx, y, panel.width - 24 * sx, h),
+        ));
+      }
+      y += h;
     }
     return out;
   }
@@ -239,13 +376,22 @@ abstract final class OsdChrome {
     _seekLine(canvas, track, knob, model.accent,
         hover: model.hoverSeek || model.scrubbing != null,
         radius: math.max(8 * sy, 5),
-        buffered: math.max(bufferedFraction, progress));
+        buffered: math.max(bufferedFraction, progress),
+        marks: <double>[
+          if (model.duration > 0)
+            for (final OsdChapter chapter in model.chapters)
+              (chapter.time / model.duration).clamp(0.0, 1.0).toDouble(),
+        ]);
 
     // Dragging the bar answers with the time it is dragging to — the only
-    // readout that makes a long seek predictable.
+    // readout that makes a long seek predictable. The chapter name goes with
+    // it, the way Kodi labels the chapter being scrubbed into.
     if (model.scrubbing != null) {
-      _scrubBubble(canvas, track, knob,
-          _clock(model.scrubbing! * model.duration), font(18));
+      final double target = model.scrubbing! * model.duration;
+      final OsdChapter? chapter = model.chapterAt(target);
+      final String name =
+          chapter == null ? '' : '${_clip(chapter.title, 14)}   ';
+      _scrubBubble(canvas, track, knob, '$name${_clock(target)}', font(18));
     }
 
     // Transport and menus, drawn from the same zones input tests.
@@ -319,6 +465,130 @@ abstract final class OsdChrome {
       _text(canvas, message, ui.Offset(left + x(28), y(57)), font(22),
           color: const ui.Color(0xFFFFFFFF));
     }
+
+    // The menu is the topmost surface: it is modal in intent even though the
+    // transport stays visible behind it.
+    final OsdMenu? menu = model.menu;
+    if (menu != null) {
+      _paintMenu(canvas, size, menu, sx, sy, model.menuHover);
+    }
+  }
+
+  /// Draws the popup panel. Geometry comes from [menuPanel]/[menuZones], so the
+  /// rows painted here are the rows that take the click.
+  static void _paintMenu(ui.Canvas canvas, ui.Size size, OsdMenu menu,
+      double sx, double sy, int? hoverRow) {
+    if (menu.rows.isEmpty) {
+      return;
+    }
+    double x(double v) => v * sx;
+    double y(double v) => v * sy;
+    double font(double v) => math.max(v * sy, 12);
+
+    final ui.Rect panel = menuPanel(size, menu);
+    canvas.drawRRect(
+      ui.RRect.fromRectAndRadius(panel, ui.Radius.circular(x(18))),
+      ui.Paint()..color = const ui.Color(0xF205060C),
+    );
+    canvas.drawLine(
+      ui.Offset(panel.left + x(24), panel.top + y(46)),
+      ui.Offset(panel.right - x(24), panel.top + y(46)),
+      ui.Paint()
+        ..color = const ui.Color(0x1EFFFFFF)
+        ..strokeWidth = math.max(sy, 1),
+    );
+    _text(canvas, menu.title, ui.Offset(panel.left + x(28), panel.top + y(16)),
+        font(22), color: const ui.Color(0xFF8C8C8C), weight: ui.FontWeight.w600);
+
+    int count = 0;
+    for (final OsdMenuRow row in menu.rows) {
+      if (!row.isHeader) {
+        count++;
+      }
+    }
+    final ui.Paragraph marker = _paragraph(
+        '$count  项', font(18), ui.FontWeight.w400, const ui.Color(0xFF8C8C8C));
+    canvas.drawParagraph(
+      marker,
+      ui.Offset(
+          panel.right - x(28) - marker.maxIntrinsicWidth, panel.top + y(18)),
+    );
+
+    final (int first, int last) = menuWindow(menu);
+    double rowTop = panel.top + y(62);
+    for (int i = first; i <= last; i++) {
+      final OsdMenuRow row = menu.rows[i];
+      final double h = y(row.isHeader ? menuHeaderH : menuRowH);
+      if (row.isHeader) {
+        _text(canvas, row.label, ui.Offset(panel.left + x(28), rowTop + y(10)),
+            font(17),
+            color: const ui.Color(0xFF8C8C8C), weight: ui.FontWeight.w600);
+        rowTop += h;
+        continue;
+      }
+      final bool selected = i == menu.selected;
+      if (selected) {
+        // Same language as the Lua panel: a washed accent plate plus a spine,
+        // never a solid white bar (that was the jarring part).
+        final ui.RRect plate = ui.RRect.fromRectAndRadius(
+          ui.Rect.fromLTWH(
+              panel.left + x(12), rowTop + y(4), panel.width - x(24), h - y(8)),
+          ui.Radius.circular(x(12)),
+        );
+        canvas.drawRRect(
+          plate,
+          ui.Paint()..color = OsdBadge.hdrGold.withValues(alpha: 0.18),
+        );
+        canvas.drawRRect(
+          plate,
+          ui.Paint()
+            ..style = ui.PaintingStyle.stroke
+            ..strokeWidth = math.max(sx, 1)
+            ..color = OsdBadge.hdrGold.withValues(alpha: 0.55),
+        );
+        canvas.drawRect(
+          ui.Rect.fromLTWH(
+              panel.left + x(12), rowTop + y(10), x(3.5), h - y(20)),
+          ui.Paint()..color = OsdBadge.hdrGold.withValues(alpha: 0.9),
+        );
+      } else if (i == hoverRow) {
+        canvas.drawRRect(
+          ui.RRect.fromRectAndRadius(
+            ui.Rect.fromLTWH(panel.left + x(12), rowTop + y(4),
+                panel.width - x(24), h - y(8)),
+            ui.Radius.circular(x(12)),
+          ),
+          ui.Paint()..color = const ui.Color(0x14FFFFFF),
+        );
+      }
+      double tx = panel.left + x(28);
+      if (row.active && !selected) {
+        canvas.drawCircle(
+          ui.Offset(panel.left + x(27), rowTop + h / 2),
+          math.max(sy * 3, 2.5),
+          ui.Paint()..color = const ui.Color(0xFFFFFFFF),
+        );
+        tx = panel.left + x(42);
+      }
+      _text(canvas, _clip(row.label, 24), ui.Offset(tx, rowTop + (h - font(22)) / 2),
+          font(22), color: const ui.Color(0xFFF2F4F8));
+      if (row.value.isNotEmpty) {
+        final ui.Paragraph value = _paragraph(
+          row.value,
+          font(20),
+          ui.FontWeight.w400,
+          selected ? const ui.Color(0xFFBEBEBE) : const ui.Color(0xFF8C8C8C),
+        );
+        canvas.drawParagraph(
+          value,
+          ui.Offset(
+            panel.right - x(28) - value.maxIntrinsicWidth,
+            rowTop + (h - font(20)) / 2,
+          ),
+        );
+      }
+      rowTop += h;
+    }
   }
 
   static void _seekLine(
@@ -329,6 +599,7 @@ abstract final class OsdChrome {
     required bool hover,
     required double radius,
     double buffered = 0,
+    List<double> marks = const <double>[],
   }) {
     final double height = track.height / 2;
     canvas.drawRRect(
@@ -359,6 +630,21 @@ abstract final class OsdChrome {
       ui.RRect.fromRectAndRadius(fill, ui.Radius.circular(height)),
       ui.Paint()..color = accent,
     );
+    // Chapter marks sit on top of the fill: they are boundaries, not progress,
+    // so they must stay readable whatever has been played.
+    for (final double mark in marks) {
+      if (mark <= 0.001 || mark >= 0.999) {
+        continue;
+      }
+      final double cx = track.left + track.width * mark;
+      canvas.drawLine(
+        ui.Offset(cx, track.top - 3),
+        ui.Offset(cx, track.bottom + 3),
+        ui.Paint()
+          ..color = const ui.Color(0xE6FFFFFF)
+          ..strokeWidth = math.max(track.height * 0.26, 1),
+      );
+    }
     canvas.drawCircle(
       ui.Offset(track.left + track.width * progress, track.center.dy),
       hover ? radius * 1.6 : radius,
@@ -600,6 +886,12 @@ abstract final class OsdChrome {
     canvas.drawParagraph(paragraph, at);
   }
 
+  /// Truncates a chapter title so a long scraped name cannot push the time out
+  /// of the bubble.
+  static String _clip(String text, int max) {
+    return text.length <= max ? text : '${text.substring(0, max)}…';
+  }
+
   static String _clock(double seconds) {
     final int total = seconds < 0 ? 0 : seconds.floor();
     final int h = total ~/ 3600;
@@ -628,6 +920,9 @@ class OsdChromeModel {
     this.toast,
     this.volumeHint,
     this.buffered = 0,
+    this.chapters = const <OsdChapter>[],
+    this.menu,
+    this.menuHover,
   });
 
   final String title;
@@ -648,6 +943,33 @@ class OsdChromeModel {
   /// Seconds already demuxed, drawn as a lighter lead-in on the seek line.
   /// Zero means "unknown or local file" and draws nothing.
   final double buffered;
+
+  /// Chapter marks from `chapter-list`, in file order.
+  final List<OsdChapter> chapters;
+
+  /// The popup menu currently open, or null. Owned by Lua, drawn here.
+  final OsdMenu? menu;
+
+  /// Row under the pointer, 0-based. Purely local hover feedback: it must not
+  /// move Lua's selection, or a mouse drifting across the panel would re-run
+  /// the arrow-key logic.
+  final int? menuHover;
+
+  /// The chapter a position falls in, or null before the first mark.
+  ///
+  /// A file often opens a little before chapter 1, so "no chapter yet" is a
+  /// real answer and must not borrow the first title.
+  OsdChapter? chapterAt(double seconds) {
+    OsdChapter? found;
+    for (final OsdChapter chapter in chapters) {
+      if (chapter.time <= seconds) {
+        found = chapter;
+      } else {
+        break;
+      }
+    }
+    return found;
+  }
 
   /// Which labels carry an accent and a truthfulness tier. Labels absent from
   /// this map fall back to a neutral `fact` badge, so callers that only supply

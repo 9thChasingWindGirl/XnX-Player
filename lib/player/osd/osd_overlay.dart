@@ -186,7 +186,9 @@ class OsdOverlay {
     _idleTimer?.cancel();
     _idleTimer = Timer(const Duration(seconds: 3), () {
       // A pause pressed inside the window keeps the chrome up.
-      if (!_player.state.value.paused) {
+      // An open menu holds it too: the panel lives on this layer and would
+      // disappear with it.
+      if (!_player.state.value.paused && _menu == null) {
         setVisible(false);
       }
     });
@@ -223,6 +225,11 @@ class OsdOverlay {
           _schedulePaint();
         }
       }
+      // Chapters can land after file-loaded on a network source, so the poll
+      // is also the place that notices them arriving.
+      if (_loadChapters() && _visible) {
+        _schedulePaint();
+      }
     });
   }
 
@@ -234,6 +241,15 @@ class OsdOverlay {
   bool inChromeZone(double nx, double ny) {
     if (!_visible || !ownsChrome || _size.isEmpty) {
       return false;
+    }
+    // The menu panel reaches well above the transport band, so it has to claim
+    // its own rectangle; `ny > 0.70` alone would let presses on its upper rows
+    // fall through to mpv.
+    final OsdMenu? menu = _menu;
+    if (menu != null &&
+        OsdChrome.menuPanel(_size, menu)
+            .contains(ui.Offset(nx * _size.width, ny * _size.height))) {
+      return true;
     }
     // The chrome occupies the bottom ~35 % of the stage in design units.
     return ny > 0.70;
@@ -358,6 +374,9 @@ class OsdOverlay {
           ? (state.muted ? 0.0 : (state.volume / 100).clamp(0.0, 1.0).toDouble())
           : null,
       buffered: _buffered,
+      chapters: _chapters,
+      menu: _menu,
+      menuHover: _menuHover,
     );
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();
@@ -478,7 +497,45 @@ class OsdOverlay {
 
     _formatBadges = List<String>.unmodifiable(badges);
     _badgeStyles = Map<String, OsdBadge>.unmodifiable(styles);
+    // A new file invalidates the chapter count we cached; forcing a reload here
+    // is what keeps chapter marks from the previous file off the new bar.
+    _chapterCount = -1;
+    _loadChapters();
     _schedulePaint();
+  }
+
+  List<OsdChapter> _chapters = const <OsdChapter>[];
+  int _chapterCount = -1;
+
+  /// Reads `chapter-list` through its indexed path.
+  ///
+  /// The property is an mpv array, which `get_property_string` cannot hand
+  /// back; `chapter-list/count` plus `chapter-list/N/{time,title}` is the
+  /// shape every build supports. Cheap enough to sit behind a count check.
+  bool _loadChapters() {
+    final int count =
+        int.tryParse((_player.getProperty('chapter-list/count') ?? '').trim()) ?? 0;
+    if (count == _chapterCount) {
+      return false;
+    }
+    _chapterCount = count;
+    if (count <= 0 || count > 300) {
+      _chapters = const <OsdChapter>[];
+      return true;
+    }
+    final List<OsdChapter> out = <OsdChapter>[];
+    for (int i = 0; i < count; i++) {
+      final double time =
+          double.tryParse((_player.getProperty('chapter-list/$i/time') ?? '').trim()) ?? -1;
+      if (time < 0) {
+        continue;
+      }
+      final String title = (_player.getProperty('chapter-list/$i/title') ?? '').trim();
+      out.add(OsdChapter(time, title.isEmpty ? '章节 ${i + 1}' : title));
+    }
+    out.sort((OsdChapter a, OsdChapter b) => a.time.compareTo(b.time));
+    _chapters = out;
+    return true;
   }
 
   /// Mirrors the Lua stage's audio badge naming, including channel suffix.
@@ -521,16 +578,155 @@ class OsdOverlay {
   // in player_page.dart asks these three questions before handing a pointer
   // event to the Lua side, so a press on the seek bar never reaches mpv.
 
+  /// The popup menu Lua is showing, mirrored for drawing only.
+  ///
+  /// Lua owns this state: it pushes a new model on every change and applies
+  /// every command sent back, because a row's action is a closure that cannot
+  /// cross the process boundary.
+  OsdMenu? _menu;
+
+  /// Receives the menu model from the Lua stage.
+  void setMenu(Map<Object?, Object?> payload) {
+    if (payload['open'] != true) {
+      if (_menu != null) {
+        _menu = null;
+        _menuHover = null;
+        _armIdleTimer();
+        _schedulePaint();
+      }
+      return;
+    }
+    final Object? rawRows = payload['rows'];
+    final List<Object?> list = rawRows is List ? rawRows : const <Object?>[];
+    final List<OsdMenuRow> rows = <OsdMenuRow>[];
+    for (final Object? entry in list) {
+      if (entry is! Map) {
+        continue;
+      }
+      rows.add(OsdMenuRow(
+        kind: entry['kind'] as String? ?? 'item',
+        label: entry['label'] as String? ?? '',
+        value: entry['value'] as String? ?? '',
+        active: entry['active'] == true,
+      ));
+    }
+    final int luaIndex = (payload['index'] as num?)?.toInt() ?? 1;
+    _menu = OsdMenu(
+      title: payload['title'] as String? ?? '',
+      index: luaIndex - 1,
+      rows: rows,
+    );
+    // A new model invalidates whatever row the pointer used to be over.
+    _menuHover = null;
+    // The panel lives on this layer, so opening a menu has to bring the layer
+    // up even if the transport had already auto-hidden.
+    poke();
+    _schedulePaint();
+  }
+
+  bool get hasMenu => _menu != null;
+
+  /// Whether a pointer lands on the menu panel itself (not just the band).
+  bool inMenuZone(double nx, double ny) {
+    final OsdMenu? menu = _menu;
+    if (menu == null || _size.isEmpty) {
+      return false;
+    }
+    return OsdChrome.menuPanel(_size, menu)
+        .contains(ui.Offset(nx * _size.width, ny * _size.height));
+  }
+
+  /// Moves the selection by [delta], skipping headers.
+  ///
+  /// Asks Lua to move rather than moving a local copy: the index it acknowledges
+  /// comes back in the next model, so the panel can never disagree with what the
+  /// arrow keys would do.
+  void menuStep(int delta) {
+    final OsdMenu? menu = _menu;
+    if (menu == null) {
+      return;
+    }
+    int next = menu.selected;
+    for (int i = 0; i < menu.rows.length; i++) {
+      next += delta;
+      if (next < 0 || next >= menu.rows.length) {
+        return;
+      }
+      if (!menu.rows[next].isHeader) {
+        menuMove(next);
+        return;
+      }
+    }
+  }
+
+  /// Row under the pointer, for hover feedback only.
+  int? _menuHover;
+
+  /// Tracks which menu row the pointer is over. Deliberately does not touch
+  /// Lua's selection: drifting the mouse must not behave like arrow keys.
+  void updateMenuHover(double nx, double ny) {
+    final OsdMenu? menu = _menu;
+    int? hover;
+    if (menu != null && !_size.isEmpty) {
+      final ui.Offset point = ui.Offset(nx * _size.width, ny * _size.height);
+      for (final OsdZone zone in OsdChrome.menuZones(_size, menu)) {
+        if (zone.rect.contains(point)) {
+          hover = int.tryParse(zone.id.substring('menurow:'.length));
+          break;
+        }
+      }
+    }
+    if (hover != _menuHover) {
+      _menuHover = hover;
+      _schedulePaint();
+    }
+  }
+
+  /// Forwards a row click to Lua, which knows what the row means.
+  void menuChoose(int index) {
+    _player.sendScriptMessage(<String, Object?>{
+      'cmd': 'menu-op',
+      'op': 'choose',
+      'index': index + 1,
+    });
+  }
+
+  /// Moves the selection without activating it (hover / wheel).
+  void menuMove(int index) {
+    _player.sendScriptMessage(<String, Object?>{
+      'cmd': 'menu-op',
+      'op': 'move',
+      'index': index + 1,
+    });
+  }
+
+  /// Nudges an `adjust` row left or right.
+  void menuAdjust(int direction) {
+    _player.sendScriptMessage(<String, Object?>{
+      'cmd': 'menu-op',
+      'op': 'adjust',
+      'direction': direction,
+    });
+  }
+
+  void menuClose() {
+    _player.sendScriptMessage(<String, Object?>{
+      'cmd': 'menu-op',
+      'op': 'close',
+    });
+  }
+
   /// The chrome control under a normalized pointer position, or null.
   ///
-  /// `seek`, `play`, `back10`, `fwd10` or `menu:<id>`. The rectangles come from
-  /// the same list the paint pass uses, so a drawn button is a working button.
+  /// `seek`, `play`, `back10`, `fwd10`, `menu:<id>` or `menurow:<index>`. The
+  /// rectangles come from the same list the paint pass uses, so a drawn button
+  /// is a working button.
   String? actionAt(double nx, double ny) {
     if (!_visible || !ownsChrome || _size.isEmpty) {
       return null;
     }
     final ui.Offset point = ui.Offset(nx * _size.width, ny * _size.height);
-    for (final OsdZone zone in OsdChrome.zones(_size)) {
+    for (final OsdZone zone in OsdChrome.zones(_size, menu: _menu)) {
       if (zone.rect.contains(point)) {
         return zone.id;
       }
