@@ -7,9 +7,10 @@
 # 手动触发不会产出 dev：手动走 promote.yml，target=beta 产出 beta
 # （便携版 zip + 安装包），target=stable 产出正式版。
 #
-# 基版本来源：仓库变量 XNX_VERSION > VERSION 文件
+# 基版本唯一来源：VERSION 文件（仓库变量 XNX_VERSION 已停用，避免晋升后陈旧）
 # 每次 commit 自动把 ZZ+1（自 VERSION 最后一次变更起数 commit），
 # 只作用于 dev。beta/stable 晋升时原样继承 dev 的版本号，不再加一。
+# 构建成功后把实际版本写回 beta:VERSION.latest（[skip ci]），供晋升时交叉核对。
 #
 # 后续晋升：
 #   promote.yml  target=beta  -> 取最新 dev 产物，改名为 X.YY.ZZ.Beta，发 Release
@@ -22,7 +23,7 @@ on:
     branches: [beta]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: dev-${{ github.ref }}
@@ -35,10 +36,8 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
     permissions:
-      contents: read
+      contents: write
       actions: write
-    env:
-      XNX_VERSION: ${{ vars.XNX_VERSION }}
 
     steps:
       - uses: actions/checkout@v4
@@ -73,8 +72,14 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $base = $env:XNX_VERSION
-          if (-not $base) { $base = (Get-Content VERSION -Raw).Trim() }
+          # VERSION is the only source of truth. A repo variable (XNX_VERSION)
+          # used to take priority here, but it is invisible to the repo and
+          # goes stale after every promotion — the reason a later build could
+          # pick up an old number. VERSION holds the plain base X.YY.ZZ.
+          $base = (Get-Content VERSION -Raw).Trim()
+          if ($base -notmatch '^\d+\.\d{2}\.\d{2}$') {
+            throw "VERSION must be X.YY.ZZ (two-digit minor/hotfix); got: $base"
+          }
           # 自动 hotfix：锚定 VERSION 最后一次变更，数它之后有多少 commit。
           # 设置 VERSION 的那次提交是 +0，之后每次提交 +1，只给 dev 用。
           $anchor = (git log -1 --format=%H -- VERSION).Trim()
@@ -134,6 +139,36 @@ jobs:
           path: ${{ env.REL_DIR }}
           if-no-files-found: error
           retention-days: 30
+
+      # Record the version this run actually produced back in the repository.
+      # The build artifact already carries it in its name and version.txt, but
+      # nothing on the repo side did — so the next build had to re-derive the
+      # number, and a stale XNX_VERSION variable could silently win. Writing a
+      # dedicated record keeps the commit-count anchor in VERSION untouched
+      # (rewriting VERSION itself would reset the count and go backwards) while
+      # giving every channel a persisted, readable "what did dev ship last".
+      - name: Persist dev version to repository
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "$env:RESOLVED_VERSION"
+          if (-not $version) { throw 'RESOLVED_VERSION is empty; refusing to write' }
+          $current = ''
+          if (Test-Path VERSION.latest) { $current = (Get-Content VERSION.latest -Raw).Trim() }
+          if ($current -eq $version) {
+            Write-Host "VERSION.latest already $version; nothing to commit"
+            exit 0
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE 'VERSION.latest'), "$version`n", (New-Object System.Text.UTF8Encoding($false)))
+          git add VERSION.latest
+          # [skip ci] prevents this bookkeeping commit from triggering another
+          # dev build; push targets the branch that started this run.
+          git commit -m "chore(version): record dev $version [skip ci]"
+          $branch = "${{ github.ref_name }}"
+          git push origin "HEAD:$branch"
 
       - name: Clean old dev artifacts
         if: success()

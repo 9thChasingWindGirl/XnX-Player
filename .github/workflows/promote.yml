@@ -147,6 +147,29 @@ jobs:
           "BASE_VERSION=$base" >> $env:GITHUB_ENV
           "RELEASE_VERSION=$release" >> $env:GITHUB_ENV
 
+      # dev builds record the last shipped version in beta:VERSION.latest.
+      # Surface a mismatch against the version we just resolved so a stale
+      # artifact or a skipped recording is visible instead of silent. This is
+      # advisory only: promoting an older version on purpose stays legal.
+      - name: Cross-check recorded dev version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $recorded = ''
+          git fetch --quiet origin beta 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $raw = (git show origin/beta:VERSION.latest 2>$null)
+            if ($raw) { $recorded = ($raw -split "`n")[0].Trim() -replace '\.Dev$', '' }
+          }
+          $chosen = $env:BASE_VERSION
+          if ($recorded -and $recorded -ne $chosen) {
+            Write-Host "::warning::VERSION.latest on beta is $recorded but promotion resolved $chosen"
+          } elseif (-not $recorded) {
+            Write-Host "::notice::No VERSION.latest record on beta; relying on artifact/tag version $chosen"
+          } else {
+            Write-Host "Version check OK: $chosen matches beta:VERSION.latest"
+          }
+
       - name: Install Inno Setup
         shell: pwsh
         run: |

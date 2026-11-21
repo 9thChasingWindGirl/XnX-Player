@@ -58,12 +58,18 @@ dev 的 `0.00.02.Dev` 晋升后就是 `0.00.02.Beta`，再晋升就是 `0.00.02`
 
 ## 快速改基版本
 
-dev 构建只由 push 触发，基版本来源优先级从高到低：
+dev 构建只由 push 触发，**基版本唯一来源是仓库根目录的 `VERSION` 文件**。
 
-1. 仓库变量 `XNX_VERSION`（Settings → Variables）
-2. `VERSION` 文件
+早期版本支持用仓库变量 `XNX_VERSION` 覆盖，但它对仓库不可见、晋升后需要手动同步，
+一旦忘记就会让后续构建一直沿用旧版本号。该变量已移除：CI 只读 `VERSION`，避免
+"构建拿到了版本号却没落到仓库、下次又算回旧值"的问题。
 
-日常迭代**不需要** bump：提交本身就会让 dev 的 ZZ 加一。只有在要开新的迭代线时才手动改基版本：
+日常迭代**不需要** bump：提交本身就会让 dev 的 ZZ 加一。每次 dev 构建还会把实际
+产出的版本号写回 beta 分支的 `VERSION.latest`（提交带 `[skip ci]`，不会触发新构建），
+作为"最近一次 dev 发布了什么"的仓库内记录；promote 晋升时会与它交叉核对并提示不一致。
+注意 `VERSION` 本身不会被 CI 改写——它是 commit 计数的锚点，改写会让计数归零、版本回退。
+
+只有在要开新的迭代线时才手动改基版本：
 
 ```bash
 dart run tool/version.dart bump minor   # 0.00.03 -> 0.01.00
@@ -80,15 +86,10 @@ powershell -ExecutionPolicy Bypass -File tool/bump-version.ps1 -Part minor
 
 两者都会更新 `VERSION` 与 `pubspec.yaml` 的 `version:`（自动补足两位）。提交并 push 到 **beta 分支**后，dev 构建从新的基版本重新计数（这次提交是 `0.02.00.Dev`）。PowerShell 脚本加 `-Push` 可直接提交并推送。
 
-### 仓库变量
+### 仓库变量（已停用）
 
-在 **Settings → Secrets and variables → Actions → Variables** 添加：
-
-```text
-XNX_VERSION = 0.02.00
-```
-
-之后所有 dev 构建都以它为基版本，不需要改文件。发布完成后记得同步或删除它，否则下一次 push 仍会沿用旧版本号。
+`XNX_VERSION` 仓库变量已停用；若 Settings → Variables 里还留着它，删掉即可，CI 不再读取。
+基版本只认 `VERSION` 文件，最近一次 dev 版本记录在 beta 分支的 `VERSION.latest`。
 
 ### 从提交推导
 
