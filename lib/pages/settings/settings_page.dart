@@ -1118,7 +1118,7 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
                 _UpdateNote('将用本机保留的 ${widget.version} 覆盖程序文件。'
                     '用户配置与数据目录不受影响。')
               else if (widget.installed)
-                _UpdateNote('将通过安装程序更新：程序关闭后由向导接管，'
+                const _UpdateNote('将通过安装程序更新：程序关闭后由向导接管，'
                     '完成安装后自动重新启动。当前数据目录会被沿用。')
               else if (_useInstaller)
                 _UpdateNote('将通过安装程序更新，并把便携版升级为安装版：'
