@@ -51,6 +51,18 @@ class MediaPageState extends State<MediaPage> {
     setState(() => _dialogOpen = true);
   }
 
+  /// Opens the grid filtered to one genre. The home screen's category chips
+  /// land here, so "动作" means the same thing from either page.
+  void openGenre(String? genre) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _genre = genre;
+      _filter = null;
+    });
+  }
+
   @override
   void initState() {
     super.initState();

@@ -79,6 +79,7 @@ class MediaItem {
     this.studio,
     this.officialRating,
     this.tech,
+    this.seriesStatus,
   });
 
   final String id;
@@ -144,6 +145,10 @@ class MediaItem {
   /// honestly (a local file knows "2160p" from its name but nothing about the
   /// bit depth).
   final String? tech;
+
+  /// A server's own series state: `Continuing`, `Ended`, ... (Emby/Jellyfin).
+  /// The home screen uses it for "正在播出"; it is null for movies and files.
+  final String? seriesStatus;
 
   /// Cast with a role, which is what a detail page shows first.
   List<MediaPerson> get cast =>
@@ -248,6 +253,7 @@ class MediaItem {
     String? studio,
     String? officialRating,
     String? tech,
+    String? seriesStatus,
     Artwork? artwork,
   }) {
     return MediaItem(
@@ -279,6 +285,7 @@ class MediaItem {
       studio: studio ?? this.studio,
       officialRating: officialRating ?? this.officialRating,
       tech: tech ?? this.tech,
+      seriesStatus: seriesStatus ?? this.seriesStatus,
     );
   }
 }

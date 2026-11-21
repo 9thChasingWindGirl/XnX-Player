@@ -484,6 +484,17 @@ class _ShellPageState extends State<ShellPage> {
     _restoreMark(_searchMark);
   }
 
+  /// Category chips on the home screen: switch to the library, then apply the
+  /// genre after the tab has laid out (the page may not exist yet on first use).
+  void _openLibraryGenre(String? genre) {
+    _selectTab(1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _libraryKey.currentState?.openGenre(genre);
+      }
+    });
+  }
+
   void _addSource() {
     setState(() {
       _tab = 1;
@@ -609,6 +620,7 @@ class _ShellPageState extends State<ShellPage> {
       onOpenFile: _openFile,
       onAddSource: _addSource,
       onOpenLibrary: () => _selectTab(1),
+      onOpenGenre: _openLibraryGenre,
       heroItem: _hero,
     );
   }

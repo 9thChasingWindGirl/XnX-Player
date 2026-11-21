@@ -61,6 +61,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   Timer? _escFallback;
   Timer? _health;
 
+  /// Completed by the Lua `chrome` reply once the hand-off is real.
+  void Function(bool accepted)? _chromeReply;
+
   /// Debounces the post-resize OSD rebuild. Dragging a window edge produces a
   /// metrics event per frame; re-laying the overlay once the size has settled
   /// is what keeps the chrome and the hit boxes on the same scale.
@@ -364,8 +367,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         ..onFullscreen = _toggleFullScreen
         // Lua answered, so the optimistic Esc handling is not needed. A block
         // body is required: `?.` on a void member cannot be used as a value.
-        ..onEvent = (Map<Object?, Object?> _) {
+        ..onEvent = (Map<Object?, Object?> payload) {
           _escFallback?.cancel();
+          if (payload['type'] == 'chrome') {
+            _chromeReply?.call(payload['mode'] == 'window');
+          }
         }
         ..attach();
 
@@ -376,21 +382,59 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       final OsdOverlay? osd = OsdOverlay.create(player);
       if (osd != null) {
         _osd = osd;
-        player.setProperty('user-data/player/osd-engine', 'window');
-        // setProperty swallows the mpv error code, and a build without
-        // writable user-data would silently keep the Lua chrome — which is
-        // the one thing HDR passthrough can still darken. Verify the
-        // round-trip, tell the overlay which engine really owns the band, and
-        // say so, instead of leaving the handoff assumed.
-        final bool ownsChrome =
-            player.getProperty('user-data/player/osd-engine') == 'window';
-        osd.bindHandoff(ownsChrome);
-        if (!ownsChrome) {
-          _scriptNote = '$_scriptNote · chrome 交接失败（独立 OSD 层未接管，HDR 会影响 OSD）';
-          AppLog.warn('独立 OSD 层未接管底部控制条（osd-engine 未生效）');
-        } else {
-          AppLog.info('独立 OSD 层已接管底部控制条');
+        // Ask the Lua script directly instead of writing a `user-data` key: a
+        // property round-trip is silent on failure and the nested key name is
+        // not accepted by every mpv build. The reply is the proof that the
+        // hand-off is real, so Dart starts painting only after it arrives.
+        final Completer<bool> handoff = Completer<bool>();
+        _chromeReply = (bool accepted) {
+          if (!handoff.isCompleted) {
+            handoff.complete(accepted);
+          }
+        };
+        // The Lua script is loaded asynchronously; a message sent before it
+        // registers is dropped. Re-ask a few times instead of assuming the
+        // first packet won the race.
+        int tries = 0;
+        void ask() {
+          if (handoff.isCompleted || tries >= 6) {
+            return;
+          }
+          tries++;
+          player.sendScriptMessage(<String, Object?>{'cmd': 'chrome', 'mode': 'window'});
         }
+
+        ask();
+        final Timer retry =
+            Timer.periodic(const Duration(milliseconds: 250), (Timer timer) {
+          if (handoff.isCompleted || tries >= 6 || !mounted) {
+            timer.cancel();
+            return;
+          }
+          ask();
+        });
+        unawaited(
+          handoff.future
+              .timeout(const Duration(milliseconds: 1800), onTimeout: () => false)
+              .then((bool accepted) {
+            retry.cancel();
+            if (!mounted) {
+              return;
+            }
+            osd.bindHandoff(accepted);
+            if (accepted) {
+              AppLog.info('独立 SDR OSD 层已接管底部控制条');
+              if (_fileLoaded) {
+                // The reply can land after file-loaded; the earlier poke was
+                // ignored because ownership was not known yet.
+                osd.poke();
+              }
+            } else {
+              _scriptNote = '$_scriptNote · chrome 交接失败（Lua 未响应，HDR 会影响 OSD）';
+              AppLog.warn('独立 OSD 层未接管底部控制条（Lua chrome 命令无响应）');
+            }
+          }),
+        );
       } else {
         _scriptNote = '$_scriptNote · 独立 OSD 层创建失败（Lua chrome 继续绘制）';
         AppLog.warn('独立 OSD 层创建失败，继续使用 Lua chrome');
@@ -405,7 +449,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         // window would just cover the loading state with black.
         _surface?.show();
         _osd
-          ?..poke()
+          ?..refreshFormat()
+          ..poke()
           ..startSizeWatch();
         _startHealthWatch();
         _probeCapabilities();
@@ -995,16 +1040,38 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
     InputRouter.instance.notePointer();
     final OsdOverlay? osd = _osd;
-    if (osd != null && (osd.scrubbing || osd.inSeekZone(unit.dx, unit.dy))) {
+    final String? action = osd?.actionAt(unit.dx, unit.dy);
+    if (osd != null && (osd.scrubbing || action != null)) {
       // The chrome owns this press: scrub locally, seek once on release, and
       // never let the Lua side act on a pointer the bar has already claimed.
       // `scrubbing` is checked first so a release outside the strip still
       // finishes the drag instead of falling through as a stray click.
       if (down) {
-        osd
-          ..poke()
-          ..scrub(osd.seekFraction(unit.dx));
-      } else {
+        osd.poke();
+        switch (action) {
+          case 'seek':
+            osd.scrub(osd.seekFraction(unit.dx));
+            break;
+          case 'play':
+            player.togglePause();
+            break;
+          case 'back10':
+            player.seekBy(-10);
+            break;
+          case 'fwd10':
+            player.seekBy(10);
+            break;
+          default:
+            if (action != null && action.startsWith('menu:')) {
+              // Menus stay in the Lua stage; the SDR chrome only opens them.
+              player.sendScriptMessage(<String, Object?>{
+                'cmd': 'menu',
+                'id': action.substring(5),
+              });
+            }
+            break;
+        }
+      } else if (osd.scrubbing) {
         osd.endScrub();
       }
       _pendingMouse = null;

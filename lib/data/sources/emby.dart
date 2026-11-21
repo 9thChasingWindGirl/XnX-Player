@@ -144,7 +144,7 @@ class EmbySource extends MediaSource {
   static const String _fields =
       'Overview,RunTimeTicks,ProductionYear,CommunityRating,ImageTags,Genres,'
       'BackdropImageTags,UserData,SeriesName,IndexNumber,ParentIndexNumber,'
-      'PrimaryImageAspectRatio,'
+      'PrimaryImageAspectRatio,Status,'
       // Inheritance: an episode carries only a still, and names its series as
       // the owner of the logo, art and backdrop. Asking for these fields is
       // what makes a hub look finished instead of empty.
@@ -406,6 +406,7 @@ class EmbySource extends MediaSource {
       year: year,
       rating: rating,
       playable: kind != MediaKind.series && kind != MediaKind.season,
+      seriesStatus: json['Status'] as String?,
       headers: <String, String>{'X-Emby-Token': _tokenValue},
     );
   }

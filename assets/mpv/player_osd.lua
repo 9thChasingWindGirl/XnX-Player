@@ -307,6 +307,10 @@ local state = {
   -- is live. The chrome gets a heavier outline and a denser scrim, because an
   -- SDR overlay in a PQ swapchain otherwise reads as grey. See [set_output_space].
   hdr = false,
+  -- True when the host's independent SDR window owns the bottom band. Set by
+  -- the `chrome` IPC command; the property path is kept only as a fallback for
+  -- older hosts.
+  chrome_window = false,
   has_video = true,
   ui_scale = 1,
 }
@@ -1855,7 +1859,8 @@ function render()
   -- Audio-only files keep the full Lua stage: there is no picture to protect,
   -- and the audio stage carries its own controls.
   local dart_chrome = not state.audio_mode
-    and mp.get_property('user-data/player/osd-engine') == 'window'
+    and (state.chrome_window
+      or mp.get_property('user-data/player/osd-engine') == 'window')
 
   if state.audio_mode then
     -- No video: paint our own stage, but keep the transport bar usable.
@@ -2496,6 +2501,17 @@ mp.register_script_message('player-cmd', function(json)
   elseif cmd == 'hide' then
     state.visible = false
     render()
+  elseif cmd == 'chrome' then
+    -- The host asks who draws the bottom band. Answering is what lets Dart
+    -- start painting only after the hand-off is real; a swallowed message
+    -- would otherwise leave two engines believing they own it.
+    state.chrome_window = payload.mode == 'window'
+    mark_dirty()
+    render()
+    mp.commandv('script-message', 'player-event', utils.format_json({
+      type = 'chrome',
+      mode = state.chrome_window and 'window' or 'lua',
+    }))
   elseif cmd == 'redraw' then
     -- Window resized: rebuild the overlay for the new OSD frame without
     -- touching visibility. The hit boxes live in design space, so this is
@@ -2676,9 +2692,11 @@ end)
 
 -- The Dart side flips this to 'window' when the independent OSD layer takes
 -- over the bottom chrome, and back to 'mpv' when that layer is unavailable.
-mp.observe_property('user-data/player/osd-engine', 'string', function()
+mp.observe_property('user-data/player/osd-engine', 'string', function(_, value)
+  state.chrome_window = value == 'window'
   refresh_menu()
   mark_dirty()
+  render()
 end)
 
 mp.observe_property('sid', 'string', function()

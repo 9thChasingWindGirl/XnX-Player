@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/strings.dart';
@@ -26,6 +28,7 @@ class HomePage extends StatefulWidget {
     required this.onOpenFile,
     required this.onAddSource,
     required this.onOpenLibrary,
+    required this.onOpenGenre,
     required this.heroItem,
   });
 
@@ -34,6 +37,9 @@ class HomePage extends StatefulWidget {
   final VoidCallback onOpenFile;
   final VoidCallback onAddSource;
   final VoidCallback onOpenLibrary;
+
+  /// Opens the library with a genre chip applied.
+  final ValueChanged<String?> onOpenGenre;
 
   /// Lets the shell tint its backdrop with the featured cover's palette.
   final ValueNotifier<MediaItem?> heroItem;
@@ -79,10 +85,17 @@ class _HomePageState extends State<HomePage> {
   int _activeRow = -1;
   String? _publishedId;
 
+  /// The banner's carousel. It rotates on its own and the hero's arrows step
+  /// it; the previous build lost this when the hero became a single still.
+  List<MediaItem> _heroItems = <MediaItem>[];
+  int _heroIndex = 0;
+  Timer? _heroTimer;
+
   @override
   void initState() {
     super.initState();
     _rows = _computeRows();
+    _syncHero();
     AppStore.instance.addListener(_onStore);
     _sourceFilter.addListener(_onFilter);
     _publishFeatured();
@@ -90,6 +103,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _heroTimer?.cancel();
     AppStore.instance.removeListener(_onStore);
     _sourceFilter.removeListener(_onFilter);
     super.dispose();
@@ -99,7 +113,10 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) {
       return;
     }
-    setState(() => _rows = _computeRows());
+    setState(() {
+      _rows = _computeRows();
+      _syncHero();
+    });
     _publishFeatured();
   }
 
@@ -107,9 +124,68 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) {
       return;
     }
-    setState(() => _rows = _computeRows());
+    setState(() {
+      _rows = _computeRows();
+      _syncHero();
+    });
     _publishFeatured();
   }
+
+  /// Builds the carousel from what is actually resumable/new, then starts the
+  /// rotation. Called only for an index reset; the periodic timer handles the
+  /// rest.
+  void _syncHero() {
+    final AppStore store = AppStore.instance;
+    final List<MediaItem> next = <MediaItem>[];
+    final Set<String> seen = <String>{};
+    for (final MediaItem item in <MediaItem>[
+      ...store.continueWatching,
+      ...store.recent.reversed,
+    ]) {
+      if (seen.add(item.id)) {
+        next.add(item);
+      }
+      if (next.length >= 6) {
+        break;
+      }
+    }
+    _heroItems = next;
+    if (_heroIndex >= _heroItems.length) {
+      _heroIndex = 0;
+    }
+    _restartHeroTimer();
+  }
+
+  void _restartHeroTimer() {
+    _heroTimer?.cancel();
+    _heroTimer = null;
+    if (_heroItems.length < 2 || AppStore.instance.prefs.reduceMotion) {
+      return;
+    }
+    _heroTimer = Timer.periodic(const Duration(seconds: 9), (Timer timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _heroIndex = (_heroIndex + 1) % _heroItems.length);
+      _publishFeatured();
+    });
+  }
+
+  void _stepHero(int delta) {
+    if (_heroItems.length < 2) {
+      return;
+    }
+    setState(() {
+      _heroIndex = (_heroIndex + delta + _heroItems.length) % _heroItems.length;
+    });
+    _publishFeatured();
+    _restartHeroTimer();
+  }
+
+  MediaItem? get _currentHero => _heroItems.isEmpty
+      ? null
+      : _heroItems[_heroIndex.clamp(0, _heroItems.length - 1).toInt()];
 
   /// The top row's first item is what the banner shows, the way Plex features
   /// the newest thing you can resume.
@@ -123,7 +199,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _publishFeatured() {
-    final MediaItem? item = _featured;
+    final MediaItem? item = _currentHero ?? _featured;
     if (item == null || item.id == _publishedId) {
       return;
     }
@@ -140,11 +216,15 @@ class _HomePageState extends State<HomePage> {
   /// the saved order stays valid without a migration.
   List<_Row> _computeRows() {
     final AppStore store = AppStore.instance;
+    final List<MediaItem> airing = _airing();
+    final List<MediaItem> recommended = _recommended(store);
     final List<_Row> all = <_Row>[
       if (store.continueWatching.isNotEmpty)
         _Row('continue', S.continueWatching, store.continueWatching, wide: true),
+      if (airing.isNotEmpty) _Row('airing', '正在播出', airing),
       if (store.recent.isNotEmpty)
         _Row('recent', S.recentlyAdded, store.recent.reversed.toList(growable: false)),
+      if (recommended.isNotEmpty) _Row('recommended', '关联推荐', recommended),
       if (store.items.any((MediaItem item) => item.favorite))
         _Row('favorites', S.favoritesShelf,
             store.items.where((MediaItem item) => item.favorite).toList(growable: false)),
@@ -185,6 +265,54 @@ class _HomePageState extends State<HomePage> {
         .toList(growable: false);
   }
 
+  /// Unfinished shows the server labels `Continuing`. Emby supplies the field;
+  /// a source that does not (local files) simply omits the row.
+  List<MediaItem> _airing() {
+    final List<MediaItem> out = AppStore.instance.items
+        .where((MediaItem item) =>
+            item.kind == MediaKind.series &&
+            (item.seriesStatus ?? '').toLowerCase() == 'continuing')
+        .toList();
+    out.sort((MediaItem a, MediaItem b) => (b.year ?? 0).compareTo(a.year ?? 0));
+    return out;
+  }
+
+  /// "关联推荐" without an external catalogue: titles sharing a genre with what
+  /// the user is already resuming or has just added. With no genres (a local
+  /// folder without a scraper) the row is omitted rather than faked.
+  List<MediaItem> _recommended(AppStore store) {
+    final Set<String> seed = <String>{};
+    for (final MediaItem item in <MediaItem>[
+      ...store.continueWatching,
+      ...store.recent.take(20),
+    ]) {
+      seed.addAll(item.genres);
+    }
+    if (seed.isEmpty) {
+      return const <MediaItem>[];
+    }
+    final Set<String> resuming = store.continueWatching.map((MediaItem item) => item.id).toSet();
+    final List<MediaItem> out = store.items
+        .where((MediaItem item) =>
+            item.isPlayable &&
+            item.kind != MediaKind.channel &&
+            !resuming.contains(item.id) &&
+            item.genres.any(seed.contains))
+        .take(24)
+        .toList(growable: false);
+    return out;
+  }
+
+  /// Genres present in the library, for the category quick-jump row.
+  List<String> _categories(AppStore store) {
+    final Set<String> genres = <String>{};
+    for (final MediaItem item in store.items) {
+      genres.addAll(item.genres);
+    }
+    final List<String> out = genres.toList()..sort();
+    return out.take(14).toList(growable: false);
+  }
+
   void _focusAt(int row, int column) {
     while (_columns.length < row + 1) {
       _columns.add(0);
@@ -212,7 +340,8 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    final MediaItem featured = _featured ?? _rows.first.items.first;
+    final MediaItem featured = _currentHero ?? _featured ?? _rows.first.items.first;
+    final List<String> categories = _categories(AppStore.instance);
 
     return ColoredBox(
       color: PlexColor.bg,
@@ -227,10 +356,94 @@ class _HomePageState extends State<HomePage> {
               onPlay: () => widget.onPlay(featured),
               onDetails: () => widget.onOpenItem(featured),
               onFavorite: () => AppStore.instance.toggleFavorite(featured),
+              carouselIndex: _heroItems.length > 1 ? _heroIndex : null,
+              carouselCount: _heroItems.length,
+              onPrev: _heroItems.length > 1 ? () => _stepHero(-1) : null,
+              onNext: _heroItems.length > 1 ? () => _stepHero(1) : null,
+              onPickSlide: (int index) {
+                setState(() => _heroIndex = index);
+                _publishFeatured();
+                _restartHeroTimer();
+              },
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 26),
+            if (categories.isNotEmpty) _categoryRow(categories),
             for (int i = 0; i < _rows.length; i++) _shelfRow(i),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Plex's "browse by genre" strip. It is the quickest way out of the home
+  /// screen when the user already knows what they want.
+  Widget _categoryRow(List<String> genres) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(_margin, 0, _margin, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              TvFocusable(
+                radius: 6,
+                showRing: false,
+                onSelect: widget.onOpenLibrary,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(
+                        '浏览电影和剧集',
+                        style: TextStyle(
+                          fontSize: 22,
+                          height: 1.2,
+                          fontWeight: FontWeight.w600,
+                          color: PlexColor.text,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                      Icon(Icons.chevron_right_rounded, size: 22, color: PlexColor.textDim),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: <Widget>[
+              _categoryChip('全部', null),
+              for (final String genre in genres) _categoryChip(genre, genre),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _categoryChip(String label, String? genre) {
+    return TvFocusable(
+      radius: 999,
+      onSelect: () => widget.onOpenGenre(genre),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: PlexColor.line),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 16,
+            height: 1.1,
+            fontWeight: FontWeight.w500,
+            color: PlexColor.textDim,
+          ),
         ),
       ),
     );

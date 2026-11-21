@@ -36,7 +36,7 @@ class TvFocusable extends StatefulWidget {
     this.pressScale = 1.0,
     this.highlightAlignment = Alignment.center,
     this.radius = PsRadius.card,
-    this.focusedRadius = PsRadius.card,
+    this.focusedRadius,
     this.accent,
     this.reportHighlight = true,
     this.showRing = false,
@@ -79,11 +79,14 @@ class TvFocusable extends StatefulWidget {
 
   final double radius;
 
-  /// Corner radius while focused, when the item's own artwork grows with it.
+  /// Corner radius while focused. Null keeps the resting [radius], which is
+  /// what every fixed-size control wants: a pill chip or a 6 px button must
+  /// not suddenly be ringed at a card's 22 px corner.
+  ///
   /// A card that is drawn larger at 22 still looks pinched; the reference rings
   /// the grown cover at 30 where the resting one is 22 (`aurora.cpp:503`), so
   /// anything that resizes itself should say so here.
-  final double focusedRadius;
+  final double? focusedRadius;
 
   final Color? accent;
   final bool reportHighlight;
@@ -194,7 +197,7 @@ class _TvFocusableState extends State<TvFocusable> {
     scope.report(
       this,
       grownRect(rest, widget.highlightScale, alignment: widget.highlightAlignment),
-      _focused ? widget.focusedRadius : widget.radius,
+      _focused ? (widget.focusedRadius ?? widget.radius) : widget.radius,
       widget.accent ?? PsColor.focusRing,
     );
   }

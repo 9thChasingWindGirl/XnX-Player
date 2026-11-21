@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/rendering.dart' show debugPaintBaselinesEnabled, debugPaintSizeEnabled;
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -11,6 +12,11 @@ import 'core/strings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // A dev/DevTools session can leave these debug painters on; they draw a
+  // yellow baseline under every line of text, which reads as "the UI abuses
+  // underlines". The product never wants them, in any build.
+  debugPaintBaselinesEnabled = false;
+  debugPaintSizeEnabled = false;
 
   // The app's own log comes up before anything that can fail: a launch that
   // dies in the window manager or never reaches the player has to leave a

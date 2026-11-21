@@ -11,6 +11,7 @@ import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_ids.dart';
+import '../../ui/core/focus_navigator.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/poster_image.dart';
 import '../../ui/core/title_treatment.dart';
@@ -66,6 +67,11 @@ class _HubPageState extends State<HubPage> {
 
   InputSubscription? _input;
 
+  /// Scrolls the copy + file panel. Up/down first tries to move focus; when
+  /// there is nowhere left to go it pages the content, which is what a detail
+  /// screen needs once its buttons and cast row are exhausted.
+  final ScrollController _scroll = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -76,17 +82,40 @@ class _HubPageState extends State<HubPage> {
   @override
   void dispose() {
     _input?.cancel();
+    _scroll.dispose();
     super.dispose();
   }
 
   /// A hub sits above the shell, so it gets first refusal — but it only claims
   /// Back. Everything else falls through to whatever is below it.
   bool _onIntent(InputIntent intent) {
-    if (intent.action != InputAction.back) {
+    if (intent.action == InputAction.back) {
+      Navigator.of(context).maybePop();
+      return true;
+    }
+    if (intent.action == InputAction.navigateUp || intent.action == InputAction.navigateDown) {
+      final bool up = intent.action == InputAction.navigateUp;
+      if (FocusNavigator.move(up ? NavDir.up : NavDir.down)) {
+        return true;
+      }
+      if (_scroll.hasClients) {
+        final ScrollPosition position = _scroll.position;
+        final double page = position.viewportDimension * 0.8;
+        final double target = (position.pixels + (up ? -page : page))
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble();
+        if (target != position.pixels) {
+          _scroll.animateTo(
+            target,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          );
+          return true;
+        }
+      }
       return false;
     }
-    Navigator.of(context).maybePop();
-    return true;
+    return false;
   }
 
   Future<void> _load() async {
@@ -175,6 +204,7 @@ class _HubPageState extends State<HubPage> {
                 top: 92 + 18 * (1 - arrive),
                 bottom: 40,
                 child: SingleChildScrollView(
+                  controller: _scroll,
                   child: Opacity(
                     opacity: arrive,
                     child: Column(

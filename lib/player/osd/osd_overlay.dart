@@ -137,23 +137,22 @@ class OsdOverlay {
   /// visible menu row. That is exactly the "OSD acts a band away" symptom.
   bool get ownsChrome => _ownsChrome == true;
 
-  /// Records the result of the handoff verification. Called once, right after
-  /// the `osd-engine` property round-trip is checked.
+  /// Records the result of the hand-off. Called once, after the Lua replied.
   void bindHandoff(bool accepted) {
     _ownsChrome = accepted;
+    if (!accepted) {
+      // The Lua stage keeps the band; make sure a half-shown layer cannot sit
+      // above it.
+      setVisible(false);
+    }
     _schedulePaint();
   }
 
   void setVisible(bool visible) {
-    if (visible) {
-      final bool owns = _ownsChrome ??=
-          _player.getProperty('user-data/player/osd-engine') == 'window';
-      if (!owns) {
-        // mpv builds without writable user-data properties silently ignore
-        // the handover. Painting here as well would draw the chrome twice —
-        // leave the Lua stage alone.
-        return;
-      }
+    if (visible && !ownsChrome) {
+      // The Lua stage still owns the band; painting here too would draw the
+      // chrome twice and steal presses aimed at its menu row.
+      return;
     }
     if (_visible == visible) {
       return;
@@ -208,7 +207,8 @@ class OsdOverlay {
     if (!_visible || !ownsChrome || _size.isEmpty) {
       return false;
     }
-    return ny * _size.height > _size.height - OsdChrome.bandHeight;
+    // The chrome occupies the bottom ~35 % of the stage in design units.
+    return ny > 0.70;
   }
 
   void dispose() {
@@ -260,6 +260,22 @@ class OsdOverlay {
     });
   }
 
+  /// Cached media title. The Lua receives it as `user-data/player/title`; the
+  /// independent chrome reads the same property once and remembers it.
+  String? _title;
+
+  String get _titleText {
+    final String? cached = _title;
+    if (cached != null) {
+      return cached;
+    }
+    final String value = _player.getProperty('user-data/player/title') ?? '';
+    if (value.isNotEmpty) {
+      _title = value;
+    }
+    return value;
+  }
+
   Future<void> _paint() async {
     final MpvViewState state = _player.state.value;
     final String? toast =
@@ -267,6 +283,7 @@ class OsdOverlay {
 
     final double duration = state.duration;
     final OsdChromeModel model = OsdChromeModel(
+      title: _titleText,
       position: _scrubbing != null ? _scrubbing! * duration : state.position,
       duration: duration,
       paused: state.paused,
@@ -298,7 +315,40 @@ class OsdOverlay {
     image.dispose();
   }
 
+  /// Format badges, refreshed once per file. Reading five mpv properties on
+  /// every 30 fps paint would be a synchronous round-trip storm; the values do
+  /// not change while a file plays.
+  List<String> _formatBadges = const <String>[];
+
+  void refreshFormat() {
+    final int height = int.tryParse(_player.getProperty('video-params/h') ?? '') ?? 0;
+    final String gamma = (_player.getProperty('video-params/gamma') ?? '').toLowerCase();
+    final String primaries = (_player.getProperty('video-params/primaries') ?? '').toLowerCase();
+    final String audio = _player.getProperty('audio-codec-name') ?? '';
+    final String hwdec = _player.getProperty('hwdec-current') ?? '';
+    final double fps = double.tryParse(_player.getProperty('container-fps') ?? '') ?? 0;
+    _formatBadges = <String>[
+      if (height >= 2160)
+        '4K'
+      else if (height > 0)
+        '${height}P',
+      if (primaries.contains('dolby'))
+        'DOLBY VISION'
+      else if (gamma == 'pq' || gamma.contains('st2084'))
+        'HDR'
+      else if (gamma == 'hlg')
+        'HLG',
+      if (audio.isNotEmpty) audio.toUpperCase(),
+      if (fps > 0) '${fps.round()}FPS',
+      if (hwdec.isNotEmpty && hwdec != 'no') hwdec.toUpperCase(),
+    ];
+    _schedulePaint();
+  }
+
   List<String> _badges(MpvViewState state) {
+    if (_formatBadges.isNotEmpty) {
+      return _formatBadges;
+    }
     return <String>[
       if ((state.videoCodec ?? '').isNotEmpty) state.videoCodec!.toUpperCase(),
       if ((state.hwdec ?? '').isNotEmpty && state.hwdec != 'no') state.hwdec!.toUpperCase(),
@@ -314,16 +364,25 @@ class OsdOverlay {
   // in player_page.dart asks these three questions before handing a pointer
   // event to the Lua side, so a press on the seek bar never reaches mpv.
 
-  /// Whether a normalized pointer position lands on a chrome control.
-  bool inSeekZone(double nx, double ny) {
+  /// The chrome control under a normalized pointer position, or null.
+  ///
+  /// `seek`, `play`, `back10`, `fwd10` or `menu:<id>`. The rectangles come from
+  /// the same list the paint pass uses, so a drawn button is a working button.
+  String? actionAt(double nx, double ny) {
     if (!_visible || !ownsChrome || _size.isEmpty) {
-      return false;
+      return null;
     }
-    return OsdChrome.hotZones(_size).first.contains(ui.Offset(
-          nx * _size.width,
-          ny * _size.height,
-        ));
+    final ui.Offset point = ui.Offset(nx * _size.width, ny * _size.height);
+    for (final OsdZone zone in OsdChrome.zones(_size)) {
+      if (zone.rect.contains(point)) {
+        return zone.id;
+      }
+    }
+    return null;
   }
+
+  /// Whether a normalized pointer position lands on the seek strip.
+  bool inSeekZone(double nx, double ny) => actionAt(nx, ny) == 'seek';
 
   /// A window-normalized x mapped onto 0..1 along the painted seek line.
   ///

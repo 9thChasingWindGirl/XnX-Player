@@ -22,6 +22,11 @@ class PlexHero extends StatelessWidget {
     required this.onPlay,
     required this.onDetails,
     required this.onFavorite,
+    this.carouselIndex,
+    this.carouselCount = 0,
+    this.onPrev,
+    this.onNext,
+    this.onPickSlide,
   });
 
   final MediaItem item;
@@ -29,9 +34,16 @@ class PlexHero extends StatelessWidget {
   final VoidCallback onDetails;
   final VoidCallback onFavorite;
 
-  /// Tall enough for a 16:9 still to read, short enough that the first shelf
-  /// is on screen at 1080p. Plex's own banner sits in this band.
-  static const double height = 524;
+  /// Current slide of the featured carousel, null when there is only one.
+  final int? carouselIndex;
+  final int carouselCount;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+  final ValueChanged<int>? onPickSlide;
+
+  /// Tall enough that the banner owns its own band and the first shelf starts
+  /// below it instead of crowding the copy.
+  static const double height = 600;
 
   @override
   Widget build(BuildContext context) {
@@ -118,6 +130,20 @@ class PlexHero extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (carouselCount > 1) ...<Widget>[
+                          const SizedBox(width: 12),
+                          _HeroArrow(
+                            icon: Icons.chevron_left_rounded,
+                            onSelect: onPrev,
+                            focusId: FocusIds.action('home', 'prev'),
+                          ),
+                          const SizedBox(width: 8),
+                          _HeroArrow(
+                            icon: Icons.chevron_right_rounded,
+                            onSelect: onNext,
+                            focusId: FocusIds.action('home', 'next'),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -125,6 +151,35 @@ class PlexHero extends StatelessWidget {
               ),
             ),
           ),
+          if (carouselCount > 1 && carouselIndex != null)
+            Positioned(
+              right: 64,
+              bottom: 44,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  for (int i = 0; i < carouselCount; i++)
+                    GestureDetector(
+                      onTap: () => onPickSlide?.call(i),
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          width: i == carouselIndex ? 24 : 8,
+                          height: 8,
+                          margin: const EdgeInsets.only(left: 8),
+                          decoration: BoxDecoration(
+                            color: i == carouselIndex
+                                ? PlexColor.amber
+                                : Colors.white.withValues(alpha: 0.34),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -316,6 +371,34 @@ class _HeroButton extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Round step control for the featured carousel.
+class _HeroArrow extends StatelessWidget {
+  const _HeroArrow({required this.icon, required this.onSelect, this.focusId});
+
+  final IconData icon;
+  final VoidCallback? onSelect;
+  final String? focusId;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      radius: 23,
+      focusId: focusId,
+      onSelect: onSelect,
+      child: Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white.withValues(alpha: 0.10),
+          border: Border.all(color: PlexColor.line),
+        ),
+        child: Icon(icon, size: 22, color: PlexColor.text),
       ),
     );
   }

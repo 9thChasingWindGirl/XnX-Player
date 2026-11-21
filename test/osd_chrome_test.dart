@@ -43,12 +43,11 @@ void main() {
       final ui.Rect wide = OsdChrome.hotZones(const ui.Size(2560, 1440)).first;
       final ui.Rect narrow = OsdChrome.hotZones(const ui.Size(1280, 720)).first;
       expect(wide.width, greaterThan(narrow.width));
-      // The strip ends where the drawn line does, not at the window edge:
-      // time readout on the left, duration readout on the right.
-      expect(wide.left, closeTo(OsdChrome.seekLeftInset, 1));
-      expect(narrow.left, closeTo(OsdChrome.seekLeftInset, 1));
-      expect(wide.right, closeTo(2560 - OsdChrome.seekRightInset, 1));
-      expect(narrow.right, closeTo(1280 - OsdChrome.seekRightInset, 1));
+      // The strip is inset by the same safe margin as the rest of the chrome.
+      expect(wide.left, closeTo(96 * 2560 / 1920, 1));
+      expect(narrow.left, closeTo(96 * 1280 / 1920, 1));
+      expect(wide.right, closeTo(2560 - 96 * 2560 / 1920, 1));
+      expect(narrow.right, closeTo(1280 - 96 * 1280 / 1920, 1));
     });
 
     test('pointer fraction uses the same line as paint and hit testing', () {
@@ -65,6 +64,7 @@ void main() {
   group('OsdChromeModel', () {
     test('scrubbing overrides the clock position without mutating state', () {
       const OsdChromeModel idle = OsdChromeModel(
+        title: 'Dune: Part Two',
         position: 120,
         duration: 600,
         paused: false,
@@ -78,6 +78,7 @@ void main() {
       expect(idle.scrubbing, isNull);
       // The overlay computes the scrub position; the model stays a value.
       const OsdChromeModel scrubbing = OsdChromeModel(
+        title: 'Dune: Part Two',
         position: 420,
         duration: 600,
         paused: false,
