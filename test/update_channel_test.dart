@@ -40,6 +40,34 @@ void main() {
     expect(pickRelease(<UpdateCandidate>[], UpdateChannel.dev), isNull);
   });
 
+  test('a dev nightly never becomes the beta candidate', () {
+    // Both are pre-releases on GitHub; only the tag shape separates them. This
+    // is the bug the shape check exists for: a beta check used to be able to
+    // install a dev nightly.
+    final List<UpdateCandidate> releases = <UpdateCandidate>[
+      const UpdateCandidate(
+        version: 'v0.01.00.Beta',
+        assetUrl: 'http://x/b',
+        isPrerelease: true,
+      ),
+      const UpdateCandidate(
+        version: 'nightly-0.00.09.Dev',
+        assetUrl: 'http://x/d',
+        isPrerelease: true,
+      ),
+    ];
+    expect(pickRelease(releases, UpdateChannel.beta)?.version, 'v0.01.00.Beta');
+    expect(pickRelease(releases, UpdateChannel.stable), isNull);
+    expect(
+      belongsToChannel('nightly-0.00.09.Dev', true, UpdateChannel.dev),
+      isTrue,
+    );
+    expect(
+      belongsToChannel('nightly-0.00.09.Dev', true, UpdateChannel.beta),
+      isFalse,
+    );
+  });
+
   test('dotted versions compare numerically, not lexically', () {
     expect(compareVersions('1.2.10', '1.2.9') > 0, isTrue);
     expect(compareVersions('v1.2.0', '1.2.0'), 0);

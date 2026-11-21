@@ -60,18 +60,26 @@ class UpdateCandidate {
 
 /// Picks the release that a channel offers.
 ///
-/// stable 只认正式发布；beta 认 prerelease。Dev 的 `nightly-*` 由服务层从
-/// 同一 Release 列表里单独筛选，这里返回 null 表示"交给服务层处理"。
+/// GitHub only has two states — Latest and Pre-release — but this project ships
+/// three channels, and **both beta and dev are pre-releases**. The tag shape is
+/// therefore the real discriminator:
+///
+/// ```
+/// v0.01.00              stable   (not a pre-release)
+/// v0.01.00.Beta         beta
+/// nightly-0.00.05.Dev   dev
+/// ```
+///
+/// Relying on `isPrerelease` alone let a beta check pick up a dev nightly.
+/// Dev's `nightly-*` list is fetched by the service layer; null here means
+/// "not this layer's decision".
 UpdateCandidate? pickRelease(List<UpdateCandidate> releases, UpdateChannel channel) {
   if (channel == UpdateChannel.dev) {
     return null;
   }
   UpdateCandidate? best;
   for (final UpdateCandidate release in releases) {
-    if (channel == UpdateChannel.stable && release.isPrerelease) {
-      continue;
-    }
-    if (channel == UpdateChannel.beta && !release.isPrerelease) {
+    if (!belongsToChannel(release.version, release.isPrerelease, channel)) {
       continue;
     }
     if (best == null || compareVersions(release.version, best.version) > 0) {
@@ -79,6 +87,30 @@ UpdateCandidate? pickRelease(List<UpdateCandidate> releases, UpdateChannel chann
     }
   }
   return best;
+}
+
+/// Whether a tag belongs to [channel], judged by its shape.
+///
+/// `nightly-` wins over `.beta` on purpose: a tag can only be one of them, and
+/// checking the negative first is what keeps a dev nightly out of the beta row.
+bool belongsToChannel(
+  String tag,
+  bool isPrerelease,
+  UpdateChannel channel,
+) {
+  final String value = tag.trim().toLowerCase();
+  final bool nightly = value.startsWith('nightly-');
+  // Both spellings ship in the wild: this project writes `v0.01.00.Beta`, and
+  // semver-style `v1.3.0-beta.2` is what the tests (and other tools) use.
+  final bool beta = value.contains('beta');
+  switch (channel) {
+    case UpdateChannel.dev:
+      return nightly;
+    case UpdateChannel.beta:
+      return beta && !nightly;
+    case UpdateChannel.stable:
+      return !isPrerelease && !nightly && !beta;
+  }
 }
 
 /// Compares dotted numeric versions ('1.2.10' vs '1.2.9'), tolerating a `v`
