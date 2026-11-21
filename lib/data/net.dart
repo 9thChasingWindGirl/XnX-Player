@@ -63,13 +63,29 @@ abstract final class Http {
     String? contentType,
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    // The whole exchange is bounded, not just the handshake: a server that
+    // accepts the connection and then stalls mid-body used to hang the caller
+    // forever, which is how a library refresh got stuck on "loading".
+    final Future<HttpResult> exchange = _exchange(method, uri, headers, body, contentType);
+    return exchange.timeout(timeout, onTimeout: () {
+      throw HttpFailure('请求超时（${timeout.inSeconds}s）：${uri.host}');
+    });
+  }
+
+  static Future<HttpResult> _exchange(
+    String method,
+    Uri uri,
+    Map<String, String>? headers,
+    String? body,
+    String? contentType,
+  ) async {
     final HttpClientRequest request = await _client.openUrl(method, uri);
     headers?.forEach((String name, String value) => request.headers.set(name, value));
     if (body != null) {
       request.headers.contentType = ContentType.parse(contentType ?? 'application/json; charset=utf-8');
       request.add(utf8.encode(body));
     }
-    final HttpClientResponse response = await request.close().timeout(timeout);
+    final HttpClientResponse response = await request.close();
     final String text = await response.transform(utf8.decoder).join();
     final Map<String, String> out = <String, String>{};
     response.headers.forEach((String name, List<String> values) {

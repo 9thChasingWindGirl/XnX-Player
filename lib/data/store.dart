@@ -206,37 +206,50 @@ class AppStore extends ChangeNotifier {
     }
     loading = true;
     errors.clear();
+    LibraryLog.write('刷新开始（${sources.length} 个来源）');
     _notify();
 
     final List<MediaItem> collected = <MediaItem>[];
     final Set<String> seen = <String>{};
 
-    for (final SourceConfig config in sources.where((SourceConfig entry) => entry.enabled)) {
-      try {
-        final MediaSource source = _sourceFor(config);
-        final List<MediaItem> listing = await source.browse();
-        for (final MediaItem item in listing) {
-          if (seen.add(item.id)) {
-            collected.add(_withResume(item));
-          }
-        }
-        if (source is EmbySource) {
-          for (final MediaItem item in await source.resumable()) {
+    try {
+      for (final SourceConfig config in sources.where((SourceConfig entry) => entry.enabled)) {
+        try {
+          // One stalled source must not hold the whole library hostage: each
+          // source gets its own deadline, and a miss is recorded as an error
+          // the control center can show instead of an eternal skeleton.
+          final MediaSource source = _sourceFor(config);
+          final List<MediaItem> listing =
+              await source.browse().timeout(const Duration(seconds: 60));
+          for (final MediaItem item in listing) {
             if (seen.add(item.id)) {
               collected.add(_withResume(item));
             }
           }
+          if (source is EmbySource) {
+            for (final MediaItem item in await source.resumable()) {
+              if (seen.add(item.id)) {
+                collected.add(_withResume(item));
+              }
+            }
+          }
+          LibraryLog.write('${config.label}：${listing.length} 项');
+        } on Object catch (error) {
+          errors.add('${config.label}：$error');
+          LibraryLog.write('${config.label}：失败 — $error');
         }
-      } on Object catch (error) {
-        errors.add('${config.label}：$error');
       }
-    }
 
-    items
-      ..clear()
-      ..addAll(collected);
-    loading = false;
-    _notify();
+      items
+        ..clear()
+        ..addAll(collected);
+      LibraryLog.write('刷新完成：${collected.length} 项');
+    } finally {
+      // A timeout or an unexpected throw above must still release the flag,
+      // otherwise the home page spins its loading skeleton forever.
+      loading = false;
+      _notify();
+    }
   }
 
   MediaItem _withResume(MediaItem item) {
@@ -363,5 +376,33 @@ class AppStore extends ChangeNotifier {
       unawaited(source.close());
     }
     super.dispose();
+  }
+}
+
+/// Library-refresh logging, appended to `%APPDATA%\XnX Player\library.log`.
+///
+/// Playback already had mpv's own log file; the library side was silent, so a
+/// refresh that never finished had nothing to inspect. Best-effort by design:
+/// a log write that fails must never break the refresh it is describing.
+class LibraryLog {
+  LibraryLog._();
+
+  static const int _maxBytes = 256 * 1024;
+
+  static Future<void> write(String message) async {
+    try {
+      final File file = File('${AppStore.stateDirectory}${Platform.pathSeparator}library.log');
+      final String stamp = DateTime.now().toIso8601String();
+      final String line = '[$stamp] $message\n';
+      if (await file.exists() && await file.length() > _maxBytes) {
+        // Keep it a tail, not an archive: the newest run matters.
+        await file.writeAsString(line);
+        return;
+      }
+      await file.parent.create(recursive: true);
+      await file.writeAsString(line, mode: FileMode.append);
+    } on Object {
+      // Logging is a courtesy; ignore every failure.
+    }
   }
 }

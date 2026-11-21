@@ -2147,8 +2147,14 @@ local function to_design(mx, my)
   if dim and dim.w and dim.w > 0 and dim.h and dim.h > 0 then
     local ox = dim.ml or 0
     local oy = dim.mt or 0
-    local sx = dim.w / W
-    local sy = dim.h / H
+    -- The video rect is the OSD inset by its margins, and PlayRes maps onto
+    -- *that* rect — so the scale is video/W, not window/W. Deriving it from
+    -- dim.w made every hitbox drift by the margins the moment the picture was
+    -- letterboxed.
+    local vw = dim.w - ox - (dim.mr or 0)
+    local vh = dim.h - oy - (dim.mb or 0)
+    local sx = vw / W
+    local sy = vh / H
     if sx > 0.0001 and sy > 0.0001 then
       return (mx - ox) / sx, (my - oy) / sy
     end
@@ -2382,12 +2388,16 @@ local function unit_to_design(nx, ny)
   local dim = mp.get_property_native('osd-dimensions')
   if dim and dim.w and dim.w > 0 and dim.h and dim.h > 0 then
     local ml, mt = dim.ml or 0, dim.mt or 0
-    local win_w = dim.w + ml + (dim.mr or 0)
-    local win_h = dim.h + mt + (dim.mb or 0)
-    local sx = dim.w / W
-    local sy = dim.h / H
+    -- `w`/`h` already IS the window; the video sits inside it, inset by the
+    -- margins. The old `win_w = w + ml + mr` inflated the window by the
+    -- margins, so a forwarded click landed off by exactly that amount — the
+    -- same letterbox drift the native path suffered from.
+    local vid_w = dim.w - ml - (dim.mr or 0)
+    local vid_h = dim.h - mt - (dim.mb or 0)
+    local sx = vid_w / W
+    local sy = vid_h / H
     if sx > 0.0001 and sy > 0.0001 then
-      return (nx * win_w - ml) / sx, (ny * win_h - mt) / sy
+      return (nx * dim.w - ml) / sx, (ny * dim.h - mt) / sy
     end
   end
   return nx * W, ny * H
