@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/app_paths.dart';
+import '../../core/notice_center.dart';
 import '../../core/input/input_action.dart';
 import '../../core/input/input_router.dart';
 import '../../core/strings.dart';
@@ -220,6 +221,9 @@ class _SettingsPageState extends State<SettingsPage> {
         _downloadProgress = 0;
         _updateStatus = '正在下载 ${candidate.version}…';
       });
+      // A download is the canonical live activity: one row that fills up,
+      // visible from the top bar without opening settings.
+      NoticeCenter.instance.activity('update-download', '正在下载 ${candidate.version}');
       try {
         final String payload = await _updater.prepareInstall(
           candidate,
@@ -228,6 +232,14 @@ class _SettingsPageState extends State<SettingsPage> {
               return;
             }
             final double fraction = total > 0 ? received / total : 0;
+            NoticeCenter.instance.activity(
+              'update-download',
+              '正在下载 ${candidate.version}',
+              progress: fraction,
+              body: total > 0
+                  ? '${_megabytes(received)} / ${_megabytes(total)}'
+                  : _megabytes(received),
+            );
             // The sink reports every chunk; repaint at 2 % steps instead.
             if (received != total && fraction - _downloadProgress < 0.02) {
               return;
@@ -245,9 +257,20 @@ class _SettingsPageState extends State<SettingsPage> {
         if (!mounted) {
           return;
         }
+        NoticeCenter.instance.finish(
+          'update-download',
+          title: '正在安装 ${candidate.version}',
+          body: '程序即将关闭并重新启动',
+        );
         setState(() => _updateStatus = '正在安装，程序即将重启…');
         await _updater.apply(payload, keepUserData: options.keepData);
       } on Object catch (error) {
+        NoticeCenter.instance.finish(
+          'update-download',
+          title: '更新失败',
+          body: '$error',
+          kind: NoticeKind.error,
+        );
         if (!mounted) {
           return;
         }
@@ -264,6 +287,12 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final UpdateCandidate? candidate = await _updater.fetchLatest(_channel);
       if (candidate == null || candidate.assetUrl.isEmpty) {
+        NoticeCenter.instance.publish(
+          'update-check',
+          '暂无可用构建',
+          body: _channelLabel(_channel),
+          kind: NoticeKind.warning,
+        );
         setState(() {
           _updateStatus = '${_channelLabel(_channel)}：暂无可用构建';
         });
@@ -273,16 +302,33 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!candidate.isPrerelease &&
           !isInstallable(candidate, S.appVersion) &&
           _channel == UpdateChannel.stable) {
+        NoticeCenter.instance.publish(
+          'update-check',
+          '已是最新：${candidate.version}',
+          kind: NoticeKind.success,
+        );
         setState(() {
           _updateStatus = '已是最新：${candidate.version}';
         });
         return;
       }
+      NoticeCenter.instance.publish(
+        'update-check',
+        '发现新版本 ${candidate.version}',
+        body: '${_channelLabel(_channel)} · 再按「安装」开始下载',
+        kind: NoticeKind.info,
+      );
       setState(() {
         _updateStatus = '${_channelLabel(_channel)}最新：${candidate.version}，再按一次安装';
         _pending = candidate;
       });
     } on Object catch (error) {
+      NoticeCenter.instance.publish(
+        'update-check',
+        '检查更新失败',
+        body: '$error',
+        kind: NoticeKind.error,
+      );
       setState(() {
         _updateStatus = '检查失败：$error';
       });

@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import '../core/app_log.dart';
 import '../core/input/input_action.dart';
 import '../core/input/input_router.dart';
+import '../core/notice_center.dart';
 import '../core/sound/sound_cue.dart';
 import '../core/sound/sound_manager.dart';
 import '../core/strings.dart';
@@ -364,11 +365,11 @@ class _ShellPageState extends State<ShellPage> {
         return CcRecentPanel(items: _recentItems(), onPlay: _playFromDock);
       case CcPanelId.notifications:
         return CcNotificationsPanel(
-          errors: store.errors,
           loading: store.loading,
           sourceCount: store.sources.length,
           onRefresh: () => unawaited(store.refresh()),
-          onClear: store.clearErrors,
+          onMarkAllRead: NoticeCenter.instance.markAllRead,
+          onClear: NoticeCenter.instance.clear,
         );
       case CcPanelId.sources:
         return CcSourcesPanel(
@@ -679,6 +680,12 @@ class _ShellPageState extends State<ShellPage> {
                           onToggleMaximize: () => unawaited(_toggleMaximize()),
                           onClose: () => unawaited(_quitApp()),
                           maximized: _maximized,
+                          // The bell is the shortcut into the panel the dock
+                          // already has; it does not need its own surface.
+                          onNotifications: () =>
+                              _togglePanel(CcPanelId.notifications),
+                          notificationPanelOpen:
+                              _ccPanel == CcPanelId.notifications,
                         ),
                       ),
                     ),

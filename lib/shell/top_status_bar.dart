@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../core/notice_center.dart';
 import '../core/strings.dart';
 import '../design/ps_tokens.dart';
 import '../ui/core/focus_zone.dart';
@@ -26,6 +27,8 @@ class TopStatusBar extends StatefulWidget {
     required this.currentSourceId,
     required this.onPickSource,
     this.maximized = false,
+    this.onNotifications,
+    this.notificationPanelOpen = false,
   });
 
   final int tabIndex;
@@ -34,6 +37,11 @@ class TopStatusBar extends StatefulWidget {
   final VoidCallback onMinimize;
   final VoidCallback onToggleMaximize;
   final VoidCallback onClose;
+
+  /// Opens the notification panel in the dock. Null while the shell has not
+  /// wired it up yet, in which case the bell is simply not drawn.
+  final VoidCallback? onNotifications;
+  final bool notificationPanelOpen;
 
   /// The registered sources, for the switcher. Switching filters the home
   /// shelves to one source; managing them stays in the dock panel.
@@ -234,6 +242,11 @@ class _TopStatusBarState extends State<TopStatusBar> {
                   ),
                 ),
                 const Spacer(),
+                _NotificationBell(
+                  onSelect: widget.onNotifications,
+                  open: widget.notificationPanelOpen,
+                ),
+                const SizedBox(width: 6),
                 TvFocusable(
                   radius: 4,
                   showRing: false,
@@ -313,10 +326,95 @@ class _TopStatusBarState extends State<TopStatusBar> {
   }
 }
 
+/// Bell in the top chrome.
+///
+/// Present only when there is something to say — an unread result or a running
+/// activity — so the bar stays quiet on a fresh install. A running activity
+/// shows a dot (nothing to acknowledge yet); unread results show a count.
+class _NotificationBell extends StatelessWidget {
+  const _NotificationBell({required this.onSelect, required this.open});
+
+  final VoidCallback? onSelect;
+  final bool open;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: NoticeCenter.instance,
+      builder: (BuildContext context, Widget? _) {
+        final NoticeCenter center = NoticeCenter.instance;
+        if (!center.hasAttention && !open) {
+          return const SizedBox.shrink();
+        }
+        final bool busy = center.activeCount > 0;
+        final int unread = center.unread;
+        return Semantics(
+          button: true,
+          label: '通知',
+          child: TvFocusable(
+            radius: 4,
+            showRing: false,
+            onSelect: onSelect ?? () {},
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  Icon(
+                    open
+                        ? Icons.notifications_rounded
+                        : Icons.notifications_none_rounded,
+                    size: 22,
+                    color: busy ? PlexColor.amber : PlexColor.text,
+                  ),
+                  if (busy)
+                    Positioned(
+                      right: -2,
+                      top: -1,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: PlexColor.amber,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    )
+                  else if (unread > 0)
+                    Positioned(
+                      right: -7,
+                      top: -5,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: PlexColor.amber,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          unread > 99 ? '99+' : '$unread',
+                          style: const TextStyle(
+                            fontSize: 9,
+                            height: 1.2,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF141416),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// One window control. Square hover plate, no ring — these are chrome, and a
 /// focus ring around a close button would be louder than the button itself.
-class _WindowIcon extends StatelessWidget {
-  const _WindowIcon({
+class _WindowIcon extends StatelessWidget {  const _WindowIcon({
     required this.icon,
     required this.label,
     required this.onSelect,

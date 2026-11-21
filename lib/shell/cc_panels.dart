@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../core/notice_center.dart';
 import '../core/strings.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
@@ -575,80 +576,171 @@ class _RecentCardState extends State<_RecentCard> {
 class CcNotificationsPanel extends StatelessWidget {
   const CcNotificationsPanel({
     super.key,
-    required this.errors,
     required this.loading,
     required this.sourceCount,
     required this.onRefresh,
+    required this.onMarkAllRead,
     required this.onClear,
   });
 
-  final List<String> errors;
   final bool loading;
   final int sourceCount;
   final VoidCallback onRefresh;
+  final VoidCallback onMarkAllRead;
   final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    final String health = errors.isEmpty ? '运行正常' : '${errors.length} 条错误';
-    final String status = loading ? '正在刷新媒体来源…' : '$sourceCount 个来源已连接 · $health';
-    return CcPanelFrame(
-      title: S.ccNotifications,
-      count: errors.length,
-      hint: status,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Expanded(
-            child: errors.isEmpty
-                ? const _CcEmpty(
-                    icon: Icons.check_circle_outline_rounded,
-                    title: '没有需要处理的通知',
-                    body: '来源连接失败、更新结果会在这里列出',
-                  )
-                : ListView.builder(
-                    itemCount: errors.length,
-                    itemBuilder: (BuildContext context, int index) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            const Icon(
-                              Icons.error_outline_rounded,
-                              size: 20,
-                              color: PsColor.danger,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                errors[index],
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: PsType.micro.copyWith(
-                                  fontSize: 15,
-                                  color: PsColor.textDim,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          const SizedBox(height: 12),
-          Row(
+    return AnimatedBuilder(
+      animation: NoticeCenter.instance,
+      builder: (BuildContext context, Widget? _) {
+        final NoticeCenter center = NoticeCenter.instance;
+        final List<Notice> notices = center.notices;
+        final String status = loading
+            ? '正在刷新媒体来源…'
+            : '$sourceCount 个来源 · ${center.unread} 条未读'
+                '${center.activeCount > 0 ? ' · ${center.activeCount} 项进行中' : ''}';
+        return CcPanelFrame(
+          title: S.ccNotifications,
+          // -1 hides the badge: an activity with nothing unread should not read
+          // as "0 notifications".
+          count: center.unread > 0 ? center.unread : -1,
+          hint: status,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              PsButton(label: '刷新媒体库', height: 52, onSelect: onRefresh),
-              const SizedBox(width: 12),
-              PsButton(
-                label: '清空通知',
-                height: 52,
-                enabled: errors.isNotEmpty,
-                onSelect: onClear,
+              Expanded(
+                child: notices.isEmpty
+                    ? const _CcEmpty(
+                        icon: Icons.notifications_none_rounded,
+                        title: '没有新通知',
+                        body: '媒体库刷新、更新下载、来源连接的结果会出现在这里',
+                      )
+                    : ListView.builder(
+                        itemCount: notices.length,
+                        itemBuilder: (BuildContext context, int index) =>
+                            _NoticeRow(notice: notices[index]),
+                      ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: <Widget>[
+                  PsButton(label: '刷新媒体库', height: 52, onSelect: onRefresh),
+                  const SizedBox(width: 12),
+                  PsButton(
+                    label: '全部已读',
+                    height: 52,
+                    enabled: center.unread > 0,
+                    onSelect: onMarkAllRead,
+                  ),
+                  const SizedBox(width: 12),
+                  PsButton(
+                    label: '清空',
+                    height: 52,
+                    enabled: notices.isNotEmpty,
+                    onSelect: onClear,
+                  ),
+                ],
               ),
             ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// One notice: icon, title, body, and a progress bar while it is a live
+/// activity. Unread results carry a dot; activities do not, because they are
+/// something to watch rather than something to acknowledge.
+class _NoticeRow extends StatelessWidget {
+  const _NoticeRow({required this.notice});
+
+  final Notice notice;
+
+  static (IconData, Color) _look(NoticeKind kind) => switch (kind) {
+        NoticeKind.info => (Icons.info_outline_rounded, PsColor.textDim),
+        NoticeKind.success =>
+          (Icons.check_circle_outline_rounded, PsColor.success),
+        NoticeKind.warning => (Icons.warning_amber_rounded, PsColor.warning),
+        NoticeKind.error => (Icons.error_outline_rounded, PsColor.danger),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final (IconData icon, Color tint) = _look(notice.kind);
+    final Color iconColor = notice.active ? PsColor.accentHover : tint;
+    final double? value = notice.progress;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(icon, size: 20, color: iconColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        notice.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PsType.body.copyWith(
+                          fontSize: 16,
+                          fontWeight:
+                              notice.read ? FontWeight.w400 : FontWeight.w600,
+                          color: notice.read ? PsColor.textDim : PsColor.text,
+                        ),
+                      ),
+                    ),
+                    if (!notice.read && !notice.active)
+                      Container(
+                        width: 7,
+                        height: 7,
+                        margin: const EdgeInsets.only(left: 8, top: 6),
+                        decoration: const BoxDecoration(
+                          color: PsColor.warning,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                  ],
+                ),
+                if (notice.body.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 3),
+                  Text(
+                    notice.body,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: PsType.micro.copyWith(
+                      fontSize: 14,
+                      height: 1.4,
+                      color: PsColor.textFaint,
+                    ),
+                  ),
+                ],
+                if (notice.active) ...<Widget>[
+                  const SizedBox(height: 7),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      // A null value is the indeterminate bar: an activity that
+                      // started before it can report progress.
+                      value: (value ?? 0) <= 0 ? null : value,
+                      minHeight: 3,
+                      backgroundColor: PsColor.text.withValues(alpha: 0.12),
+                      valueColor: const AlwaysStoppedAnimation<Color>(
+                        PsColor.accentHover,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ),

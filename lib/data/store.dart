@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/app_log.dart';
 import '../core/app_paths.dart';
+import '../core/notice_center.dart';
 import '../playback/mpv/hw_profile.dart';
 import 'models/media_item.dart';
 import 'net.dart';
@@ -218,6 +219,12 @@ class AppStore extends ChangeNotifier {
     _open.remove(config.id);
     AppLog.info('保存媒体源：${config.label}（${config.kind.name}）${config.url}');
     await _persist();
+    NoticeCenter.instance.publish(
+      'source-add-${config.id}',
+      '已连接媒体来源：${config.label}',
+      body: config.url,
+      kind: NoticeKind.success,
+    );
     _notify();
     await refresh();
   }
@@ -265,6 +272,10 @@ class AppStore extends ChangeNotifier {
     errors.clear();
     AppLog.info('刷新媒体库开始（${sources.length} 个来源）');
     LibraryLog.write('刷新开始（${sources.length} 个来源）');
+    // A refresh that takes a minute is exactly the silent wait a notification
+    // is for: it becomes a live row in the centre and in the top bar.
+    NoticeCenter.instance.activity('library-refresh', '正在刷新媒体库',
+        body: '${sources.length} 个来源');
     _notify();
 
     final List<MediaItem> collected = <MediaItem>[];
@@ -299,6 +310,14 @@ class AppStore extends ChangeNotifier {
           errors.add('${config.label}：$error');
           AppLog.error('媒体源刷新失败：${config.label}', error, stack);
           LibraryLog.write('${config.label}：失败 — $error');
+          // One row per failing source, refreshed on a retry rather than piled
+          // up: the id is the source, not the failure.
+          NoticeCenter.instance.publish(
+            'source-fail-${config.id}',
+            '${config.label} 连接失败',
+            body: '$error',
+            kind: NoticeKind.error,
+          );
         }
       }
 
@@ -311,6 +330,13 @@ class AppStore extends ChangeNotifier {
       // A timeout or an unexpected throw above must still release the flag,
       // otherwise the home page spins its loading skeleton forever.
       loading = false;
+      NoticeCenter.instance.finish(
+        'library-refresh',
+        title: errors.isEmpty ? '媒体库已更新' : '媒体库已更新，部分来源失败',
+        body: '${collected.length} 项媒体'
+            '${errors.isEmpty ? '' : '，${errors.length} 个来源失败'}',
+        kind: errors.isEmpty ? NoticeKind.success : NoticeKind.warning,
+      );
       _notify();
     }
   }
