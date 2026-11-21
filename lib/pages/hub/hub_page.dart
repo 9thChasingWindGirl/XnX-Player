@@ -1041,7 +1041,7 @@ class _LocalInfo {
       final FileStat dirStat = await FileStat.stat(path);
       if (dirStat.type == FileSystemEntityType.directory) {
         return _LocalInfo(<_InfoRow>[
-          _InfoRow('类型', '剧集文件夹'),
+          const _InfoRow('类型', '剧集文件夹'),
           if ((item.group ?? '').isNotEmpty) _InfoRow('剧集', item.group!),
           _InfoRow('修改时间', _stamp(dirStat.modified)),
           _InfoRow('完整路径', path),

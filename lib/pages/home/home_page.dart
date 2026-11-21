@@ -564,7 +564,7 @@ class _HomePageState extends State<HomePage> {
   /// the difference between "broken" and "no catalogue" is visible.
   Widget _tmdbNotice() {
     return Padding(
-      padding: EdgeInsets.fromLTRB(_margin, 0, _margin, 18),
+      padding: const EdgeInsets.fromLTRB(_margin, 0, _margin, 18),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
