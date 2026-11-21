@@ -395,8 +395,6 @@ class _DropdownRow extends StatefulWidget {
 }
 
 class _DropdownRowState extends State<_DropdownRow> {
-  bool _open = false;
-
   Future<void> _openPicker() async {
     final int? picked = await showDialog<int>(
       context: context,

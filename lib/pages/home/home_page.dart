@@ -8,6 +8,7 @@ import '../../data/models/media_item.dart';
 import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
+import '../../shell/shell_page.dart' show shellSourceFilter;
 import '../../ui/core/focus_highlight.dart';
 import '../../ui/core/tv_scale.dart';
 import '../../ui/core/tv_focusable.dart';
@@ -90,7 +91,21 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     AppStore.instance.removeListener(_onStore);
+    _sourceFilter.removeListener(_onFilter);
     super.dispose();
+  }
+
+  /// A source pill change re-filters the shelves without touching the hero.
+  void _onFilter() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _rows = _computeRows();
+      if (_row >= _rows.length) {
+        _row = math.max(0, _rows.length - 1);
+      }
+    });
   }
 
   void _onStore() {
@@ -331,7 +346,7 @@ class _HomePageState extends State<HomePage> {
     final int column =
         (_columns.length > index ? _columns[index] : 0).clamp(0, row.items.length - 1).toInt();
     final double cardHeight = row.wide ? 180.0 : PsSpace.tileSize;
-    final double cardWidth = row.wide ? 320.0 : null;
+    final double? cardWidth = row.wide ? 320.0 : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

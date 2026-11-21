@@ -127,7 +127,7 @@ class _ShellPageState extends State<ShellPage> {
   final WindowListener _windowEvents = _MaximizeListener();
 
   /// The switcher pill lists registered sources by display name.
-  List<SourceOption> store_sources() => AppStore.instance.sources
+  List<SourceOption> _storeSources() => AppStore.instance.sources
       .map((SourceConfig config) => SourceOption(config.id, config.label))
       .toList(growable: false);
 
@@ -647,7 +647,7 @@ class _ShellPageState extends State<ShellPage> {
                           tabIndex: _tab,
                           onTabSelected: _selectTab,
                           onSearch: _openSearch,
-                          sources: store_sources(),
+                          sources: _storeSources(),
                           currentSourceId: shellSourceFilter.value,
                           onPickSource: (String? id) => shellSourceFilter.value = id,
                           onMinimize: () => unawaited(_minimize()),
