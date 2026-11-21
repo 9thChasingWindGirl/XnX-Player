@@ -33,7 +33,7 @@ abstract final class OsdChrome {
   /// hit-testing and pointer-to-fraction conversion.
   static ui.Rect seekTrack(ui.Size size) {
     final double y = size.height - 34 - 8;
-    final double left = seekLeftInset;
+    const double left = seekLeftInset;
     final double right = math.max(left + 40, size.width - seekRightInset);
     return ui.Rect.fromLTRB(left, y - 4, right, y + 4);
   }

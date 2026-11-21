@@ -274,11 +274,11 @@ class _HomePageState extends State<HomePage> {
               TvFocusable(
                 radius: 4,
                 onSelect: widget.onOpenLibrary,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: const <Widget>[
+                    children: <Widget>[
                       Text(
                         '查看全部',
                         style: TextStyle(

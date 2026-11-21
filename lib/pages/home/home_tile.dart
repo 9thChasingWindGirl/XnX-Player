@@ -294,7 +294,7 @@ class PlexCard extends StatelessWidget {
                     ? Padding(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 46),
                         child: posterImage(
-                          imageUrl!,
+                          imageUrl,
                           fit: BoxFit.contain,
                           errorBuilder:
                               (BuildContext context, Object error, StackTrace? stack) =>
@@ -302,7 +302,7 @@ class PlexCard extends StatelessWidget {
                         ),
                       )
                     : posterImage(
-                        imageUrl!,
+                        imageUrl,
                         fit: BoxFit.cover,
                         gapless: true,
                         errorBuilder:

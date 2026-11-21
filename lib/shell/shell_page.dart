@@ -300,7 +300,7 @@ class _ShellPageState extends State<ShellPage> {
   void _selectTab(int index, {bool fromDock = false}) {
     final bool changed = index != _tab;
     if (changed) {
-      AppLog.info('切换页面：${_tab} → $index');
+      AppLog.info('切换页面：$_tab → $index');
       _tabMarks[_tab] = FocusMemory.instance.mark();
     }
     setState(() {
