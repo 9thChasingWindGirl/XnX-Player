@@ -175,10 +175,14 @@ abstract final class OsdChrome {
     // is drawn. The distinction is what "是否点亮" asks for — an HDR file on
     // an SDR desktop must not look like a live HDR output.
     double bx = x(safeX);
+    final double badgeInk = font(16);
+    // The plate has to grow with the floored text, and the text is centred in
+    // it: a fixed 28-unit box with a 12 px label would clip the descenders.
+    final double badgeH = math.max(28 * sy, badgeInk + 6);
     for (final String label in model.badges) {
       final OsdBadge badge = model.badgeFor(label);
-      final double width = _textWidth(label, font(16)) + x(22);
-      final ui.Rect box = ui.Rect.fromLTWH(bx, y(metaY), width, font(28));
+      final double width = _textWidth(label, badgeInk) + x(22);
+      final ui.Rect box = ui.Rect.fromLTWH(bx, y(metaY), width, badgeH);
       final ui.RRect rounded = ui.RRect.fromRectAndRadius(box, ui.Radius.circular(x(6)));
       switch (badge.tier) {
         case OsdBadgeTier.lit:
@@ -215,7 +219,8 @@ abstract final class OsdChrome {
         OsdBadgeTier.dim => const ui.Color(0x9EE6E9F2),
         OsdBadgeTier.fact => const ui.Color(0xE6FFFFFF),
       };
-      _text(canvas, label, ui.Offset(bx + x(11), y(metaY) + font(6)), font(16), color: ink);
+      _text(canvas, label, ui.Offset(bx + x(11), box.top + (badgeH - badgeInk) / 2),
+          badgeInk, color: ink);
       bx += width + x(8);
     }
 
@@ -224,8 +229,11 @@ abstract final class OsdChrome {
     final double progress =
         model.duration > 0 ? (model.position / model.duration).clamp(0.0, 1.0) : 0;
     final double knob = model.scrubbing ?? progress;
+    // The knob is a shape, not text: it keeps its own scale so the 12 px font
+    // floor does not turn a 4.5 px dot into a 24 px disc.
     _seekLine(canvas, track, knob, model.accent,
-        hover: model.hoverSeek || model.scrubbing != null, radius: font(8));
+        hover: model.hoverSeek || model.scrubbing != null,
+        radius: math.max(8 * sy, 5));
 
     // Transport and menus, drawn from the same zones input tests.
     final List<OsdZone> buttonZones = zones(size);
@@ -248,7 +256,9 @@ abstract final class OsdChrome {
             const ui.Color(0xE6F2F4F8),
             monospace: true,
           );
-          canvas.drawParagraph(time, ui.Offset(timeX, zone.rect.center.dy - font(12)));
+          // Centre on the text's own height rather than a design-unit offset:
+          // the 12 px floor makes the two disagree in a small window.
+          canvas.drawParagraph(time, ui.Offset(timeX, zone.rect.center.dy - font(21) / 2));
           break;
         default:
           if (zone.id.startsWith('menu:')) {

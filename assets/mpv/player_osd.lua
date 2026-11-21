@@ -37,8 +37,11 @@ local CTRL_Y = 902
 local CTRL_H = 66
 local HINT_Y = 992
 local MENU_BOTTOM = 862
-local MENU_W = 600
-local ROW_H = 52
+-- Narrower and taller than before: 600 was half a 1088 px window and 52 put
+-- the rows at 29 px, so the panel read as a wall of tiny text next to the
+-- Dart-drawn transport. It now uses the same rhythm as that chrome.
+local MENU_W = 520
+local ROW_H = 60
 local AUTOHIDE = 4.5
 local TICK = 0.1
 
@@ -1620,7 +1623,7 @@ local function draw_menu(parts)
 
   -- Window the list around the selection so a 40-chapter file never pushes the
   -- panel off the top of the screen.
-  local budget = 560
+  local budget = 620
   local first, last, used = menu.index, menu.index, 0
   local i = menu.index
   while i >= 1 and used + row_h(rows[i]) <= budget do
@@ -1639,7 +1642,7 @@ local function draw_menu(parts)
   local left = RIGHT - MENU_W
   local top = MENU_BOTTOM - height
 
-  parts[#parts + 1] = rect(left, top, MENU_W, height, 26, BLACK, 0xF2)
+  parts[#parts + 1] = rect(left, top, MENU_W, height, 18, BLACK, 0xF2)
   parts[#parts + 1] = rect(left + 24, top + 46, MENU_W - 48, 1, 0, WHITE, 0x1E)
   parts[#parts + 1] = text(left + 28, top + 18, 22, DIM, 0x00, menu.title, 7, true)
   local count = 0
@@ -1661,13 +1664,17 @@ local function draw_menu(parts)
       local selected = (k == menu.index)
       local hovered = state.hover == ('row:' .. tostring(k))
       if selected then
-        parts[#parts + 1] = rect(left + 12, y + 3, MENU_W - 24, ROW_H - 6, 14, WHITE, 0xFF)
+        -- A washed accent plate plus a 4 px spine instead of a solid white bar:
+        -- the white bar was the most jarring thing next to the Dart chrome,
+        -- and black-on-white also flipped the panel's own ink convention.
+        parts[#parts + 1] = rect(left + 12, y + 4, MENU_W - 24, ROW_H - 8, 12, HDR_GOLD, 0x2E)
+        parts[#parts + 1] = rect(left + 12, y + 10, 4, ROW_H - 20, 2, HDR_GOLD, 0xE6)
       elseif hovered then
-        parts[#parts + 1] = rect(left + 12, y + 3, MENU_W - 24, ROW_H - 6, 14, WHITE, 0x1E)
+        parts[#parts + 1] = rect(left + 12, y + 4, MENU_W - 24, ROW_H - 8, 12, WHITE, 0x14)
       end
-      local fg = selected and BLACK or WHITE
-      local dim = selected and '&H3A3A3A&' or DIM
-      local label = clip(row.label or '', 34)
+      local fg = WHITE
+      local dim = selected and GREY or DIM
+      local label = clip(row.label or '', 26)
       if row.active and not selected then
         parts[#parts + 1] = rect(left + 24, y + ROW_H / 2 - 3, 6, 6, 3, WHITE, 0xFF)
       end
@@ -1675,17 +1682,17 @@ local function draw_menu(parts)
       if row.active and not selected then
         tx = left + 42
       end
-      parts[#parts + 1] = text(tx, y + 12, 22, fg, 0x00, label, 7, row.active)
+      parts[#parts + 1] = text(tx, y + 18, 22, fg, 0x00, label, 7, row.active)
       local vx = left + MENU_W - 28
       if row.kind == 'adjust' then
         vx = vx - 46
       end
       if row.value then
-        parts[#parts + 1] = text(vx, y + 13, 20, dim, 0x00, row.value, 9, false)
+        parts[#parts + 1] = text(vx, y + 19, 20, dim, 0x00, row.value, 9, false)
       end
       if row.kind == 'adjust' then
-        parts[#parts + 1] = text(left + MENU_W - 28, y + 13, 16,
-          selected and '&H6A6A6A&' or DIM, 0x00, '← →', 9, false)
+        parts[#parts + 1] = text(left + MENU_W - 28, y + 19, 16,
+          selected and GREY or DIM, 0x00, '← →', 9, false)
       end
       add_hit({
         id = 'row:' .. tostring(k),
