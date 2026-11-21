@@ -66,6 +66,7 @@ class LocalSource extends MediaSource {
             meta: _sizeLabel(stat.size),
             badge: _resolutionBadge(name),
             tech: _techFromName(name),
+            year: yearFromFileName(name),
             posterUrl: art.best(ArtKind.poster)?.url,
             backdropUrl: art.best(ArtKind.backdrop)?.url,
             artwork: art,
@@ -209,20 +210,23 @@ class LocalSource extends MediaSource {
             : lower.contains('av1')
                 ? 'AV1'
                 : null;
-    // Order matters: `dts-hd` and `ddp5.1` contain the shorter tokens.
-    final String? audio = lower.contains('truehd') || lower.contains('atmos')
-        ? (lower.contains('atmos') ? 'TrueHD Atmos' : 'TrueHD')
+    // Order matters: `dts-hd` and `ddp5.1` contain the shorter tokens, and
+    // "EAC3 Atmos" must not be reported as "TrueHD Atmos" just because the
+    // object-audio tag is present.
+    final bool atmos = lower.contains('atmos');
+    final String? audio = lower.contains('truehd')
+        ? (atmos ? 'TrueHD Atmos' : 'TrueHD')
         : lower.contains('dts-hd')
             ? 'DTS-HD'
             : lower.contains('dts')
                 ? 'DTS'
                 : lower.contains('ddp') || lower.contains('eac3') || lower.contains('dd+')
-                    ? 'EAC3'
+                    ? (atmos ? 'EAC3 Atmos' : 'EAC3')
                     : lower.contains('ac3')
                         ? 'AC3'
                         : lower.contains('aac')
                             ? 'AAC'
-                            : null;
+                            : (atmos ? 'Atmos' : null);
     final String? hdr = lower.contains('dolby.vision') || lower.contains('dovi') || lower.contains('dv.')
         ? 'Dolby Vision'
         : lower.contains('hdr10+')
@@ -230,11 +234,26 @@ class LocalSource extends MediaSource {
             : lower.contains('hdr')
                 ? 'HDR'
                 : null;
+    final String? depth = lower.contains('10bit') || lower.contains('10-bit')
+        ? '10-bit'
+        : lower.contains('8bit') || lower.contains('8-bit')
+            ? '8-bit'
+            : null;
+    final String? channels =
+        RegExp(r'(?:^|[^0-9])([257])\.1(?:[^0-9]|$)').firstMatch(lower)?.group(1);
+    final RegExpMatch? fpsMatch =
+        RegExp(r'(\d{2,3}(?:\.\d+)?)\s*fps').firstMatch(lower);
+    final String? fps = fpsMatch == null ? null : '${fpsMatch.group(1)} fps';
+    final String? audioLabel = audio == null
+        ? null
+        : (channels == null ? audio : '$audio $channels.1');
     final List<String> parts = <String>[
       if (resolution != null) resolution,
       if (codec != null) codec,
-      if (audio != null) audio,
+      if (depth != null) depth,
+      if (audioLabel != null) audioLabel,
       if (hdr != null) hdr,
+      if (fps != null) fps,
     ];
     return parts.isEmpty ? null : parts.join(' · ');
   }

@@ -387,7 +387,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         osd.bindHandoff(ownsChrome);
         if (!ownsChrome) {
           _scriptNote = '$_scriptNote · chrome 交接失败（独立 OSD 层未接管，HDR 会影响 OSD）';
+          AppLog.warn('独立 OSD 层未接管底部控制条（osd-engine 未生效）');
+        } else {
+          AppLog.info('独立 OSD 层已接管底部控制条');
         }
+      } else {
+        _scriptNote = '$_scriptNote · 独立 OSD 层创建失败（Lua chrome 继续绘制）';
+        AppLog.warn('独立 OSD 层创建失败，继续使用 Lua chrome');
       }
 
       _loadedSub = player.onFileLoaded.listen((bool _) {

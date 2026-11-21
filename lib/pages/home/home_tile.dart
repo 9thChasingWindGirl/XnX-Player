@@ -423,7 +423,11 @@ class PlexCard extends StatelessWidget {
     if (item.kind == MediaKind.channel) {
       return item.group ?? '直播';
     }
-    if (item.subtitle != null && item.subtitle!.isNotEmpty) {
+    // A local item carries its folder as the subtitle; a path is file-manager
+    // information, not a caption. Keep the year/runtime line instead.
+    if (item.subtitle != null &&
+        item.subtitle!.isNotEmpty &&
+        !item.subtitle!.contains(RegExp(r'[\\/]'))) {
       return item.subtitle!;
     }
     final List<String> parts = <String>[

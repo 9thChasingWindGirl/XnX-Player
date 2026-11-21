@@ -60,6 +60,30 @@ abstract final class AppLog {
     }
   }
 
+  /// Appends one final line synchronously and flushes it.
+  ///
+  /// The quit path ends in `exit(0)`; async writes queued behind `_tail` are
+  /// killed with the isolate, and the last lines are exactly the ones worth
+  /// keeping when a shutdown misbehaves.
+  static void flushSync() {
+    final String? target = _path;
+    if (!_ready || target == null) {
+      return;
+    }
+    try {
+      final RandomAccessFile file = File(target).openSync(mode: FileMode.append);
+      try {
+        final String stamp = DateTime.now().toIso8601String();
+        file.writeStringSync('[$stamp][INFO] 进程退出\n');
+        file.flushSync();
+      } finally {
+        file.closeSync();
+      }
+    } on Object {
+      // Nothing left to do on the way out.
+    }
+  }
+
   static String? _exeLogPath() {
     try {
       final String dir = File(Platform.resolvedExecutable).parent.path;

@@ -1440,6 +1440,13 @@ local function set_output_space(hdr)
   TEXT_SHADOW_ALPHA = 0x30
   SCRIM_TOP = hdr and 0x30 or 0x4E
   SCRIM_BOTTOM = hdr and 0x40 or 0x62
+  -- libass overlays are sRGB; in a PQ swapchain they are anchored to the
+  -- 203-nit SDR reference and the white chrome reads grey. Raising the
+  -- overlay peak keeps the OSD's SDR contrast without pretending it is HDR
+  -- content. Not every build exposes the option, hence the pcall.
+  pcall(function()
+    mp.set_property('sub-hdr-peak', hdr and '300' or 'auto')
+  end)
   mark_dirty()
 end
 

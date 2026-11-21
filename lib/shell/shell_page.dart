@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
@@ -260,13 +261,13 @@ class _ShellPageState extends State<ShellPage> {
 
   Future<void> _toggleMaximize() async {
     try {
-      if (await windowManager.isMaximized()) {
-        await windowManager.unmaximize();
+      if (await windowManager.isMaximized().timeout(const Duration(milliseconds: 800))) {
+        await windowManager.unmaximize().timeout(const Duration(milliseconds: 800));
         if (mounted) {
           setState(() => _maximized = false);
         }
       } else {
-        await windowManager.maximize();
+        await windowManager.maximize().timeout(const Duration(milliseconds: 800));
         if (mounted) {
           setState(() => _maximized = true);
         }
@@ -447,7 +448,7 @@ class _ShellPageState extends State<ShellPage> {
 
   Future<void> _minimize() async {
     try {
-      await windowManager.minimize();
+      await windowManager.minimize().timeout(const Duration(milliseconds: 800));
     } on Object {
       // Window manager can be unavailable on some sessions; ignore.
     }
@@ -456,10 +457,17 @@ class _ShellPageState extends State<ShellPage> {
   Future<void> _quitApp() async {
     AppLog.info('用户退出应用');
     try {
-      await windowManager.destroy();
+      // A native thread or a pending platform message can keep the runner
+      // alive after the window is gone, which is the "close hangs, then quits"
+      // report. Give the plugin a moment, then end the process like any other
+      // desktop app: close means close.
+      await windowManager.destroy().timeout(const Duration(milliseconds: 900));
     } on Object {
-      // Window manager can be unavailable on some sessions; ignore.
+      // Window manager can be unavailable, or the window is already gone.
     }
+    AppLog.flushSync();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    exit(0);
   }
 
   void _openSearch() {

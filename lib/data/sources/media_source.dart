@@ -153,10 +153,43 @@ bool looksLikeVideo(String name) {
   return videoExtensions.contains(name.substring(dot + 1).toLowerCase());
 }
 
-/// Turns `Show.S01E03.1080p.mkv` into something a person can read.
+/// Release tags that belong in a file-information panel, not in a title.
+final List<RegExp> _releaseTags = <RegExp>[
+  // A parenthesised year is shown in the facts row instead of the title; a
+  // bare year stays, because "2012" and "1917" are the titles themselves.
+  RegExp(r'\(\s*(?:19|20)\d{2}\s*\)'),
+  RegExp(r'\b(?:2160p|1080p|720p|480p|4k|8k|uhd)\b', caseSensitive: false),
+  RegExp(r'\b(?:x265|x264|h\.?265|h\.?264|hevc|avc|av1|vp9)\b', caseSensitive: false),
+  RegExp(r'\b(?:eac3|dd\+?|ac3|aac|dts(?:-hd(?:-ma)?)?|truehd|atmos|flac)\b',
+      caseSensitive: false),
+  RegExp(r'\b(?:hdr10\+?|hdr|dolby\.?vision|dovi|hlg)\b', caseSensitive: false),
+  RegExp(r'\b(?:10bit|8bit|web-?dl|webrip|bluray|blu-ray|bdrip|remux|hdtv|dvdrip)\b',
+      caseSensitive: false),
+  RegExp(r'\b\d+(?:\.\d+)?\s*(?:gb|mb)\b', caseSensitive: false),
+];
+
+/// Turns `Show.S01E03.1080p.WEB-DL.mkv` into something a person can read.
+///
+/// The release tags are stripped here, not from the item: the hub page still
+/// shows the untouched file name, and a shelf title that reads like a scene
+/// listing is the first thing that makes a library look like a file manager.
 String prettifyFileName(String name) {
   final int dot = name.lastIndexOf('.');
   String base = dot > 0 ? name.substring(0, dot) : name;
-  base = base.replaceAll(RegExp(r'[._]'), ' ').trim();
-  return base;
+  base = base.replaceAll(RegExp(r'[._]'), ' ');
+  for (final RegExp pattern in _releaseTags) {
+    base = base.replaceAll(pattern, ' ');
+  }
+  base = base.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+  return base.isEmpty ? name : base;
+}
+
+/// Four-digit year in a file name, if there is one.
+int? yearFromFileName(String name) {
+  final RegExpMatch? match = RegExp(r'(?:19|20)\d{2}').firstMatch(name);
+  final int? value = match == null ? null : int.tryParse(match.group(0)!);
+  if (value == null || value < 1900 || value > DateTime.now().year + 2) {
+    return null;
+  }
+  return value;
 }

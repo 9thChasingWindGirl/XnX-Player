@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
@@ -51,6 +52,11 @@ class _HubPageState extends State<HubPage> {
   /// nothing more to say, in which case the page simply shows less.
   MediaItem? _detail;
 
+  /// File facts for a local title. A local library has no metadata server, so
+  /// the detail page reads what the file system and the file name can prove:
+  /// size, container, resolution, codecs, HDR, location and timestamps.
+  _LocalInfo? _local;
+
   bool _loading = false;
   String? _error;
   double _age = 0;
@@ -96,10 +102,17 @@ class _HubPageState extends State<HubPage> {
       // needs nothing else. `details` swallows its own failures and returns the
       // projection, so this can never cost the page.
       final MediaItem full = await AppStore.instance.details(item);
+      _LocalInfo? local;
+      if (full.sourceKind == SourceKind.local) {
+        local = await _LocalInfo.read(full);
+      }
       if (!mounted) {
         return;
       }
-      setState(() => _detail = full);
+      setState(() {
+        _detail = full;
+        _local = local;
+      });
       if (!drillable) {
         return;
       }
@@ -140,33 +153,61 @@ class _HubPageState extends State<HubPage> {
           final double arrive = stagger(_age, 0, offset: 0.04, duration: 0.55);
           final double artArrive = stagger(_age, 1, offset: 0.06, duration: 0.7);
           final double shelfArrive = stagger(_age, 2, offset: 0.08, duration: 0.7);
+          final bool local = item.sourceKind == SourceKind.local;
+          final bool shelf = !local && (showEpisodes || (item.cast.isNotEmpty && !_loading));
 
           return Stack(
             fit: StackFit.expand,
             children: <Widget>[
-              Positioned(
-                right: -80 - 40 * (1 - artArrive),
-                top: -90,
-                width: 1320,
-                height: 1000,
+              // Full-bleed key art. The old version was a 1320-wide panel pinned
+              // to the top-right, so its left edge cut the page with a hard,
+              // visible seam. A background that covers the stage and dissolves
+              // into it is what a detail page should look like.
+              Positioned.fill(
                 child: Opacity(
-                  opacity: 0.35 + 0.65 * artArrive,
+                  opacity: 0.55 + 0.45 * artArrive,
                   child: _KeyArt(item: item),
                 ),
               ),
               Positioned(
                 left: PsSpace.safeX,
+                right: PsSpace.safeX,
                 top: 92 + 18 * (1 - arrive),
-                width: 1180,
-                child: Opacity(
-                  opacity: arrive,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      _Poster(item: item),
-                      const SizedBox(width: 48),
-                      Expanded(child: _Info(item: item, favorite: _favorite, onFavorite: _toggleFavorite, onPlay: _play, onBack: () => Navigator.of(context).maybePop())),
-                    ],
+                bottom: 40,
+                child: SingleChildScrollView(
+                  child: Opacity(
+                    opacity: arrive,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            _Poster(item: item),
+                            const SizedBox(width: 48),
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.topLeft,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 900),
+                                  child: _Info(
+                                    item: item,
+                                    favorite: _favorite,
+                                    onFavorite: _toggleFavorite,
+                                    onPlay: _play,
+                                    onBack: () => Navigator.of(context).maybePop(),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (local && _local != null) ...<Widget>[
+                          const SizedBox(height: 30),
+                          _FileInfoPanel(rows: _local!.rows),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -183,7 +224,7 @@ class _HubPageState extends State<HubPage> {
                   width: 900,
                   child: Text(_error!, style: PsType.body.copyWith(color: PsColor.danger)),
                 ),
-              if (showEpisodes)
+              if (shelf && showEpisodes)
                 Positioned(
                   left: 0,
                   top: 742,
@@ -196,7 +237,7 @@ class _HubPageState extends State<HubPage> {
                     ),
                   ),
                 )
-              else if (item.cast.isNotEmpty && !_loading)
+              else if (shelf && item.cast.isNotEmpty)
                 Positioned(
                   left: 0,
                   top: 742,
@@ -244,8 +285,8 @@ class _Poster extends StatelessWidget {
 
   final MediaItem item;
 
-  static const double width = 300;
-  static const double height = 450;
+  static const double width = 320;
+  static const double height = 480;
 
   @override
   Widget build(BuildContext context) {
@@ -388,6 +429,16 @@ class _Info extends StatelessWidget {
               fontSize: 21,
               height: 1.5,
               color: PsColor.text.withValues(alpha: 0.84),
+            ),
+          ),
+        ] else if (item.sourceKind == SourceKind.local) ...<Widget>[
+          const SizedBox(height: 14),
+          Text(
+            '本地文件没有内嵌的剧情简介与演职员表。下方“文件信息”读取自文件名与文件属性。',
+            style: PsType.body.copyWith(
+              fontSize: 19,
+              height: 1.55,
+              color: PsColor.text.withValues(alpha: 0.58),
             ),
           ),
         ],
@@ -685,18 +736,24 @@ class _KeyArt extends StatelessWidget {
           posterImage(
             url,
             fit: BoxFit.cover,
-            alignment: Alignment.topRight,
+            alignment: Alignment.center,
             errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
                 const SizedBox.shrink(),
           ),
-        // Dissolve the art into the stage on its left and bottom edges.
+        // The copy sits on the left third; dissolve the picture there and let
+        // the right side stay visible, so the page still shows its art.
         const DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,
-              colors: <Color>[Color(0xFF05060C), Color(0xCC05060C), Color(0x00000000)],
-              stops: <double>[0.0, 0.42, 0.86],
+              colors: <Color>[
+                Color(0xF205060C),
+                Color(0xD905060C),
+                Color(0x6605060C),
+                Color(0x0005060C),
+              ],
+              stops: <double>[0.0, 0.34, 0.62, 0.88],
             ),
           ),
         ),
@@ -706,8 +763,179 @@ class _KeyArt extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: <Color>[Color(0x00000000), Color(0xE605060C)],
-              stops: <double>[0.55, 1.0],
+              stops: <double>[0.48, 1.0],
             ),
+          ),
+        ),
+        const Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          height: 160,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[Color(0x9905060C), Color(0x0005060C)],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One label/value pair in the file-information panel.
+class _InfoRow {
+  const _InfoRow(this.label, this.value);
+
+  final String label;
+  final String value;
+}
+
+/// Facts a local file can prove about itself.
+///
+/// A media server answers with overviews, credits and per-stream metadata. A
+/// file on disk has a name, a size, a timestamp and a directory — so the page
+/// reads those instead of showing an empty stage, and parses the release tags
+/// the scene convention encodes in the name.
+class _LocalInfo {
+  const _LocalInfo(this.rows);
+
+  final List<_InfoRow> rows;
+
+  static Future<_LocalInfo> read(MediaItem item) async {
+    final String path = item.path ?? '';
+    if (path.isEmpty) {
+      return const _LocalInfo(<_InfoRow>[]);
+    }
+    String size = item.meta ?? '—';
+    String modified = '—';
+    try {
+      final FileStat stat = await File(path).stat();
+      if (stat.type != FileSystemEntityType.notFound) {
+        size = _bytes(stat.size);
+        modified = _stamp(stat.modified);
+      }
+    } on Object {
+      // The page still has the name and the folder; no need to fail it.
+    }
+    final String name = path.split(RegExp(r'[\\/]')).last;
+    final int dot = name.lastIndexOf('.');
+    final String container = dot > 0 ? name.substring(dot + 1).toUpperCase() : '—';
+    final String folder = File(path).parent.path;
+    final String tech = item.tech ?? '';
+    final List<String> parts =
+        tech.isEmpty ? const <String>[] : tech.split(' · ');
+
+    String find(RegExp pattern, {String fallback = '—'}) {
+      for (final String part in parts) {
+        if (pattern.hasMatch(part)) {
+          return part;
+        }
+      }
+      return fallback;
+    }
+
+    final String resolution =
+        find(RegExp(r'^\d{3,4}p$|^\d+(?:\.\d+)?k$', caseSensitive: false));
+    final String video = find(RegExp(r'hevc|h\.?26[45]|av1|vp9', caseSensitive: false));
+    final String depth = find(RegExp(r'\d+-bit', caseSensitive: false));
+    final String audio =
+        find(RegExp(r'aac|ac3|eac3|dts|truehd|atmos|flac', caseSensitive: false));
+    final String hdr = find(RegExp(r'hdr|dolby vision|hlg', caseSensitive: false));
+    final String fps = find(RegExp(r'fps$', caseSensitive: false));
+
+    return _LocalInfo(<_InfoRow>[
+      _InfoRow('文件名', name),
+      _InfoRow('大小', size.isEmpty ? '—' : size),
+      _InfoRow('容器', container),
+      _InfoRow('分辨率', resolution),
+      _InfoRow('视频编码', video),
+      _InfoRow('位深', depth),
+      _InfoRow('音频', audio),
+      _InfoRow('HDR', hdr),
+      _InfoRow('帧率', fps),
+      _InfoRow('修改时间', modified),
+      _InfoRow('所在文件夹', folder),
+      _InfoRow('完整路径', path),
+    ]);
+  }
+
+  static String _bytes(int bytes) {
+    if (bytes <= 0) {
+      return '—';
+    }
+    const List<String> units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
+    double value = bytes.toDouble();
+    int unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return '${value.toStringAsFixed(value >= 10 ? 0 : 1)} ${units[unit]}';
+  }
+
+  static String _stamp(DateTime time) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${time.year}-${two(time.month)}-${two(time.day)} '
+        '${two(time.hour)}:${two(time.minute)}';
+  }
+}
+
+/// The two-column (wrapping) card under a local file's copy.
+class _FileInfoPanel extends StatelessWidget {
+  const _FileInfoPanel({required this.rows});
+
+  final List<_InfoRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text('文件信息', style: PsType.section.copyWith(fontSize: 20)),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+          decoration: BoxDecoration(
+            color: PsColor.text.withValues(alpha: 0.045),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: PsColor.hairline),
+          ),
+          child: Wrap(
+            spacing: 44,
+            runSpacing: 16,
+            children: <Widget>[
+              for (final _InfoRow row in rows)
+                SizedBox(
+                  width: 300,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(
+                        row.label,
+                        style: PsType.micro.copyWith(
+                          fontSize: 13,
+                          letterSpacing: 1.2,
+                          color: PsColor.textFaint,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        row.value,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: PsType.label.copyWith(fontSize: 17),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ),
         ),
       ],

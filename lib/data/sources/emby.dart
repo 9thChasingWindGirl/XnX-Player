@@ -60,7 +60,7 @@ class EmbySource extends MediaSource {
       _uri('/Users/AuthenticateByName'),
       <String, dynamic>{'Username': config.username, 'Pw': config.password},
       headers: _headers,
-    );
+    ).timeout(const Duration(seconds: 15));
     if (!result.ok) {
       throw SourceException(result.status == 401 ? '账号或密码不正确' : '连接失败（HTTP ${result.status}）');
     }
@@ -78,30 +78,42 @@ class EmbySource extends MediaSource {
   @override
   Future<List<MediaItem>> browse() async {
     await _ensureAuth();
-    // Page through the whole library. A single Limit=80 request silently
-    // truncated servers with more films — the reported "未能全部显示影片" —
-    // so walk StartIndex until TotalRecordCount is exhausted. 300 per page
-    // keeps each response light while a 2000-title library costs seven
-    // round-trips, not one enormous one.
-    const int pageSize = 300;
+    // Walk the newest titles only. A full recursive library is what produced
+    // the one-minute hang: a large Emby server answers page after page, the
+    // home screen waits for all of them, and the store's per-source timeout
+    // then throws away everything. The shelves never show more than a few
+    // hundred entries anyway, so a bounded window keeps the page responsive;
+    // the rest of the library is still reachable from the server's own views.
+    const int pageSize = 200;
+    const int maxItems = 600;
     final List<MediaItem> out = <MediaItem>[];
     int start = 0;
-    while (true) {
-      final Map<String, dynamic> data = await Http.getJson(
-        _uri('/Users/$_userId/Items', <String, String>{
-          'Recursive': 'true',
-          'IncludeItemTypes': 'Movie,Series',
-          'Fields': _fields,
-          'SortBy': 'DateCreated',
-          'SortOrder': 'Descending',
-          'Limit': '$pageSize',
-          'StartIndex': '$start',
-          'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
-        }),
-        headers: _headers,
-      );
+    while (out.length < maxItems) {
+      late Map<String, dynamic> data;
+      try {
+        data = await Http.getJson(
+          _uri('/Users/$_userId/Items', <String, String>{
+            'Recursive': 'true',
+            'IncludeItemTypes': 'Movie,Series',
+            'Fields': _fields,
+            'SortBy': 'DateCreated',
+            'SortOrder': 'Descending',
+            'Limit': '$pageSize',
+            'StartIndex': '$start',
+            'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
+          }),
+          headers: _headers,
+        ).timeout(const Duration(seconds: 12));
+      } on Object {
+        // A server that stalls on page N must not erase pages 1..N-1: the
+        // shelves are useful with a partial library, and an empty one is not.
+        if (out.isEmpty) {
+          rethrow;
+        }
+        break;
+      }
       final List<MediaItem> page = _items(data);
-      out.addAll(page);
+      out.addAll(page.take(maxItems - out.length));
       final int total = (data['TotalRecordCount'] as num?)?.toInt() ?? out.length;
       start += page.length;
       if (page.isEmpty || start >= total || page.length < pageSize) {
@@ -125,7 +137,7 @@ class EmbySource extends MediaSource {
         'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
       }),
       headers: _headers,
-    );
+    ).timeout(const Duration(seconds: 15));
     return _items(data);
   }
 
@@ -161,7 +173,7 @@ class EmbySource extends MediaSource {
     final Map<String, dynamic> data = await Http.getJson(
       _uri('/Users/$_userId/Items/$nativeId', <String, String>{'Fields': _detailFields}),
       headers: _headers,
-    );
+    ).timeout(const Duration(seconds: 15));
     final MediaItem? parsed = _parse(data);
     if (parsed == null) {
       return item;
@@ -543,7 +555,8 @@ class EmbySource extends MediaSource {
             'SortOrder': 'Ascending',
             'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
           });
-    final Map<String, dynamic> data = await Http.getJson(uri, headers: _headers);
+    final Map<String, dynamic> data =
+        await Http.getJson(uri, headers: _headers).timeout(const Duration(seconds: 20));
     return _items(data);
   }
 

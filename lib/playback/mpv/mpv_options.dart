@@ -188,8 +188,13 @@ Map<String, String> buildMpvOptions({
 
   if (settings.hdrPassthrough) {
     options['target-colorspace-hint'] = 'auto';
+    // libass overlays are sRGB. Anchored to the 203-nit SDR reference they
+    // read grey against PQ video; 300 nits keeps the OSD's contrast. The Lua
+    // side re-applies this when the swapchain actually enters HDR.
+    options['sub-hdr-peak'] = '300';
   } else {
     options['target-colorspace-hint'] = 'no';
+    options['sub-hdr-peak'] = 'auto';
   }
 
   options.addAll(qualityOptions(settings.quality));

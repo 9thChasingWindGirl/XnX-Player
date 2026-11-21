@@ -37,7 +37,10 @@ class PsButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color foreground = primary ? const Color(0xFF0B0D16) : PsColor.text;
+    // A white primary fill turns the white focus ring into a second, slightly
+    // larger outline around the same pill — two rounded shapes with nothing
+    // between them. The accent fill keeps the ring legible as a ring.
+    const Color foreground = PsColor.text;
     return Opacity(
       opacity: enabled ? 1 : 0.45,
       child: TvFocusable(
@@ -51,10 +54,10 @@ class PsButton extends StatelessWidget {
           height: height,
           padding: EdgeInsets.symmetric(horizontal: primary ? 30 : 24),
           decoration: BoxDecoration(
-            color: primary ? PsColor.text : PsColor.text.withValues(alpha: 0.08),
+            color: primary ? PsColor.accent : PsColor.text.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(PsRadius.pill),
             border: primary
-                ? null
+                ? Border.all(color: PsColor.text.withValues(alpha: 0.22), width: 1.5)
                 : Border.all(color: PsColor.text.withValues(alpha: 0.18), width: 2),
           ),
           child: Row(
@@ -112,13 +115,18 @@ class PsIconButton extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: selected ? PsColor.text : PsColor.text.withValues(alpha: 0.08),
-          border: selected ? null : Border.all(color: PsColor.text.withValues(alpha: 0.18), width: 2),
+          color: selected ? PsColor.accent : PsColor.text.withValues(alpha: 0.08),
+          border: Border.all(
+            color: selected
+                ? PsColor.text.withValues(alpha: 0.22)
+                : PsColor.text.withValues(alpha: 0.18),
+            width: selected ? 1.5 : 2,
+          ),
         ),
         child: Icon(
           icon,
           size: size * 0.42,
-          color: selected ? const Color(0xFF0B0D16) : PsColor.text,
+          color: PsColor.text,
         ),
       ),
     );
