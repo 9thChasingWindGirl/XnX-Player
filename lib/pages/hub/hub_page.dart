@@ -622,11 +622,11 @@ class _Info extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                       decoration: BoxDecoration(
                         color: i == sourceIndex
-                            ? PsColor.amber.withValues(alpha: 0.18)
+                            ? PsColor.warning.withValues(alpha: 0.18)
                             : Colors.white.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(
-                          color: i == sourceIndex ? PsColor.amber : PsColor.line,
+                          color: i == sourceIndex ? PsColor.warning : PsColor.hairline,
                         ),
                       ),
                       child: Text(
@@ -635,7 +635,7 @@ class _Info extends StatelessWidget {
                           fontSize: 15,
                           height: 1.1,
                           fontWeight: FontWeight.w500,
-                          color: i == sourceIndex ? PsColor.amber : PsColor.textDim,
+                          color: i == sourceIndex ? PsColor.warning : PsColor.textDim,
                         ),
                       ),
                     ),
