@@ -228,7 +228,11 @@ class _HubPageState extends State<HubPage> {
           final double artArrive = stagger(_age, 1, offset: 0.06, duration: 0.7);
           final double shelfArrive = stagger(_age, 2, offset: 0.08, duration: 0.7);
           final bool local = item.sourceKind == SourceKind.local;
-          final bool shelf = !local && (showEpisodes || (item.cast.isNotEmpty && !_loading));
+          // A shelf earns its row whenever there is something to put on it:
+          // episodes for a series (local ones enumerate too now) or credits
+          // for a movie. It is not a server-only affordance.
+          final bool shelf =
+              showEpisodes || (item.cast.isNotEmpty && !_loading);
 
           return Stack(
             fit: StackFit.expand,
@@ -1029,6 +1033,22 @@ class _LocalInfo {
     final String path = item.path ?? '';
     if (path.isEmpty) {
       return const _LocalInfo(<_InfoRow>[]);
+    }
+    // A series container points at its show folder rather than at a video:
+    // stat the directory instead of reporting a container for a file that is
+    // not there.
+    try {
+      final FileStat dirStat = await FileStat.stat(path);
+      if (dirStat.type == FileSystemEntityType.directory) {
+        return _LocalInfo(<_InfoRow>[
+          _InfoRow('类型', '剧集文件夹'),
+          if ((item.group ?? '').isNotEmpty) _InfoRow('剧集', item.group!),
+          _InfoRow('修改时间', _stamp(dirStat.modified)),
+          _InfoRow('完整路径', path),
+        ]);
+      }
+    } on Object {
+      // Not a reachable directory; fall through to the file rows.
     }
     String size = item.meta ?? '—';
     String modified = '—';

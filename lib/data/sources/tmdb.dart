@@ -348,7 +348,7 @@ class Tmdb {
       artwork: portal.artwork,
       headers: source.headers,
       favorite: source.favorite,
-      group: portal.group,
+      group: portal.group ?? source.group,
       resumeAt: source.resumeAt,
       year: portal.year,
       rating: portal.rating,
@@ -361,6 +361,10 @@ class Tmdb {
       tech: source.tech ?? portal.tech,
       seriesStatus: portal.seriesStatus ?? source.seriesStatus,
       tmdbId: portal.tmdbId,
+      // The portal record knows nothing about a local file's place in a show;
+      // dropping these turns a browsable series back into a flat item.
+      season: source.season,
+      episode: source.episode,
     );
   }
 
