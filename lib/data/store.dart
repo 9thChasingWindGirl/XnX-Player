@@ -74,6 +74,18 @@ class AppStore extends ChangeNotifier {
 
   bool get isEmpty => items.isEmpty;
 
+  /// The TMDB API key configured as a metadata source, or an empty string.
+  String get tmdbKey {
+    for (final SourceConfig config in sources) {
+      if (config.kind == SourceKind.tmdb && config.enabled) {
+        return config.token.trim();
+      }
+    }
+    return '';
+  }
+
+  bool get hasTmdb => tmdbKey.isNotEmpty;
+
   Future<void> load() async {
     AppLog.info('读取配置：$statePath');
     try {
@@ -153,6 +165,7 @@ class AppStore extends ChangeNotifier {
       SourceKind.webdav => WebDavSource(config),
       SourceKind.local => LocalSource(config),
       SourceKind.directUrl => LocalSource(config),
+      SourceKind.tmdb => throw const SourceException('TMDB 只提供门户元数据，不提供媒体文件'),
     };
     _open[config.id] = created;
     return created;
@@ -221,7 +234,10 @@ class AppStore extends ChangeNotifier {
     final Set<String> seen = <String>{};
 
     try {
-      for (final SourceConfig config in sources.where((SourceConfig entry) => entry.enabled)) {
+      // TMDB is a metadata portal: it has no files to enumerate, so it never
+      // takes part in the library refresh.
+      for (final SourceConfig config
+          in sources.where((SourceConfig entry) => entry.enabled && entry.kind != SourceKind.tmdb)) {
         try {
           // One stalled source must not hold the whole library hostage: each
           // source gets its own deadline, and a miss is recorded as an error

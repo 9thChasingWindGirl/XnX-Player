@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../../core/app_log.dart';
 import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
+import '../../data/sources/tmdb.dart';
 import '../../data/store.dart';
 import '../../design/ps_tokens.dart';
 import '../../shell/shell_page.dart' show shellSourceFilter;
@@ -91,11 +93,22 @@ class _HomePageState extends State<HomePage> {
   int _heroIndex = 0;
   Timer? _heroTimer;
 
+  /// TMDB portal rows. Null until the key answers, or when none is configured.
+  TmdbHome? _tmdbHome;
+  String _tmdbKey = '';
+  bool _tmdbLoading = false;
+  bool _tmdbTried = false;
+
+  /// Genre filter applied to the portal rows, null = every category.
+  String? _genre;
+
   @override
   void initState() {
     super.initState();
     _rows = _computeRows();
     _syncHero();
+    _tmdbKey = AppStore.instance.tmdbKey;
+    _fetchTmdb(_tmdbKey);
     AppStore.instance.addListener(_onStore);
     _sourceFilter.addListener(_onFilter);
     _publishFeatured();
@@ -114,6 +127,7 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     setState(() {
+      _genre = null;
       _rows = _computeRows();
       _syncHero();
     });
@@ -124,6 +138,14 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) {
       return;
     }
+    final String key = AppStore.instance.tmdbKey;
+    if (key != _tmdbKey) {
+      _tmdbKey = key;
+      _tmdbHome = null;
+      _tmdbLoading = false;
+      _tmdbTried = false;
+      _fetchTmdb(key);
+    }
     setState(() {
       _rows = _computeRows();
       _syncHero();
@@ -131,17 +153,69 @@ class _HomePageState extends State<HomePage> {
     _publishFeatured();
   }
 
+  /// Loads the portal rows in the background. The source library keeps
+  /// rendering while this runs; a failed or missing key just leaves the home
+  /// on the media-source rows.
+  void _fetchTmdb(String key) {
+    if (key.isEmpty) {
+      _tmdbLoading = false;
+      return;
+    }
+    if (_tmdbLoading) {
+      return;
+    }
+    _tmdbLoading = true;
+    unawaited(
+      Tmdb(key).home().then((TmdbHome home) {
+        if (!mounted || _tmdbKey != key) {
+          return;
+        }
+        final bool empty = home.all.isEmpty;
+        setState(() {
+          _tmdbHome = empty ? null : home;
+          _tmdbLoading = false;
+          _tmdbTried = true;
+          _rows = _computeRows();
+          _syncHero();
+        });
+        _publishFeatured();
+        if (empty) {
+          AppLog.warn('TMDB 未返回任何条目，请检查 API Key 与网络');
+        } else {
+          AppLog.info(
+              'TMDB 首页已载入：趋势 ${home.trending.length}，电影 ${home.popularMovies.length}，剧集 ${home.popularTv.length}');
+        }
+      }).catchError((Object error) {
+        AppLog.warn('TMDB 首页加载失败：$error');
+        if (mounted) {
+          setState(() {
+            _tmdbLoading = false;
+            _tmdbTried = true;
+          });
+        }
+      }),
+    );
+  }
+
   /// Builds the carousel from what is actually resumable/new, then starts the
   /// rotation. Called only for an index reset; the periodic timer handles the
   /// rest.
   void _syncHero() {
     final AppStore store = AppStore.instance;
+    final String? filter = _sourceFilter.value;
+    bool keep(MediaItem item) =>
+        (filter == null || item.sourceId == filter) &&
+        (_genre == null || item.genres.contains(_genre));
+    final List<MediaItem> pool = <MediaItem>[
+      ...store.continueWatching.where(keep),
+      ...store.recent.reversed.where(keep),
+      if (filter == null && _tmdbHome != null) ...Tmdb.link(_tmdbHome!.all, store.items),
+      // A source view still needs a hero when nothing is resumable.
+      ...store.items.where(keep),
+    ];
     final List<MediaItem> next = <MediaItem>[];
     final Set<String> seen = <String>{};
-    for (final MediaItem item in <MediaItem>[
-      ...store.continueWatching,
-      ...store.recent.reversed,
-    ]) {
+    for (final MediaItem item in pool) {
       if (seen.add(item.id)) {
         next.add(item);
       }
@@ -216,15 +290,103 @@ class _HomePageState extends State<HomePage> {
   /// the saved order stays valid without a migration.
   List<_Row> _computeRows() {
     final AppStore store = AppStore.instance;
+
+    // A selected media source is its own home: its metadata and its files.
+    // TMDB is the aggregate view and deliberately does not replace this.
+    final String? sourceFilter = _sourceFilter.value;
+    if (sourceFilter != null) {
+      bool keep(MediaItem item) =>
+          item.sourceId == sourceFilter &&
+          (_genre == null || item.genres.contains(_genre));
+      final List<MediaItem> own =
+          store.items.where(keep).toList(growable: false);
+      final List<MediaItem> resuming = store.continueWatching
+          .where(keep)
+          .toList(growable: false);
+      final List<MediaItem> recent = store.recent.reversed
+          .where(keep)
+          .toList(growable: false);
+      final List<MediaItem> favorites =
+          own.where((MediaItem item) => item.favorite).toList(growable: false);
+      final List<MediaItem> watching = own
+          .where((MediaItem item) =>
+              item.kind == MediaKind.series &&
+              item.progress > 0.01 &&
+              item.progress < 0.97)
+          .toList(growable: false);
+      final List<MediaItem> live =
+          own.where((MediaItem item) => item.kind == MediaKind.channel).toList(growable: false);
+      final List<MediaItem> all = own
+          .where((MediaItem item) => item.kind != MediaKind.channel)
+          .take(30)
+          .toList(growable: false);
+      return <_Row>[
+        if (resuming.isNotEmpty)
+          _Row('continue', S.continueWatching, resuming, wide: true),
+        if (recent.isNotEmpty) _Row('recent', S.recentlyAdded, recent),
+        if (all.isNotEmpty) _Row('all', '全部媒体', all),
+        if (favorites.isNotEmpty) _Row('favorites', S.favoritesShelf, favorites),
+        if (watching.isNotEmpty) _Row('watching', S.watchingShelf, watching),
+        if (live.isNotEmpty) _Row('live', S.liveChannels, live, wide: true),
+      ];
+    }
+
+    final TmdbHome? tmdb = _tmdbHome;
     final List<MediaItem> airing = _airing();
     final List<MediaItem> recommended = _recommended(store);
+
+    // Portal rows. Every TMDB title is linked to a configured file when one
+    // matches; unmatched ones stay in the row and report the missing source on
+    // their detail page.
+    final Set<String> seenTmdb = <String>{};
+    List<MediaItem> portal(List<MediaItem> source) {
+      final List<MediaItem> out = <MediaItem>[];
+      for (final MediaItem item in Tmdb.link(source, store.items)) {
+        if (seenTmdb.add(item.id)) {
+          out.add(item);
+        }
+      }
+      return out;
+    }
+
+    List<MediaItem> portalRows = const <MediaItem>[];
+    List<_Row> tmdbRows = const <_Row>[];
+    if (tmdb != null) {
+      final List<MediaItem> nowPlaying = portal(tmdb.nowPlaying);
+      final List<MediaItem> movies = portal(tmdb.popularMovies);
+      final List<MediaItem> tv = portal(tmdb.popularTv);
+      final List<MediaItem> air = portal(tmdb.onTheAir);
+      final List<MediaItem> upcoming = portal(tmdb.upcoming);
+      final List<MediaItem> trending = portal(tmdb.trending);
+      portalRows = <MediaItem>[...nowPlaying, ...movies, ...tv, ...air, ...upcoming, ...trending];
+      tmdbRows = <_Row>[
+        if (nowPlaying.isNotEmpty) _Row('tmdb-now', '正在上映', nowPlaying),
+        if (movies.isNotEmpty) _Row('tmdb-movies', '热门电影', movies),
+        if (tv.isNotEmpty) _Row('tmdb-tv', '热门剧集', tv),
+        if (air.isNotEmpty) _Row('tmdb-air', '正在播出', air),
+        if (upcoming.isNotEmpty) _Row('tmdb-upcoming', '即将上映', upcoming),
+        if (trending.isNotEmpty) _Row('tmdb-trending', '本周趋势', trending),
+        if (recommended.isNotEmpty) _Row('recommended', '关联推荐', recommended),
+      ];
+    }
+
+    final List<MediaItem> genreRow = _genre == null
+        ? const <MediaItem>[]
+        : portalRows.where((MediaItem item) => item.genres.contains(_genre)).toList(growable: false);
+
     final List<_Row> all = <_Row>[
       if (store.continueWatching.isNotEmpty)
         _Row('continue', S.continueWatching, store.continueWatching, wide: true),
-      if (airing.isNotEmpty) _Row('airing', '正在播出', airing),
       if (store.recent.isNotEmpty)
         _Row('recent', S.recentlyAdded, store.recent.reversed.toList(growable: false)),
-      if (recommended.isNotEmpty) _Row('recommended', '关联推荐', recommended),
+      if (_genre != null) ...<_Row>[
+        if (genreRow.isNotEmpty) _Row('genre', '类型 · $_genre', genreRow),
+      ]
+      else if (tmdb == null) ...<_Row>[
+        if (airing.isNotEmpty) _Row('airing', '正在播出', airing),
+        if (recommended.isNotEmpty) _Row('recommended', '关联推荐', recommended),
+      ]
+      else ...tmdbRows,
       if (store.items.any((MediaItem item) => item.favorite))
         _Row('favorites', S.favoritesShelf,
             store.items.where((MediaItem item) => item.favorite).toList(growable: false)),
@@ -304,9 +466,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Genres present in the library, for the category quick-jump row.
-  List<String> _categories(AppStore store) {
+  List<String> _categories(AppStore store) => _categoriesOf(store.items);
+
+  List<String> _categoriesOf(Iterable<MediaItem> items) {
     final Set<String> genres = <String>{};
-    for (final MediaItem item in store.items) {
+    for (final MediaItem item in items) {
       genres.addAll(item.genres);
     }
     final List<String> out = genres.toList()..sort();
@@ -329,7 +493,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     if (_rows.isEmpty) {
-      if (AppStore.instance.loading && AppStore.instance.errors.isEmpty) {
+      final bool waitingTmdb = _tmdbKey.isNotEmpty && !_tmdbTried;
+      if ((AppStore.instance.loading && AppStore.instance.errors.isEmpty) || waitingTmdb) {
         return const _Skeleton();
       }
       return _EmptyState(
@@ -341,7 +506,13 @@ class _HomePageState extends State<HomePage> {
     }
 
     final MediaItem featured = _currentHero ?? _featured ?? _rows.first.items.first;
-    final List<String> categories = _categories(AppStore.instance);
+    final String? filter = _sourceFilter.value;
+    final List<String> categories = filter != null
+        ? _categoriesOf(
+            AppStore.instance.items.where((MediaItem item) => item.sourceId == filter))
+        : (_tmdbHome != null
+            ? _tmdbHome!.genres.map((TmdbGenre genre) => genre.name).toList(growable: false)
+            : _categories(AppStore.instance));
 
     return ColoredBox(
       color: PlexColor.bg,
@@ -353,7 +524,11 @@ class _HomePageState extends State<HomePage> {
           children: <Widget>[
             PlexHero(
               item: featured,
-              onPlay: () => widget.onPlay(featured),
+              // A portal title with no file behind it opens its detail page,
+              // which explains the missing media source.
+              onPlay: () => featured.playable
+                  ? widget.onPlay(featured)
+                  : widget.onOpenItem(featured),
               onDetails: () => widget.onOpenItem(featured),
               onFavorite: () => AppStore.instance.toggleFavorite(featured),
               carouselIndex: _heroItems.length > 1 ? _heroIndex : null,
@@ -425,24 +600,55 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// A portal genre filters the TMDB rows in place; without a TMDB key the
+  /// same chip jumps to the library's genre filter.
+  void _pickGenre(String? genre) {
+    final bool sourceView = _sourceFilter.value != null;
+    if (_tmdbHome == null && !sourceView) {
+      // No portal and no source home to filter: the library is the only place
+      // that can answer a genre query.
+      widget.onOpenGenre(genre);
+      return;
+    }
+    setState(() {
+      _genre = genre;
+      _rows = _computeRows();
+      _syncHero();
+    });
+    if (_flow.hasClients) {
+      _flow.animateTo(
+        0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
   Widget _categoryChip(String label, String? genre) {
+    final bool selected = genre == null ? _genre == null : _genre == genre;
     return TvFocusable(
       radius: 999,
-      onSelect: () => widget.onOpenGenre(genre),
-      child: Container(
+      showRing: false,
+      onSelect: () => _pickGenre(genre),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.06),
+          color: selected
+              ? PlexColor.amber.withValues(alpha: 0.18)
+              : Colors.white.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: PlexColor.line),
+          border: Border.all(
+            color: selected ? PlexColor.amber : PlexColor.line,
+          ),
         ),
         child: Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 16,
             height: 1.1,
             fontWeight: FontWeight.w500,
-            color: PlexColor.textDim,
+            color: selected ? PlexColor.amber : PlexColor.textDim,
           ),
         ),
       ),
@@ -532,7 +738,8 @@ class _HomePageState extends State<HomePage> {
             ),
             onFocus: (int value) => _focusAt(index, value),
             onSelect: widget.onOpenItem,
-            onLongSelect: widget.onPlay,
+            onLongSelect: (MediaItem item) =>
+                item.playable ? widget.onPlay(item) : widget.onOpenItem(item),
           ),
         ),
       ],

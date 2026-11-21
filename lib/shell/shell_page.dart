@@ -130,6 +130,7 @@ class _ShellPageState extends State<ShellPage> {
 
   /// The switcher pill lists registered sources by display name.
   List<SourceOption> _storeSources() => AppStore.instance.sources
+      .where((SourceConfig config) => config.kind != SourceKind.tmdb)
       .map((SourceConfig config) => SourceOption(config.id, config.label))
       .toList(growable: false);
 

@@ -46,6 +46,8 @@ class _SourceDialogState extends State<SourceDialog> {
       TextEditingController(text: widget.initial?.password ?? '');
   late final TextEditingController _path =
       TextEditingController(text: widget.initial?.path ?? '');
+  late final TextEditingController _token =
+      TextEditingController(text: widget.initial?.token ?? '');
   String? _error;
 
   /// This dialog's place in the input stack.
@@ -59,6 +61,7 @@ class _SourceDialogState extends State<SourceDialog> {
     (SourceKind.webdav, 'WebDAV'),
     (SourceKind.local, '本地文件夹'),
     (SourceKind.directUrl, '直链'),
+    (SourceKind.tmdb, 'TMDB'),
   ];
 
   @override
@@ -77,6 +80,7 @@ class _SourceDialogState extends State<SourceDialog> {
     _user.dispose();
     _pass.dispose();
     _path.dispose();
+    _token.dispose();
     super.dispose();
   }
 
@@ -91,7 +95,9 @@ class _SourceDialogState extends State<SourceDialog> {
     return true;
   }
 
-  bool get _needsUrl => _kind != SourceKind.local;
+  bool get _isTmdb => _kind == SourceKind.tmdb;
+  bool get _needsUrl => _kind != SourceKind.local && !_isTmdb;
+  bool get _needsPath => _kind == SourceKind.local;
   bool get _needsAccount =>
       _kind == SourceKind.emby ||
       _kind == SourceKind.jellyfin ||
@@ -113,11 +119,16 @@ class _SourceDialogState extends State<SourceDialog> {
     final String name = _name.text.trim();
     final String url = _url.text.trim();
     final String path = _path.text.trim();
-    if (_needsUrl && url.isEmpty) {
+    final String token = _token.text.trim();
+    if (_isTmdb) {
+      if (token.isEmpty) {
+        setState(() => _error = '请填写 TMDB API Key（v3 Key 或 v4 Read Access Token）');
+        return;
+      }
+    } else if (_needsUrl && url.isEmpty) {
       setState(() => _error = S.connectHint);
       return;
-    }
-    if (!_needsUrl && path.isEmpty) {
+    } else if (_needsPath && path.isEmpty) {
       setState(() => _error = '请选择一个文件夹');
       return;
     }
@@ -132,7 +143,7 @@ class _SourceDialogState extends State<SourceDialog> {
         username: _user.text.trim(),
         password: _pass.text,
         path: path,
-        token: widget.initial?.token ?? '',
+        token: _isTmdb ? token : (widget.initial?.token ?? ''),
         userId: widget.initial?.userId ?? '',
         enabled: widget.initial?.enabled ?? true,
       ),
@@ -203,9 +214,12 @@ class _SourceDialogState extends State<SourceDialog> {
                             children: <Widget>[
                               _field(S.sourceName, _name, hint: _labelFor(_kind), autofocus: true),
                               const SizedBox(height: 18),
-                              if (_needsUrl)
-                                _field(S.sourceUrl, _url, hint: 'https://'),
-                              if (!_needsUrl) _pathField(),
+                              if (_isTmdb)
+                                _field('TMDB API Key', _token, hint: 'v3 API Key 或 v4 Token')
+                              else if (_needsUrl)
+                                _field(S.sourceUrl, _url, hint: 'https://')
+                              else
+                                _pathField(),
                             ],
                           ),
                         ),

@@ -684,6 +684,7 @@ class CcSourcesPanel extends StatelessWidget {
     SourceKind.webdav => 'WebDAV',
     SourceKind.local => '本地',
     SourceKind.directUrl => '直链',
+    SourceKind.tmdb => 'TMDB',
   };
 
   @override

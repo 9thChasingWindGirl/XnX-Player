@@ -7,6 +7,7 @@ import '../../core/input/input_action.dart';
 import '../../core/input/input_router.dart';
 import '../../core/strings.dart';
 import '../../data/models/media_item.dart';
+import '../../data/sources/tmdb.dart';
 import '../../data/store.dart';
 import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
@@ -57,6 +58,11 @@ class _HubPageState extends State<HubPage> {
   /// the detail page reads what the file system and the file name can prove:
   /// size, container, resolution, codecs, HDR, location and timestamps.
   _LocalInfo? _local;
+
+  /// Portal aggregation: every configured file that can play this title.
+  List<MediaItem> _providers = const <MediaItem>[];
+  int _providerIndex = 0;
+  MediaItem? _portal;
 
   bool _loading = false;
   String? _error;
@@ -130,7 +136,39 @@ class _HubPageState extends State<HubPage> {
       // The full record first: it is what the page is built from, and a movie
       // needs nothing else. `details` swallows its own failures and returns the
       // projection, so this can never cost the page.
-      final MediaItem full = await AppStore.instance.details(item);
+      MediaItem full;
+      if (item.tmdbId != null) {
+        // Portal titles get their cast and overview from TMDB. Every matching
+        // file becomes a selectable "play from" provider, so a title that is
+        // both local and on Emby can be played from either one.
+        final String key = AppStore.instance.tmdbKey;
+        final MediaItem base = key.isEmpty ? item : await Tmdb(key).details(item);
+        _portal = base;
+        List<MediaItem> providers = Tmdb.matches(base, AppStore.instance.items);
+        if (providers.isEmpty && (item.path ?? '').isNotEmpty) {
+          providers = <MediaItem>[item];
+        }
+        _providers = providers;
+        _providerIndex =
+            providers.indexWhere((MediaItem source) => source.id == item.id);
+        if (_providerIndex < 0) {
+          _providerIndex = 0;
+        }
+        full = providers.isEmpty ? base : Tmdb.attach(base, providers[_providerIndex]);
+        if (providers.isNotEmpty) {
+          final MediaItem source = await AppStore.instance.details(full);
+          full = full.copyWith(
+            tech: source.tech ?? full.tech,
+            duration: full.duration ?? source.duration,
+            path: source.path,
+            progress: source.progress,
+            resumeAt: source.resumeAt,
+            seriesStatus: full.seriesStatus ?? source.seriesStatus,
+          );
+        }
+      } else {
+        full = await AppStore.instance.details(item);
+      }
       _LocalInfo? local;
       if (full.sourceKind == SourceKind.local) {
         local = await _LocalInfo.read(full);
@@ -145,7 +183,14 @@ class _HubPageState extends State<HubPage> {
       if (!drillable) {
         return;
       }
-      final List<MediaItem> children = await AppStore.instance.children(item);
+      if ((full.path ?? '').isEmpty) {
+        // A portal-only series has no folder to enumerate.
+        if (mounted) {
+          setState(() => _loading = false);
+        }
+        return;
+      }
+      final List<MediaItem> children = await AppStore.instance.children(full);
       if (!mounted) {
         return;
       }
@@ -226,6 +271,11 @@ class _HubPageState extends State<HubPage> {
                                     onFavorite: _toggleFavorite,
                                     onPlay: _play,
                                     onBack: () => Navigator.of(context).maybePop(),
+                                    sources: _providers
+                                        .map(_sourceLabel)
+                                        .toList(growable: false),
+                                    sourceIndex: _providerIndex,
+                                    onSource: _switchProvider,
                                   ),
                                 ),
                               ),
@@ -290,12 +340,68 @@ class _HubPageState extends State<HubPage> {
     AppStore.instance.toggleFavorite(item);
   }
 
+  /// Switches the portal detail to another configured file. The presentation
+  /// stays TMDB's; only the playback source, path and episode list change.
+  Future<void> _switchProvider(int index) async {
+    final MediaItem? base = _portal;
+    if (base == null || index < 0 || index >= _providers.length || index == _providerIndex) {
+      return;
+    }
+    MediaItem full = Tmdb.attach(base, _providers[index]);
+    try {
+      final MediaItem source = await AppStore.instance.details(full);
+      full = full.copyWith(
+        tech: source.tech ?? full.tech,
+        duration: source.duration ?? full.duration,
+        path: source.path,
+        progress: source.progress,
+        resumeAt: source.resumeAt,
+      );
+    } on Object {
+      // The provider may be offline; the path from the linked item still works.
+    }
+    _LocalInfo? local;
+    if (full.sourceKind == SourceKind.local) {
+      local = await _LocalInfo.read(full);
+    }
+    if (!mounted) {
+      return;
+    }
+    final bool drillable = full.kind == MediaKind.series ||
+        full.kind == MediaKind.folder ||
+        full.kind == MediaKind.season;
+    setState(() {
+      _providerIndex = index;
+      _detail = full;
+      _local = local;
+      _children = const <MediaItem>[];
+      _loading = drillable && (full.path ?? '').isNotEmpty;
+    });
+    if (drillable && (full.path ?? '').isNotEmpty) {
+      final List<MediaItem> children = await AppStore.instance.children(full);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _children = children;
+        _loading = false;
+      });
+    }
+  }
+
   /// A season or a folder is not playable itself: the button plays its first
   /// child, which is what "继续播放" means on a season cover.
   void _play() {
     final MediaItem item = _detail ?? widget.item;
     final MediaItem? first = _children.isNotEmpty ? _children.first : null;
-    widget.onPlay(first ?? item, _children);
+    if (first != null) {
+      widget.onPlay(first, _children);
+      return;
+    }
+    if (!item.playable) {
+      return;
+    }
+    widget.onPlay(item, _children);
   }
 
   static String _sourceLabel(MediaItem item) => switch (item.sourceKind) {
@@ -306,6 +412,7 @@ class _HubPageState extends State<HubPage> {
         SourceKind.webdav => 'WEBDAV',
         SourceKind.directUrl => 'URL',
         SourceKind.local => '本地',
+        SourceKind.tmdb => 'TMDB',
       };
 }
 
@@ -373,6 +480,9 @@ class _Info extends StatelessWidget {
     required this.onFavorite,
     required this.onPlay,
     required this.onBack,
+    this.sources = const <String>[],
+    this.sourceIndex = 0,
+    this.onSource,
   });
 
   final MediaItem item;
@@ -380,6 +490,11 @@ class _Info extends StatelessWidget {
   final VoidCallback onFavorite;
   final VoidCallback onPlay;
   final VoidCallback onBack;
+
+  /// Every configured file that can play this portal title, by source label.
+  final List<String> sources;
+  final int sourceIndex;
+  final ValueChanged<int>? onSource;
 
   @override
   Widget build(BuildContext context) {
@@ -483,16 +598,87 @@ class _Info extends StatelessWidget {
             style: PsType.micro.copyWith(fontSize: 16, letterSpacing: 0.6),
           ),
         ],
+        if (sources.length > 1) ...<Widget>[
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              Text(
+                '播放来源',
+                style: PsType.micro.copyWith(
+                  fontSize: 13,
+                  letterSpacing: 1.2,
+                  color: PsColor.textFaint,
+                ),
+              ),
+              const SizedBox(width: 10),
+              for (int i = 0; i < sources.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: TvFocusable(
+                    radius: 999,
+                    onSelect: () => onSource?.call(i),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: i == sourceIndex
+                            ? PsColor.amber.withValues(alpha: 0.18)
+                            : Colors.white.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: i == sourceIndex ? PsColor.amber : PsColor.line,
+                        ),
+                      ),
+                      child: Text(
+                        sources[i],
+                        style: TextStyle(
+                          fontSize: 15,
+                          height: 1.1,
+                          fontWeight: FontWeight.w500,
+                          color: i == sourceIndex ? PsColor.amber : PsColor.textDim,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+        if (item.tmdbId != null && (item.path ?? '').isEmpty) ...<Widget>[
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Icon(Icons.link_off_rounded, size: 20, color: PsColor.warning),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '该条目由 TMDB 提供，但当前媒体源中没有找到对应文件。请在“媒体库”中接入来源，或确认本地文件名与 TMDB 标题一致。',
+                  style: PsType.micro.copyWith(
+                    fontSize: 16,
+                    height: 1.5,
+                    color: PsColor.warning,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 30),
         Row(
           children: <Widget>[
             PsButton(
-              label: item.progress > 0.02 ? S.resume : S.play,
-              icon: Icons.play_arrow_rounded,
-              primary: true,
+              label: (item.path ?? '').isEmpty
+                  ? '缺少媒体源'
+                  : (item.progress > 0.02 ? S.resume : S.play),
+              icon: (item.path ?? '').isEmpty
+                  ? Icons.link_off_rounded
+                  : Icons.play_arrow_rounded,
+              primary: (item.path ?? '').isNotEmpty,
+              enabled: (item.path ?? '').isNotEmpty,
               width: 232,
               accent: item.accentColor,
-              onSelect: onPlay,
+              onSelect: (item.path ?? '').isNotEmpty ? onPlay : null,
             ),
             const SizedBox(width: 18),
             PsIconButton(

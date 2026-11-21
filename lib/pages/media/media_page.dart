@@ -253,7 +253,11 @@ class _SourceRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<SourceConfig> sources = AppStore.instance.sources;
+    // TMDB is configured in the same dialog but has no files, so it must not
+    // appear as a library filter.
+    final List<SourceConfig> sources = AppStore.instance.sources
+        .where((SourceConfig config) => config.kind != SourceKind.tmdb)
+        .toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -311,6 +315,7 @@ class _SourceRail extends StatelessWidget {
         SourceKind.webdav => 'DAV',
         SourceKind.local => '本地',
         SourceKind.directUrl => 'URL',
+        SourceKind.tmdb => 'TMDB',
       };
 }
 

@@ -69,7 +69,7 @@ abstract final class OsdChrome {
   /// The seek strip, kept for the geometry tests and the wheel zone.
   static List<ui.Rect> hotZones(ui.Size size) {
     final ui.Rect track = seekTrack(size);
-    final double half = seekHitHeight / 2;
+    const double half = seekHitHeight / 2;
     return <ui.Rect>[
       ui.Rect.fromLTRB(
         track.left,

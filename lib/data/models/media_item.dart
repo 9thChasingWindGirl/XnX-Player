@@ -5,7 +5,7 @@ import 'artwork.dart';
 
 /// Where a media item comes from. The UI treats every source the same way: a
 /// poster, a title, a play action.
-enum SourceKind { local, directUrl, emby, jellyfin, iptv, openlist, webdav }
+enum SourceKind { local, directUrl, emby, jellyfin, iptv, openlist, webdav, tmdb }
 
 enum MediaKind { movie, series, season, episode, channel, folder, file, program }
 
@@ -80,6 +80,7 @@ class MediaItem {
     this.officialRating,
     this.tech,
     this.seriesStatus,
+    this.tmdbId,
   });
 
   final String id;
@@ -149,6 +150,11 @@ class MediaItem {
   /// A server's own series state: `Continuing`, `Ended`, ... (Emby/Jellyfin).
   /// The home screen uses it for "正在播出"; it is null for movies and files.
   final String? seriesStatus;
+
+  /// TMDB id when this item was discovered through the portal. A linked item
+  /// keeps its media source for playback but this id lets the detail page pull
+  /// the richer TMDB record.
+  final int? tmdbId;
 
   /// Cast with a role, which is what a detail page shows first.
   List<MediaPerson> get cast =>
@@ -254,6 +260,7 @@ class MediaItem {
     String? officialRating,
     String? tech,
     String? seriesStatus,
+    int? tmdbId,
     Artwork? artwork,
   }) {
     return MediaItem(
@@ -286,6 +293,7 @@ class MediaItem {
       officialRating: officialRating ?? this.officialRating,
       tech: tech ?? this.tech,
       seriesStatus: seriesStatus ?? this.seriesStatus,
+      tmdbId: tmdbId ?? this.tmdbId,
     );
   }
 }
