@@ -344,8 +344,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         // the one thing HDR passthrough can still darken. Verify the
         // round-trip and say so, instead of leaving the handoff assumed.
         if (player.getProperty('user-data/player/osd-engine') != 'window') {
-          _scriptNote = '${_scriptNote == null ? '' : '$_scriptNote · '}'
-              'chrome 交接失败（独立 OSD 层未接管，HDR 会影响 OSD）';
+          _scriptNote = '$_scriptNote · chrome 交接失败（独立 OSD 层未接管，HDR 会影响 OSD）';
         }
       }
 
