@@ -2,11 +2,13 @@
 /// unit-test them headlessly.
 ///
 /// Three channels, mirroring how the project actually ships:
-/// - **stable** — release 产物 off `main`（GitHub Release，非 prerelease）。
-/// - **beta** — beta 分支的 Release 产物（prerelease）。
-/// - **dev** — beta 分支每次 push 的自动构建，发布为 `nightly-*` prerelease。
-///   早期版本直接读 Actions artifact，但 artifact 下载端点即使公开仓库也
-///   要求认证（客户端无 token，恒 401）；nightly Release 资产匿名可下。
+/// - **stable** — `main` 晋升出的正式 Release：便携版 zip + 安装包。
+/// - **beta** — beta 分支晋升出的 prerelease：便携版 zip + 安装包。
+/// - **dev** — beta 分支每次 push 的自动构建，只作为 Actions 产物（便携版
+///   zip），不进入 Release。Actions 产物下载即使公开仓库也要求认证，
+///   因此 dev 通道的应用内更新需要 `XNX_GITHUB_TOKEN`。
+///
+/// 应用内更新只消费便携版 zip；安装包只用于首次安装与手动重装。
 ///
 /// Rollback is a first-class operation: every version that has been applied
 /// keeps its extracted build, so applying an older copy is the same code path
@@ -17,8 +19,8 @@ enum UpdateChannel { stable, beta, dev }
 
 /// One installable candidate, whatever its source.
 ///
-/// `assetUrl` points at a zip that contains the application payload; for
-/// [UpdateChannel.dev] it is a GitHub Actions artifact download.
+/// `assetUrl` points at the portable zip that contains the application
+/// payload; for [UpdateChannel.dev] it is a GitHub Actions artifact download.
 class UpdateCandidate {
   const UpdateCandidate({
     required this.version,

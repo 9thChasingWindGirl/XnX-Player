@@ -1,0 +1,22 @@
+XnX Player 安装说明
+
+1. 安装位置
+   安装向导允许更改程序安装目录，默认装在当前用户目录下，不需要管理员权限。
+
+2. 数据目录
+   状态、日志、截图与片头片尾标记默认保存在：
+     %APPDATA%\XnX Player
+   安装过程中可以改为其他目录，也可以改为程序目录下的 userdata 文件夹（便携式）。
+   更新与卸载不会删除这个数据目录。
+
+3. 便携版
+   便携版压缩包解压后即可运行，数据保存在程序目录的 userdata 文件夹中。
+   如需自定义，编辑程序目录下的 data-dir.txt，写入目标目录（留空或写 default 表示使用 %APPDATA%）。
+
+4. 媒体源与 TMDB
+   首次启动后，在“媒体库 → 添加来源”中配置本地文件夹、Emby、Jellyfin、WebDAV、AList 或 IPTV。
+   TMDB 用于首页与详情数据：在同一入口选择 TMDB，填入 API Key 即可。
+
+5. 许可
+   本程序按 GNU General Public License v3.0 or later 分发，详见安装向导中的许可页面与随包的 LICENSE 文件。
+   TMDB、mpv 与界面音效的第三方说明见 THIRD_PARTY_NOTICES.md。

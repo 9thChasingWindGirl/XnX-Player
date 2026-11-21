@@ -1,72 +1,49 @@
-# 版本号规则（见 VERSION 文件）：第一位=大型迭代，第二位=轻版本迭代，第三位=hotfix。
+# dev 构建（只由 push 触发）
 #
-# 触发与发布策略：
-# - main：VERSION == 0.00.00（核心工作未完成）时 push 自动构建，产物仅进
-#   Actions artifact；核心工作完成后 push 不再触发，改为手动 workflow_dispatch
-#   记录版本号后构建/发布。
-# - beta：push 自动构建，产物只进 Actions（dev 版本），永不进 Release。
-# - Release 只能通过手动 workflow_dispatch（publish=true + version）发布；
-#   beta 发布时必须把 dev 序号换成正式 beta 版本号，此变更由发布人手动完成。
-name: windows
+# beta 分支兼管 dev 通道：
+#   - push 到 beta -> 自动构建 X.YY.ZZ.Dev
+#   - 只上传便携版 Actions artifact，不进入 Release；安装包只在晋升时生成
+#
+# 手动触发不会产出 dev：手动走 promote.yml，target=beta 产出 beta
+# （便携版 zip + 安装包），target=stable 产出正式版。
+#
+# 基版本来源：仓库变量 XNX_VERSION > VERSION 文件
+# 每次 commit 自动把 ZZ+1（自 VERSION 最后一次变更起数 commit），
+# 只作用于 dev。beta/stable 晋升时原样继承 dev 的版本号，不再加一。
+#
+# 后续晋升：
+#   promote.yml  target=beta  -> 取最新 dev 产物，改名为 X.YY.ZZ.Beta，发 Release
+#   merge-main.yml             -> beta 验证通过后合并进 main
+#   promote.yml  target=stable -> 取最新 beta 产物，改名为 X.YY.ZZ，发 Release
+name: dev-build
 
 on:
   push:
-    branches: [main, beta]
-  workflow_dispatch:
-    inputs:
-      version:
-        description: '本次构建的版本号（大迭代.轻迭代.hotfix），发布 Release 时必填'
-        required: false
-        default: ''
-      publish:
-        description: '构建后发布到 Release'
-        type: boolean
-        default: false
+    branches: [beta]
 
-# 权限必须显式声明：仓库默认给 GITHUB_TOKEN 的是只读权限，于是
-# `gh api -X DELETE .../artifacts/<id>` 会以
-# "Resource not accessible by integration (HTTP 403)" 失败。
-# 这里只给默认的读，写权限按 job 单独追加。
 permissions:
   contents: read
 
 concurrency:
-  group: windows-${{ github.ref }}
+  group: dev-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Decide auto-build
-        id: check
-        shell: bash
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          skip=false
-          # 核心工作完成后，main 的 push 不再自动构建：版本号必须手动记录
-          # （workflow_dispatch），避免无版本号的正式构建。
-          if [ "$version" != "0.00.00" ] && [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" = "main" ]; then
-            skip=true
-          fi
-          echo "version=$version event=${{ github.event_name }} ref=${{ github.ref_name }} skip=$skip"
-          echo "skip=$skip" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: gate
-    if: needs.gate.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 45
-    # 只有它需要删旧产物；beta push 还要发布 nightly prerelease。
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     permissions:
-      contents: write
+      contents: read
       actions: write
+    env:
+      XNX_VERSION: ${{ vars.XNX_VERSION }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -80,9 +57,7 @@ jobs:
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
 
-      # The Windows runner is generated here on purpose: the template is
-      # version-specific and is never hand-edited, so CI always produces a
-      # scaffold that matches the Flutter SDK building it.
+      # Windows runner 由 CI 用当前 Flutter SDK 生成，不手改、不进仓库。
       - name: Bootstrap Windows runner
         shell: pwsh
         run: |
@@ -93,6 +68,23 @@ jobs:
 
       - name: Pub get
         run: flutter pub get
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $base = $env:XNX_VERSION
+          if (-not $base) { $base = (Get-Content VERSION -Raw).Trim() }
+          # 自动 hotfix：锚定 VERSION 最后一次变更，数它之后有多少 commit。
+          # 设置 VERSION 的那次提交是 +0，之后每次提交 +1，只给 dev 用。
+          $anchor = (git log -1 --format=%H -- VERSION).Trim()
+          $commits = 0
+          if ($anchor) { $commits = [int](git rev-list --count "$anchor..HEAD").Trim() }
+          $version = (dart tool/version.dart resolve --base "$base" --channel dev --commits $commits | Select-Object -Last 1).Trim()
+          if (-not $version) { throw "version resolution returned empty" }
+          Write-Host "base=$base commits=$commits version=$version"
+          "RESOLVED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Analyze (gate)
         run: flutter analyze --fatal-warnings
@@ -107,22 +99,8 @@ jobs:
         run: dart run tool/fetch_libmpv.dart
 
       - name: Build release
-        run: flutter build windows --release --no-tree-shake-icons
-
-      - name: Resolve version
-        id: ver
         shell: pwsh
-        run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.version }}') {
-            $version = '${{ inputs.version }}'
-          }
-          # beta 分支的 push 产物是 dev 版本：dev-<基准版本>.<构建号>
-          if ('${{ github.ref_name }}' -eq 'beta' -and '${{ github.event_name }}' -eq 'push') {
-            $version = "dev-$version.$($env:GITHUB_RUN_NUMBER)"
-          }
-          Write-Host "resolved version: $version"
-          "RESOLVED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+        run: flutter build windows --release --no-tree-shake-icons --dart-define=APP_VERSION=$env:RESOLVED_VERSION
 
       - name: Bundle libmpv and verify
         shell: pwsh
@@ -137,115 +115,48 @@ jobs:
           if (-not (Test-Path "$rel/data/flutter_assets/assets/mpv/format-logos/manifest.json")) { throw "format-logo manifest missing from bundle" }
           $badges = (Get-ChildItem "$rel/data/flutter_assets/assets/mpv/format-logos" -Filter "*.bgra" | Measure-Object).Count
           if ($badges -lt 84) { throw "format-logo bitmaps incomplete: $badges (expected 84)" }
-          Write-Host "format badges: $badges bitmaps"
           if (-not (Test-Path "$rel/libmpv-2.dll")) { throw "libmpv missing" }
+          # version.txt 是运行时 S.appVersion 的首选来源；这里写的是不带 run 的通道版本。
           "$env:RESOLVED_VERSION" | Out-File -FilePath "$rel/version.txt" -Encoding utf8
-          # 预留目录随包发布：运行时在 Program Files 下创建目录会撞权限，
-          # 空目录先占位（zip -r 会收录目录条目）。
+          # 便携版把数据放在程序目录下的 userdata（不能叫 data：那是 Flutter 的
+          # 资源目录）。AppPaths 读到这里就不会落到 %APPDATA%。
+          "userdata" | Out-File -FilePath "$rel/data-dir.txt" -Encoding utf8
+          # 预留目录随包发布：运行时在 Program Files 下创建目录会撞权限。
           New-Item -ItemType Directory -Force -Path "$rel/log", "$rel/updates" | Out-Null
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Upload artifact
+      - name: Upload dev artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XnX-Player-windows-x64-${{ env.RESOLVED_VERSION }}
+          # dev 只产出便携版（Actions 下载到的就是 zip）。版本不带 run；
+          # artifact 名带 run 只为区分多次构建，晋升时按最新读取。
+          name: XnX-Player-Portable-${{ env.RESOLVED_VERSION }}-${{ github.run_number }}
           path: ${{ env.REL_DIR }}
           if-no-files-found: error
-          # main 正式产物收敛保留（14 天）；beta 的 dev 产物保留更宽（30 天）。
-          retention-days: ${{ github.ref_name == 'beta' && 30 || 14 }}
+          retention-days: 30
 
-      # beta push 的构建同时发布为 nightly prerelease：客户端 dev 通道读
-      # Release 资产而不是 Actions artifact——artifact 的下载端点即使公开
-      # 仓库也要求认证，无 token 的客户端永远 401；Release 资产匿名可下。
-      - name: Publish nightly release (beta push)
-        if: success() && github.ref_name == 'beta' && github.event_name == 'push'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          $tag = "nightly-$env:RESOLVED_VERSION"
-          $zip = "XnX-Player-windows-x64-$env:RESOLVED_VERSION.zip"
-          gh release delete "$tag" --yes --cleanup-tag 2>$null
-          if ($LASTEXITCODE -ne 0) { Write-Host "no previous nightly, creating fresh" }
-          Compress-Archive -Path "$env:REL_DIR\*" -DestinationPath $zip -Force
-          gh release create "$tag" $zip --prerelease --title "Dev $env:RESOLVED_VERSION" --notes "beta 分支自动构建（未验证），构建于 $(Get-Date -AsUtc -Format 'yyyy-MM-ddTHH:mm:ssZ')"
-
-      # 产物会一直堆积在 Actions 里：构建成功后按分支清理旧 artifact
-      # （beta 保留更宽：10 个；main 保留 3 个）。
-      - name: Clean old artifacts
+      - name: Clean old dev artifacts
         if: success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $keep = if ('${{ github.ref_name }}' -eq 'beta') { 10 } else { 3 }
-          # --paginate 输出的是多份 JSON 文档首尾相接，整体 ConvertFrom-Json
-          # 会直接抛错（旧写法因此永远得到 total: 0）。用 --jq 先把每页拍平成
-          # 一行一条，再在本地排序。
+          $keep = 5
           $rows = @()
           try {
             $rows = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '.artifacts[] | [.id, .name, .created_at] | @tsv'
           } catch {
-            # 清理是收尾动作：列不出来（权限、限流、网络）只警告，不能让一次
-            # 构建成功的运行变成红色。
             Write-Host "::warning::cannot list artifacts: $($_.Exception.Message)"
-            exit 0
-          }
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::cannot list artifacts (exit $LASTEXITCODE); skipping cleanup"
             exit 0
           }
           $items = @($rows | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object {
             $parts = $_ -split "`t"
             [pscustomobject]@{ id = $parts[0]; name = $parts[1]; created = $parts[2] }
-          } | Sort-Object created -Descending)
-          Write-Host "artifacts total: $($items.Count), keeping newest $keep"
+          } | Where-Object { $_.name -like 'XnX-Player-Portable-*.Dev-*' } | Sort-Object created -Descending)
           if ($items.Count -le $keep) {
             Write-Host "nothing to delete"
             exit 0
           }
-          $failed = 0
           $items | Select-Object -Skip $keep | ForEach-Object {
-            Write-Host "deleting $($_.name) ($($_.id))"
             gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$($_.id)"
-            if ($LASTEXITCODE -ne 0) {
-              # 清理是收尾动作，失败不该把一次成功的构建标成红色。
-              Write-Host "::warning::failed to delete $($_.name) (exit $LASTEXITCODE)"
-              $failed++
-            }
           }
-          Write-Host "cleanup finished, $failed failure(s)"
-
-  release:
-    # Release 只出手动触发：发布人负责把 dev 序号换成正式版本号后填入
-    # version，beta 分支发布为 prerelease。
-    needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
-    runs-on: ubuntu-latest
-    # 建 Release 要写内容；下载本工作流的产物只读即可。
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - name: Require version
-        shell: bash
-        run: |
-          if [ -z "${{ inputs.version }}" ]; then echo "::error::发布 Release 必须填写 version（dev→beta 版本变更由发布人手动完成）"; exit 1; fi
-
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: XnX-Player-windows-x64-${{ inputs.version }}
-
-      - name: Pack and publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          zip -r "XnX-Player-windows-x64-${{ inputs.version }}.zip" .
-          tag="v${{ inputs.version }}"
-          extra=""
-          if [ "${{ github.ref_name }}" = "beta" ]; then extra="--prerelease"; fi
-          gh release create "$tag" "XnX-Player-windows-x64-${{ inputs.version }}.zip" \
-            --title "XnX Player ${{ inputs.version }}" \
-            --notes "见提交历史与 VERSION 变更记录" $extra

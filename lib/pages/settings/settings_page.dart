@@ -312,7 +312,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       _section('软件更新'),
                       _DropdownRow(
                         label: '更新通道',
-                        hint: '当前版本 ${S.appVersion}\n正式版Stable = main 发布 · 测试版Beta = 预发布 · 开发者测试版Dev = beta 分支自动构建',
+                        hint: '当前版本 ${S.appVersion}\n'
+                            '正式版Stable = main 正式 Release（便携版 zip + 安装包）· '
+                            '测试版Beta = beta 预发布（便携版 zip + 安装包）· '
+                            '开发者测试版Dev = beta 分支 Actions 便携版（应用内更新需配置 XNX_GITHUB_TOKEN）',
                         options: const <String>[
                           '正式版Stable',
                           '测试版Beta',

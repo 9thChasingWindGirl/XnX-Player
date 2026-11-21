@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../core/app_log.dart';
+import '../core/app_paths.dart';
 import '../playback/mpv/hw_profile.dart';
 import 'models/media_item.dart';
 import 'net.dart';
@@ -18,8 +19,9 @@ import 'sources/remote_files.dart';
 /// Application state: configured backends, the merged library, resume points
 /// and playback preferences.
 ///
-/// Persistence is a single JSON file in `%APPDATA%\XnX Player\state.json` — no
-/// plugin, no database, and it survives a clean uninstall of the Flutter SDK.
+/// Persistence is a single JSON file `state.json` in the user's data directory
+/// (installer/portable choice; default `%APPDATA%\XnX Player`) — no plugin, no
+/// database, and it survives updates and uninstalls.
 class AppStore extends ChangeNotifier {
   AppStore._();
 
@@ -41,13 +43,7 @@ class AppStore extends ChangeNotifier {
   bool loading = false;
   bool _alive = true;
 
-  static String get stateDirectory {
-    final String? appData = Platform.environment['APPDATA'];
-    final String base = appData != null && appData.isNotEmpty
-        ? appData
-        : Directory.current.path;
-    return '$base${Platform.pathSeparator}XnX Player';
-  }
+  static String get stateDirectory => AppPaths.dataDir;
 
   static String get statePath => '$stateDirectory${Platform.pathSeparator}state.json';
 
@@ -405,7 +401,7 @@ class AppStore extends ChangeNotifier {
   }
 }
 
-/// Library-refresh logging, appended to `%APPDATA%\XnX Player\library.log`.
+/// Library-refresh logging, appended to `library.log` in the data directory.
 ///
 /// Playback already had mpv's own log file; the library side was silent, so a
 /// refresh that never finished had nothing to inspect. Best-effort by design:

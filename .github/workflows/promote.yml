@@ -1,0 +1,240 @@
+# 通道晋升（不重新编译）
+#
+#   target=beta   取最新 dev 便携版产物，version.txt 改为 X.YY.ZZ.Beta，
+#                 产出 便携版 zip + 安装包 exe，发 prerelease
+#   target=stable 取最新 beta prerelease 的便携版 zip，version.txt 改为 X.YY.ZZ，
+#                 产出 便携版 zip + 安装包 exe，发正式 Release
+#
+# 这是唯一的手动“构建”入口；手动产物永远是 beta 或 stable，不会产出 dev。
+# dev 只能由 push 到 beta 分支自动触发。
+#
+# dev 产物来自 windows.yml（beta 分支 push），只有 Actions artifact。
+# stable 优先取最新 beta prerelease；该基版本没有 beta 时，回退到最新 dev
+# 产物，即 dev -> stable 直通。两条路径都不改版本号。
+# 正式发布前请先手动触发 merge-main.yml，把 beta 合并进 main；
+# 本工作流复用已有产物，不重建代码。
+#
+# 安装包用 Inno Setup 编译：安装向导会显示 LICENSE（许可）与 INSTALL.txt
+# （安装说明），允许修改安装目录，并允许选择数据目录（默认 %APPDATA%\XnX Player，
+# 也可指向程序目录下的 userdata）。便携版 zip 内 data-dir.txt 固定为 userdata。
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '晋升目标'
+        type: choice
+        options: [beta, stable]
+        default: beta
+      version:
+        description: '基版本 X.YY.ZZ（留空：beta 取最新 dev 产物，stable 取最新 beta 产物）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: promote-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET: ${{ inputs.target }}
+      INPUT_VERSION: ${{ inputs.version }}
+      ARTIFACT_PREFIX: XnX-Player-Portable-
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve source build
+        id: src
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = $env:ARTIFACT_PREFIX
+
+          # 允许输入 0.1.0 这种简写，统一成 X.YY.ZZ 后再匹配产物/标签。
+          function Format-Base([string]$v) {
+            $p = @($v.Trim().TrimStart('v').Split('.') | Where-Object { $_ -ne '' })
+            while ($p.Count -lt 3) { $p += '0' }
+            return ('{0}.{1:D2}.{2:D2}' -f [int]$p[0], [int]$p[1], [int]$p[2])
+          }
+
+          # 下载最新的 dev 便携版；$want 有值时就只找那个基版本。
+          # 返回 $null 表示没找到，版本号保持 dev 产物里的值，不再加一。
+          function Get-DevPayload($want) {
+            $rows = gh api --paginate "repos/$env:GITHUB_REPOSITORY/actions/artifacts?per_page=100" `
+              --jq '.artifacts[] | select(.expired==false) | select(.name | startswith("XnX-Player-Portable-")) | select(.name | contains(".Dev-")) | [.id, .name, .created_at] | @tsv'
+            $items = @($rows | Where-Object { $_ -and $_.Trim() } | ForEach-Object {
+              $p = $_ -split "`t"
+              [pscustomobject]@{ id = $p[0]; name = $p[1]; created = $p[2] }
+            })
+            if ($want) { $items = @($items | Where-Object { $_.name.StartsWith("$prefix$want.Dev-") }) }
+            $pick = $items | Sort-Object created -Descending | Select-Object -First 1
+            if (-not $pick) { return $null }
+
+            # XnX-Player-Portable-0.00.03.Dev-42 -> 0.00.03.Dev -> 0.00.03
+            $rest = $pick.name.Substring($prefix.Length)
+            $devVersion = $rest -replace '-\d+$', ''
+            $ver = $devVersion -replace '\.Dev$', ''
+            $zipPath = Join-Path $env:RUNNER_TEMP 'dev.zip'
+            $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($pick.id)/zip"
+            curl.exe -sSL --fail -H "Authorization: Bearer $env:GITHUB_TOKEN" `
+              -H "Accept: application/vnd.github+json" $url -o $zipPath
+            if ($LASTEXITCODE -ne 0) { throw 'dev artifact download failed' }
+            return [pscustomobject]@{ base = $ver; zip = $zipPath; source = $pick.name }
+          }
+
+          $want = $null
+          if ($env:INPUT_VERSION) { $want = Format-Base $env:INPUT_VERSION }
+
+          if ($env:TARGET -eq 'beta') {
+            $dev = Get-DevPayload $want
+            if (-not $dev) { throw "no dev artifact found (input version: $($env:INPUT_VERSION))" }
+            $base = $dev.base
+            $release = "$base.Beta"
+            $zip = $dev.zip
+            "SOURCE_NAME=$($dev.source)" >> $env:GITHUB_ENV
+            Write-Host "dev artifact: $($dev.source) -> $release"
+          } else {
+            # stable：优先取 beta prerelease；beta 没晋升时允许 dev -> stable 直通。
+            $tag = $null
+            if ($want) {
+              $candidate = "v$want.Beta"
+              gh release view $candidate --json tagName 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) { $tag = $candidate }
+            } else {
+              $rows = gh release list --limit 100 --json tagName,isPrerelease,createdAt `
+                --jq '.[] | select(.isPrerelease) | select(.tagName | endswith(".Beta")) | [.tagName,.createdAt] | @tsv'
+              $pick = @($rows | Where-Object { $_ -and $_.Trim() } | ForEach-Object {
+                $p = $_ -split "`t"
+                [pscustomobject]@{ tag = $p[0]; created = $p[1] }
+              }) | Sort-Object created -Descending | Select-Object -First 1
+              if ($pick) { $tag = $pick.tag }
+            }
+
+            if ($tag) {
+              $base = $tag.Substring(1) -replace '\.Beta$', ''
+              $dir = Join-Path $env:RUNNER_TEMP 'beta'
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+              gh release download $tag --pattern 'XnX-Player-Portable-*.zip' --dir $dir
+              $zip = Get-ChildItem $dir -Filter '*.zip' | Select-Object -First 1
+              if (-not $zip) { throw "beta release $tag has no portable zip" }
+              $zip = $zip.FullName
+              "SOURCE_NAME=$tag" >> $env:GITHUB_ENV
+              "SOURCE_TAG=$tag" >> $env:GITHUB_ENV
+              Write-Host "beta release: $tag -> $base"
+            } else {
+              $dev = Get-DevPayload $want
+              if (-not $dev) { throw 'no beta release and no dev artifact found' }
+              $base = $dev.base
+              $zip = $dev.zip
+              "SOURCE_NAME=$($dev.source)" >> $env:GITHUB_ENV
+              "SOURCE_TAG=" >> $env:GITHUB_ENV
+              Write-Host "dev artifact (direct to stable): $($dev.source) -> $base"
+            }
+            $release = $base
+          }
+
+          "SOURCE_ZIP=$zip" >> $env:GITHUB_ENV
+          "BASE_VERSION=$base" >> $env:GITHUB_ENV
+          "RELEASE_VERSION=$release" >> $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --no-progress -y
+          $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*' -Recurse -Filter ISCC.exe |
+            Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe not found' }
+          "ISCC=$($iscc.FullName)" >> $env:GITHUB_ENV
+          Write-Host "ISCC: $($iscc.FullName)"
+
+      - name: Package portable and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_VERSION
+
+          # 1) 解开源产物，改写成目标通道版本。
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          if (Test-Path $payload) { Remove-Item -Recurse -Force $payload }
+          Expand-Archive -LiteralPath $env:SOURCE_ZIP -DestinationPath $payload -Force
+          if (-not (Test-Path (Join-Path $payload 'xnx_player.exe'))) {
+            throw 'payload has no xnx_player.exe'
+          }
+          Set-Content -LiteralPath (Join-Path $payload 'version.txt') -Value $version -Encoding utf8
+
+          # 便携版：data-dir.txt 指向程序目录下的 userdata（源产物已带，这里兜底）。
+          # 不能叫 data——Flutter 的运行时资源目录就叫 data。
+          Set-Content -LiteralPath (Join-Path $payload 'data-dir.txt') -Value 'userdata' -Encoding utf8
+          New-Item -ItemType Directory -Force -Path (Join-Path $payload 'log'), (Join-Path $payload 'updates') | Out-Null
+          # GPL 分发要求随二进制附带许可；便携版里也放一份，安装包同样会装入 {app}。
+          Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $payload 'LICENSE.txt') -Force
+          Copy-Item -LiteralPath 'INSTALL.txt' -Destination (Join-Path $payload 'INSTALL.txt') -Force
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $portable = "dist/XnX-Player-Portable-$version.zip"
+          if (Test-Path $portable) { Remove-Item -Force $portable }
+          Compress-Archive -Path "$payload/*" -DestinationPath $portable -CompressionLevel Optimal
+          Write-Host "portable: $portable"
+
+          # 2) 安装包载荷：不含 data-dir.txt，由安装向导写入用户选择的目录。
+          $ip = Join-Path $env:RUNNER_TEMP 'installer-payload'
+          if (Test-Path $ip) { Remove-Item -Recurse -Force $ip }
+          Copy-Item -Path $payload -Destination $ip -Recurse -Force
+          Remove-Item -LiteralPath (Join-Path $ip 'data-dir.txt') -ErrorAction SilentlyContinue
+
+          # 3) Inno Setup 6 读 UTF-8 需要 BOM；LICENSE 无扩展名，另存为 .txt。
+          $bom = New-Object System.Text.UTF8Encoding($true)
+          function Convert-ToBom([string]$path) {
+            $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+            [System.IO.File]::WriteAllText($path, $text, $bom)
+          }
+          Convert-ToBom (Resolve-Path -LiteralPath 'installer\xnx.iss').ProviderPath
+          Convert-ToBom (Resolve-Path -LiteralPath 'INSTALL.txt').ProviderPath
+          $license = Join-Path $env:RUNNER_TEMP 'LICENSE.txt'
+          Copy-Item -LiteralPath 'LICENSE' -Destination $license -Force
+          Convert-ToBom $license
+
+          $env:XNX_APP_VERSION = $version
+          $env:XNX_PAYLOAD = (Resolve-Path -LiteralPath $ip).ProviderPath
+          $env:XNX_OUTPUT = (Resolve-Path -LiteralPath 'dist').ProviderPath
+          $env:XNX_LICENSE = $license
+          $env:XNX_INFO = (Resolve-Path -LiteralPath 'INSTALL.txt').ProviderPath
+
+          & $env:ISCC 'installer\xnx.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compile failed' }
+          $setup = "dist/XnX-Player-Setup-$version.exe"
+          if (-not (Test-Path $setup)) { throw "installer not produced: $setup" }
+          Write-Host "installer: $setup"
+
+      - name: Publish release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_VERSION
+          $tag = "v$version"
+          $assets = @(Get-ChildItem dist -File | ForEach-Object { $_.FullName })
+          $origin = if ($env:TARGET -eq 'beta' -or -not $env:SOURCE_TAG) {
+            "由 dev 产物 $($env:SOURCE_NAME) 晋升"
+          } else {
+            "由 beta 发布 $($env:SOURCE_TAG) 晋升"
+          }
+          $notes = "$origin。`n`n包含便携版 zip（应用内更新使用）与安装包 exe。"
+
+          if ($env:TARGET -eq 'beta') {
+            gh release delete $tag --yes --cleanup-tag 2>$null
+            gh release create $tag @assets --prerelease --title "XnX Player $version Beta" --notes $notes
+          } else {
+            if (gh release view $tag 2>$null) { throw "stable release $tag already exists" }
+            gh release create $tag @assets --title "XnX Player $version" --notes $notes
+          }

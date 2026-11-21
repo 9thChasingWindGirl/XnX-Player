@@ -535,8 +535,11 @@ local function segments_path()
   if SEG_PATH then
     return SEG_PATH
   end
+  local custom = mp.get_property('user-data/player/data-dir')
   local base = os.getenv('APPDATA') or os.getenv('HOME') or '.'
-  local dir = utils.join_path(base, 'XnX Player')
+  local dir = (type(custom) == 'string' and custom ~= '')
+    and custom
+    or utils.join_path(base, 'XnX Player')
   local probe = io.open(utils.join_path(dir, 'segments.json'), 'r')
   if probe then
     probe:close()

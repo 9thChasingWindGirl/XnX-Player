@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'core/app_log.dart';
+import 'core/app_version.dart';
 import 'core/strings.dart';
 
 Future<void> main() async {
@@ -22,6 +23,7 @@ Future<void> main() async {
   // dies in the window manager or never reaches the player has to leave a
   // trace, not just the playback log mpv writes later.
   await AppLog.init();
+  S.appVersion = resolveAppVersion();
   AppLog.info('XnX Player ${S.appVersion} 启动 '
       '(${Platform.operatingSystem} ${Platform.operatingSystemVersion})');
   AppLog.info('可执行文件：${Platform.resolvedExecutable}');

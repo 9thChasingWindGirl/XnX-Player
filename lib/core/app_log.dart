@@ -1,13 +1,15 @@
 import 'dart:io';
 
+import 'app_paths.dart';
+
 /// The application's own log, separate from mpv's playback log.
 ///
 /// Playback always wrote `player_mpv.log`, but the app itself was silent: a
 /// launch that never reached the player, a source that failed to load or an
 /// unhandled exception left nothing to inspect. This writes one line per
-/// event to `<exe>/log/app.log`, falling back to
-/// `%APPDATA%\XnX Player\log\app.log` when the install folder is read-only
-/// (Program Files).
+/// event to `<data dir>/log/app.log` (the data directory is chosen by the
+/// installer/portable package), falling back to
+/// `%APPDATA%\XnX Player\log\app.log` when that location is read-only.
 ///
 /// Everything here is best effort: a log write must never be the reason the
 /// app fails to start or a refresh fails.
@@ -30,10 +32,10 @@ abstract final class AppLog {
     if (_ready) {
       return;
     }
-    final String? exe = _exeLogPath();
+    final String dataLog = '${AppPaths.logDir}${Platform.pathSeparator}app.log';
     final String? appData = _appDataLogPath();
     final List<String> candidates = <String>[
-      if (exe != null) exe,
+      dataLog,
       if (appData != null) appData,
       '${Directory.systemTemp.path}${Platform.pathSeparator}XnX Player'
           '${Platform.pathSeparator}log${Platform.pathSeparator}app.log',
@@ -81,15 +83,6 @@ abstract final class AppLog {
       }
     } on Object {
       // Nothing left to do on the way out.
-    }
-  }
-
-  static String? _exeLogPath() {
-    try {
-      final String dir = File(Platform.resolvedExecutable).parent.path;
-      return '$dir${Platform.pathSeparator}log${Platform.pathSeparator}app.log';
-    } on Object {
-      return null;
     }
   }
 

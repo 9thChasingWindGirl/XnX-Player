@@ -1,7 +1,7 @@
 name: xnx_player
 description: "XnX Player — PlayStation 5 styled media player powered by mpv."
 publish_to: "none"
-version: 0.1.0+1
+version: 0.00.00+1
 
 environment:
   # material_ui 1.x 要求 Dart ^3.13 与 Flutter >=3.47；Flutter 3.47 起

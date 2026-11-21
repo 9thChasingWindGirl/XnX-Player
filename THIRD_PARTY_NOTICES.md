@@ -11,15 +11,22 @@
   修剪、淡入淡出、响度归一。原项目声明「本仓库没有生成任何音效」，即素材是为
   其 ProsperoEden 项目制作的。
 
-**分发义务**：这些音频文件受 GPL-3.0-or-later 约束。本仓库目前**没有自己的
-LICENSE 文件**，因此在公开发布前必须二选一：
+**分发义务**：这些音频文件受 GPL-3.0-or-later 约束。本项目整体按
+GNU General Public License v3.0 or later 分发（见仓库根目录的 `LICENSE`），
+因此与上述素材的许可兼容；安装包在安装向导中展示同一份许可文本。
 
-1. 整个项目采用 GPL 兼容许可；或
-2. 用自有素材替换本目录（推荐，见下）。
+若要改用自有素材，成本也很低：代码与文件是解耦的，`lib/core/sound/sound_cue.dart`
+只定义语义（`focus` / `select` / `back` …）与文件名规则 `<cue>_NN.wav`，换一套
+同命名的录音即可，不需要改任何 Dart 代码。
 
-替换成本很低，因为代码与文件是解耦的：`lib/core/sound/sound_cue.dart` 只定义
-语义（`focus` / `select` / `back` …）与文件名规则 `<cue>_NN.wav`，换一套同命名
-的录音即可，不需要改任何 Dart 代码。
+## TMDB 元数据与图片
+
+门户数据（海报、剧照、简介、评分、题材、演职员）来自 [TMDB](https://www.themoviedb.org/)，图片来自 `image.tmdb.org`。
+
+> This product uses the TMDB API but is not endorsed or certified by TMDB.
+> 本产品使用 TMDB API，但未获得 TMDB 的认可或认证。
+
+本仓库不包含 TMDB 的代码或媒体文件；运行时按用户自己配置的 API Key 请求数据。
 
 ## 没有复制的东西
 

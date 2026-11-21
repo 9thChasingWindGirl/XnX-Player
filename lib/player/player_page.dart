@@ -8,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/app_log.dart';
+import '../core/app_paths.dart';
 import '../core/input/input_action.dart';
 import '../core/input/input_router.dart';
 import '../design/ps_tokens.dart';
@@ -256,28 +257,21 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       final String? logoDir = await MpvAssets.formatLogoDir();
       final String sep = Platform.pathSeparator;
 
-      // Logs belong next to the exe: %TEMP% gets cleaned by disk tools and is
-      // impossible to find when someone asks for a log. Falls back to the temp
-      // directory only when the install folder is read-only (Program Files).
-      final String exeDir = File(Platform.resolvedExecutable).parent.path;
+      // Logs and screenshots live in the chosen data directory (installer or
+      // portable), not next to the exe: Program Files is read-only for a
+      // standard user, and the portable mode keeps everything self-contained.
       String logPath = '${Directory.systemTemp.path}${sep}player_mpv.log';
       try {
-        final Directory logDir = Directory('$exeDir${sep}log');
-        if (!logDir.existsSync()) {
-          logDir.createSync(recursive: true);
-        }
+        final Directory logDir = Directory(AppPaths.logDir);
+        logDir.createSync(recursive: true);
         logPath = '${logDir.path}${sep}player_mpv.log';
       } catch (_) {
-        // Read-only install location; keep the temp path.
+        // Read-only data directory; keep the temp path.
       }
       _logPath = logPath;
       AppLog.info('mpv 播放日志：$logPath');
 
-      // Screenshots land next to the app state rather than in the working
-      // directory, which is the build folder during development.
-      final String appDir =
-          '${Platform.environment['APPDATA'] ?? Directory.systemTemp.path}${sep}XnX Player';
-      final String shotDir = '$appDir${sep}screenshots';
+      final String shotDir = AppPaths.screenshotDir;
       try {
         Directory(shotDir).createSync(recursive: true);
       } catch (_) {
@@ -463,6 +457,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       // The OSD reads these before the first frame so the title and the
       // opening-skip preference are already in place at file-loaded.
       player.setProperty('user-data/player/title', widget.item.title);
+      // The Lua stage persists intro/outro marks; point it at the same data
+      // directory the rest of the app uses instead of %APPDATA%.
+      player.setProperty('user-data/player/data-dir', AppPaths.dataDir);
       player.setProperty('user-data/player/skip-intro', prefs.skipIntro ? 'yes' : 'no');
 
       final Duration resume = widget.item.resumeAt ?? Duration.zero;

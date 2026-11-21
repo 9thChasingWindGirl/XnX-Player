@@ -3,20 +3,42 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/app_paths.dart';
 import '../data/net.dart';
 import 'update_channel.dart';
 
 /// In-app updater for the three shipping channels.
 ///
-/// Data safety is structural: everything the user owns (state.json, scripts)
-/// lives in `%APPDATA%\XnX Player`, which no update ever touches. Updates only
-/// replace files inside the install directory, and each applied version keeps
-/// its extracted build under `<install>/updates/<version>/` so rolling back is
-/// the same code path as installing forward.
+/// Artifact types differ per channel:
+/// - stable/beta: a Release with a **portable zip** (used for self-update) and
+///   an installer. The updater deliberately picks the portable zip.
+/// - dev: the newest portable zip from the beta branch's Actions artifacts.
+///   Artifact downloads require a token, so dev in-app updates need
+///   `XNX_GITHUB_TOKEN`; without it the UI reports that dev updates are manual.
+///
+/// Data safety is structural: user data lives in [AppPaths.dataDir], which can
+/// be a custom folder or the portable `userdata/` next to the exe. Updates only
+/// replace files inside the install directory, exclude the data directory,
+/// `data-dir.txt`, `updates/`, `log/` and the Inno Setup uninstaller, and keep
+/// each extracted build under `<install>/updates/<version>/` so rollback is the
+/// same path as forward.
 class UpdateService {
-  UpdateService({this.repository = '9thChasingWindGirl/XnX-Player'});
+  UpdateService({
+    this.repository = '9thChasingWindGirl/XnX-Player',
+    String? githubToken,
+  }) : githubToken = githubToken ??
+            Platform.environment['XNX_GITHUB_TOKEN'] ??
+            '';
 
   final String repository;
+
+  /// Needed only for dev artifacts; Release downloads are anonymous.
+  final String githubToken;
+
+  Map<String, String> get _apiHeaders => <String, String>{
+        'Accept': 'application/vnd.github+json',
+        if (githubToken.isNotEmpty) 'Authorization': 'Bearer $githubToken',
+      };
 
   static const UpdateChannel defaultChannel = UpdateChannel.stable;
 
@@ -47,16 +69,17 @@ class UpdateService {
   /// Asks GitHub what the newest build on [channel] is.
   ///
   /// stable/beta read Releases (beta = prerelease); dev reads the newest
-  /// `nightly-*` prerelease the beta branch publishes. It used to read
-  /// Actions artifacts directly, which is why every dev install failed with
-  /// HTTP 401: the artifact download endpoint requires authentication even
-  /// on a public repository, and the client has no token. Release assets are
-  /// the one download URL that works without credentials.
+  /// portable artifact from the beta branch. Dev artifact downloads require a
+  /// token, so a missing `XNX_GITHUB_TOKEN` is reported instead of silently
+  /// returning "no build".
   Future<UpdateCandidate?> fetchLatest(UpdateChannel channel) async {
     if (channel == UpdateChannel.dev) {
-      return _fetchNightly();
+      return _fetchDevArtifact();
     }
-    final List<dynamic> releases = await Http.getJsonList(releasesUri);
+    final List<dynamic> releases = await Http.getJsonList(
+      releasesUri,
+      headers: _apiHeaders,
+    );
     final List<UpdateCandidate> parsed = releases.map((Object? entry) {
       final Map<String, dynamic> release = entry! as Map<String, dynamic>;
       return _releaseCandidate(release);
@@ -70,10 +93,17 @@ class UpdateService {
     for (final Object? entry in release['assets'] as List<dynamic>? ?? <dynamic>[]) {
       final Map<String, dynamic> asset = entry! as Map<String, dynamic>;
       final String name = asset['name'] as String? ?? '';
-      if (name.endsWith('.zip')) {
+      if (!name.endsWith('.zip')) {
+        // The installer is a .exe; in-app updates always use the portable zip.
+        continue;
+      }
+      // Prefer the explicitly portable asset; fall back to any zip so older
+      // releases keep working.
+      if (name.toLowerCase().contains('portable')) {
         assetUrl = asset['browser_download_url'] as String?;
         break;
       }
+      assetUrl ??= asset['browser_download_url'] as String?;
     }
     return UpdateCandidate(
       version: tag,
@@ -85,42 +115,74 @@ class UpdateService {
     );
   }
 
-  /// The newest `nightly-*` prerelease, if any. The workflow publishes one per
-  /// successful beta push; the version is the tag minus its prefix, and the
-  /// zip rides as an ordinary release asset — anonymous-downloadable.
-  Future<UpdateCandidate?> _fetchNightly() async {
-    final List<dynamic> releases = await Http.getJsonList(releasesUri);
-    UpdateCandidate? best;
-    for (final Object? entry in releases) {
-      final Map<String, dynamic> release = entry! as Map<String, dynamic>;
-      final String tag = release['tag_name'] as String? ?? '';
-      if (!tag.startsWith('nightly-')) {
+  /// The newest portable artifact from the beta branch's Actions runs.
+  ///
+  /// The dev channel deliberately does not create Releases, so the artifact
+  /// endpoint is the only source. It requires authentication even on a public
+  /// repository, hence the explicit token requirement.
+  Future<UpdateCandidate?> _fetchDevArtifact() async {
+    if (githubToken.isEmpty) {
+      throw StateError(
+        'Dev 通道的构建产物位于 Actions，应用内更新需要配置 XNX_GITHUB_TOKEN；'
+        '也可以从 Actions 页面手动下载便携版 zip。',
+      );
+    }
+    final Map<String, dynamic> data = await Http.getJson(
+      _endpoint(<String>['actions', 'artifacts'], <String, String>{'per_page': '50'}),
+      headers: _apiHeaders,
+    );
+    final Object? raw = data['artifacts'];
+    if (raw is! List) {
+      return null;
+    }
+    Map<String, dynamic>? best;
+    String bestVersion = '';
+    for (final Object? entry in raw) {
+      if (entry is! Map) {
         continue;
       }
-      final UpdateCandidate raw = _releaseCandidate(release);
-      final UpdateCandidate candidate = UpdateCandidate(
-        version: tag.substring('nightly-'.length),
-        name: raw.name,
-        assetUrl: raw.assetUrl,
-        notes: raw.notes,
-        publishedAt: raw.publishedAt,
-        isPrerelease: raw.isPrerelease,
-      );
-      if (best == null || compareVersions(candidate.version, best.version) > 0) {
-        best = candidate;
+      final Map<String, dynamic> artifact = entry.cast<String, dynamic>();
+      if (artifact['expired'] == true) {
+        continue;
+      }
+      final String name = artifact['name'] as String? ?? '';
+      if (!name.startsWith('XnX-Player-Portable-') ||
+          !name.contains('.Dev')) {
+        continue;
+      }
+      final String version = _versionFromArtifact(name);
+      if (version.isEmpty) {
+        continue;
+      }
+      if (best == null || compareVersions(version, bestVersion) > 0) {
+        best = artifact;
+        bestVersion = version;
       }
     }
     if (best == null) {
       return null;
     }
+    final Object? id = best['id'];
+    final String created = best['created_at'] as String? ?? '';
     return UpdateCandidate(
-      version: best.version,
-      name: best.name,
-      assetUrl: best.assetUrl,
-      notes: 'beta 分支自动构建（未验证）· 构建于 ${best.publishedAt}',
-      publishedAt: best.publishedAt,
+      version: bestVersion,
+      name: best['name'] as String? ?? bestVersion,
+      assetUrl: 'https://api.github.com/repos/$repository/actions/artifacts/$id/zip',
+      notes: 'beta 分支自动构建（未验证）· $created',
+      publishedAt: created,
       isPrerelease: true,
     );
+  }
+
+  /// `XnX-Player-Portable-0.01.00.Dev-42` -> `0.01.00.Dev`.
+  static String _versionFromArtifact(String name) {
+    const String prefix = 'XnX-Player-Portable-';
+    if (!name.startsWith(prefix)) {
+      return '';
+    }
+    final String rest = name.substring(prefix.length);
+    final int dash = rest.lastIndexOf('-');
+    return dash > 0 ? rest.substring(0, dash) : rest;
   }
 
   /// Downloads and unpacks the candidate into
@@ -133,18 +195,23 @@ class UpdateService {
     Directory(versionDir).createSync(recursive: true);
     final String zipPath = '$versionDir${Platform.pathSeparator}update.zip';
     await _download(candidate.assetUrl, zipPath);
-    await Process.run(
+    final ProcessResult result = await Process.run(
       'powershell.exe',
       <String>[
         '-NoProfile',
         '-Command',
         'Expand-Archive -Force -LiteralPath \'$zipPath\' -DestinationPath \'$versionDir\'',
       ],
-    ).then((ProcessResult result) {
-      if (result.exitCode != 0) {
-        throw StateError('解压更新包失败：${result.stderr}');
-      }
-    });
+    );
+    if (result.exitCode != 0) {
+      throw StateError('解压更新包失败：${result.stderr}');
+    }
+    // 解压后 zip 就没用了；留着会被下一次 apply 一起搬进安装目录。
+    try {
+      File(zipPath).deleteSync();
+    } on Object {
+      // 删不掉也不影响这次更新。
+    }
     final Directory? payload = _payloadDir(versionDir);
     if (payload == null) {
       throw StateError('更新包里没有可执行文件');
@@ -173,6 +240,33 @@ class UpdateService {
   /// in `%APPDATA%` is never part of the swap.
   Future<void> apply(String payloadDir) async {
     final String install = File(Platform.resolvedExecutable).parent.path;
+    final String sep = Platform.pathSeparator;
+    // If the user chose data inside the install directory (portable-style),
+    // the swap must leave that top-level folder alone. data-dir.txt is also
+    // preserved: it records where the data is, and the update package ships
+    // its own copy for fresh installs only.
+    final String dataDir = AppPaths.dataDir;
+    String? dataSegment;
+    final String prefix = install.endsWith(sep) ? install : '$install$sep';
+    if (dataDir.toLowerCase().startsWith(prefix.toLowerCase())) {
+      final String relative = dataDir.substring(prefix.length);
+      final String first = relative.split(RegExp(r'[\\/]')).first;
+      if (first.isNotEmpty) {
+        dataSegment = first;
+      }
+    }
+    final List<String> excluded = <String>[
+      'updates',
+      'log',
+      'data-dir.txt',
+      'apply_update.ps1',
+      // Inno Setup 的卸载器属于安装记录，换掉它会让“应用和功能”里的条目失效。
+      'unins*',
+      if (dataSegment != null) dataSegment,
+    ];
+    final String excludeList = excluded
+        .map((String name) => "'${name.replaceAll("'", "''")}'")
+        .join(',');
     final String script = '$install${Platform.pathSeparator}updates'
         '${Platform.pathSeparator}apply_update.ps1';
     File(script).parent.createSync(recursive: true);
@@ -182,8 +276,9 @@ class UpdateService {
 \$install = '$install'
 \$exe = Join-Path \$install 'xnx_player.exe'
 \$self = \$MyInvocation.MyCommand.Path
+\$exclude = @($excludeList)
 Start-Sleep -Seconds 2
-Get-ChildItem -LiteralPath \$install -Exclude updates,log,apply_update.ps1 | ForEach-Object {
+Get-ChildItem -LiteralPath \$install -Exclude \$exclude | ForEach-Object {
   \$target = Join-Path \$install \$_.Name
   if (\$_.PSIsContainer) {
     if (Test-Path \$target) { Remove-Item -Recurse -Force \$target }
@@ -191,7 +286,12 @@ Get-ChildItem -LiteralPath \$install -Exclude updates,log,apply_update.ps1 | For
     Remove-Item -Force \$target
   }
 }
-Copy-Item -Recurse -Force (Join-Path \$payload '*') \$install
+# data-dir.txt 记录的是用户的现有数据位置，更新包里的那份只对全新解压有意义。
+# updates/ 与 log/ 是运行时目录，覆盖它们会打断本次更新或清掉日志。
+\$skip = @('data-dir.txt', 'updates', 'log')
+Get-ChildItem -LiteralPath \$payload | Where-Object { \$skip -notcontains \$_.Name } | ForEach-Object {
+  Copy-Item -LiteralPath \$_.FullName -Destination \$install -Recurse -Force
+}
 Start-Process -FilePath \$exe
 Remove-Item -Force \$self
 ''');
@@ -236,11 +336,16 @@ Remove-Item -Force \$self
   }
 
   Future<void> _download(String url, String target) async {
+    final Uri uri = Uri.parse(url);
     final HttpClient client = HttpClient()
       ..userAgent = Http.userAgentHeader['User-Agent'];
     try {
-      final HttpClientResponse response =
-          await (await client.getUrl(Uri.parse(url))).close();
+      final HttpClientRequest request = await client.getUrl(uri);
+      if (githubToken.isNotEmpty && uri.host == 'api.github.com') {
+        request.headers.set('Authorization', 'Bearer $githubToken');
+        request.headers.set('Accept', 'application/vnd.github+json');
+      }
+      final HttpClientResponse response = await request.close();
       if (response.statusCode != 200) {
         throw HttpFailure('下载失败', status: response.statusCode);
       }

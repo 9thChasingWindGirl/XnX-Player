@@ -1,0 +1,38 @@
+# beta -> main 合并（手动）
+#
+# beta 通道验证通过后触发；合并只搬代码，不构建、不发布。
+# 合并完成后再手动触发 promote.yml target=stable，从最新 beta 产物晋升正式版。
+name: merge-main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: merge-main
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge beta into main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin beta
+          if git merge-base --is-ancestor origin/beta HEAD; then
+            echo "beta is already merged into main"
+            exit 0
+          fi
+          git merge --no-ff origin/beta -m "chore: merge beta into main"
+          git push origin main
