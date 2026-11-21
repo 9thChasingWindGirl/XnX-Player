@@ -10,6 +10,32 @@ class OsdZone {
   final ui.Rect rect;
 }
 
+/// How truthfully a format badge can be claimed.
+///
+/// Mirrors the Lua stage: `fact` is a property of the file (resolution, codec,
+/// fps) and always reads the same; `lit` means the output chain really carries
+/// the format — a tinted plate and a bright ring; `dim` means the file has it
+/// but the chain is tone-mapping or decoding it away, so only a faint ring is
+/// drawn. Never claim a format the player is not delivering.
+enum OsdBadgeTier { fact, lit, dim }
+
+/// One format badge with its own accent and truthfulness tier.
+class OsdBadge {
+  const OsdBadge(this.label, this.color, this.tier);
+
+  final String label;
+  final ui.Color color;
+  final OsdBadgeTier tier;
+
+  /// Accents from the Lua stage, kept in sync so both engines look identical.
+  static const ui.Color hdrGold = ui.Color(0xFFFABE3C);
+  static const ui.Color dvPurple = ui.Color(0xFFA078FF);
+  static const ui.Color hlgCyan = ui.Color(0xFF50DCDC);
+  static const ui.Color dtsAmber = ui.Color(0xFFFF963F);
+  static const ui.Color dolbyBlue = ui.Color(0xFF2E8BFF);
+  static const ui.Color plainWhite = ui.Color(0xFFFFFFFF);
+}
+
 /// One frame of the independent OSD chrome, drawn with plain `dart:ui`.
 ///
 /// The layout mirrors the Lua stage in design units: the same title, badge and
@@ -140,17 +166,53 @@ abstract final class OsdChrome {
       );
     }
 
-    // Format badges, one pill each.
+    // Format badges. A `lit` badge really is being delivered by the output
+    // chain and gets a tinted plate + bright ring; `dim` means the file has the
+    // format but the chain tone-maps or decodes it away, so only a faint ring
+    // is drawn. The distinction is what "是否点亮" asks for — an HDR file on
+    // an SDR desktop must not look like a live HDR output.
     double bx = x(safeX);
-    for (final String badge in model.badges) {
-      final double width = _textWidth(badge, font(16)) + x(22);
+    for (final String label in model.badges) {
+      final OsdBadge badge = model.badgeFor(label);
+      final double width = _textWidth(label, font(16)) + x(22);
       final ui.Rect box = ui.Rect.fromLTWH(bx, y(metaY), width, font(28));
-      canvas.drawRRect(
-        ui.RRect.fromRectAndRadius(box, ui.Radius.circular(x(6))),
-        ui.Paint()..color = const ui.Color(0x3CFFFFFF),
-      );
-      _text(canvas, badge, ui.Offset(bx + x(11), y(metaY) + font(6)), font(16),
-          color: const ui.Color(0xE6FFFFFF));
+      final ui.RRect rounded = ui.RRect.fromRectAndRadius(box, ui.Radius.circular(x(6)));
+      switch (badge.tier) {
+        case OsdBadgeTier.lit:
+          canvas.drawRRect(
+            rounded,
+            ui.Paint()..color = badge.color.withValues(alpha: 0.25),
+          );
+          canvas.drawRRect(
+            rounded,
+            ui.Paint()
+              ..style = ui.PaintingStyle.stroke
+              ..strokeWidth = x(1.5)
+              ..color = badge.color.withValues(alpha: 0.85),
+          );
+          break;
+        case OsdBadgeTier.dim:
+          canvas.drawRRect(
+            rounded,
+            ui.Paint()
+              ..style = ui.PaintingStyle.stroke
+              ..strokeWidth = x(1)
+              ..color = const ui.Color(0x8CE6E9F2),
+          );
+          break;
+        case OsdBadgeTier.fact:
+          canvas.drawRRect(
+            rounded,
+            ui.Paint()..color = const ui.Color(0x14FFFFFF),
+          );
+          break;
+      }
+      final ui.Color ink = switch (badge.tier) {
+        OsdBadgeTier.lit => badge.color,
+        OsdBadgeTier.dim => const ui.Color(0x9EE6E9F2),
+        OsdBadgeTier.fact => const ui.Color(0xE6FFFFFF),
+      };
+      _text(canvas, label, ui.Offset(bx + x(11), y(metaY) + font(6)), font(16), color: ink);
       bx += width + x(8);
     }
 
@@ -406,6 +468,7 @@ class OsdChromeModel {
     required this.muted,
     required this.badges,
     required this.accent,
+    this.badgeStyles = const <String, OsdBadge>{},
     this.scrubbing,
     this.hoverSeek = false,
     this.toast,
@@ -419,6 +482,14 @@ class OsdChromeModel {
   final bool muted;
   final List<String> badges;
   final ui.Color accent;
+
+  /// Which labels carry an accent and a truthfulness tier. Labels absent from
+  /// this map fall back to a neutral `fact` badge, so callers that only supply
+  /// plain strings (tests, the minimal fallback) keep their old appearance.
+  final Map<String, OsdBadge> badgeStyles;
+
+  OsdBadge badgeFor(String label) =>
+      badgeStyles[label] ?? OsdBadge(label, OsdBadge.plainWhite, OsdBadgeTier.fact);
 
   /// 0..1 while the pointer is dragging the seek bar; null otherwise.
   final double? scrubbing;

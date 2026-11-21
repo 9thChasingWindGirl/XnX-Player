@@ -91,6 +91,43 @@ void main() {
       );
       expect(scrubbing.scrubbing, 0.7);
     });
+
+    test('badge tiers fall back to neutral fact for plain strings', () {
+      const OsdChromeModel model = OsdChromeModel(
+        title: 'Dune: Part Two',
+        position: 120,
+        duration: 600,
+        paused: false,
+        volume: 80,
+        muted: false,
+        badges: <String>['HEVC'],
+        accent: ui.Color(0xFF0070CC),
+      );
+      final OsdBadge badge = model.badgeFor('HEVC');
+      expect(badge.tier, OsdBadgeTier.fact);
+      expect(badge.color, OsdBadge.plainWhite);
+    });
+
+    test('lit and dim badges carry their own accent and tier', () {
+      const OsdChromeModel model = OsdChromeModel(
+        title: 'HDR file',
+        position: 0,
+        duration: 600,
+        paused: false,
+        volume: 80,
+        muted: false,
+        badges: <String>['HDR10', 'DD+'],
+        badgeStyles: <String, OsdBadge>{
+          'HDR10': OsdBadge('HDR10', OsdBadge.hdrGold, OsdBadgeTier.lit),
+          'DD+': OsdBadge('DD+', OsdBadge.dolbyBlue, OsdBadgeTier.dim),
+        },
+        accent: ui.Color(0xFF0070CC),
+      );
+      expect(model.badgeFor('HDR10').tier, OsdBadgeTier.lit);
+      expect(model.badgeFor('HDR10').color, OsdBadge.hdrGold);
+      expect(model.badgeFor('DD+').tier, OsdBadgeTier.dim);
+      expect(model.badgeFor('DD+').color, OsdBadge.dolbyBlue);
+    });
   });
 }
 
