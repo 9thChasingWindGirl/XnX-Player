@@ -203,6 +203,23 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _checkOrInstall() async {
     if (_pending != null) {
       final UpdateCandidate candidate = _pending!;
+      // An installed copy must not be replaced by loose files: that leaves the
+      // uninstall entry and shortcuts pointing at a version that is gone. Dev
+      // nightlies ship no setup, so an installed copy simply cannot take them.
+      if (_updater.installKind == InstallKind.installed &&
+          !candidate.hasInstaller) {
+        NoticeCenter.instance.publish(
+          'update-check',
+          '${candidate.version} 未提供安装包',
+          body: '当前是安装版，只能通过安装包更新；请改用正式版或 beta 通道。',
+          kind: NoticeKind.warning,
+        );
+        setState(() {
+          _updateStatus = '该版本未提供安装包，安装版无法更新';
+          _pending = null;
+        });
+        return;
+      }
       // Exiting and restarting the app is not something to do silently: confirm
       // first, and on a portable layout ask whether the config survives.
       final _UpdateOptions? options = await showDialog<_UpdateOptions>(
@@ -210,6 +227,8 @@ class _SettingsPageState extends State<SettingsPage> {
         builder: (BuildContext context) => _UpdateConfirmDialog(
           version: candidate.version,
           portable: _updater.isPortable,
+          installed: _updater.installKind == InstallKind.installed,
+          hasInstaller: candidate.hasInstaller,
           dataDir: AppPaths.dataDir,
         ),
       );
@@ -224,36 +243,54 @@ class _SettingsPageState extends State<SettingsPage> {
       // A download is the canonical live activity: one row that fills up,
       // visible from the top bar without opening settings.
       NoticeCenter.instance.activity('update-download', '正在下载 ${candidate.version}');
-      try {
-        final String payload = await _updater.prepareInstall(
-          candidate,
-          onProgress: (int received, int total) {
-            if (!mounted) {
-              return;
-            }
-            final double fraction = total > 0 ? received / total : 0;
-            NoticeCenter.instance.activity(
-              'update-download',
-              '正在下载 ${candidate.version}',
-              progress: fraction,
-              body: total > 0
-                  ? '${_megabytes(received)} / ${_megabytes(total)}'
-                  : _megabytes(received),
-            );
-            // The sink reports every chunk; repaint at 2 % steps instead.
-            if (received != total && fraction - _downloadProgress < 0.02) {
-              return;
-            }
-            _downloadProgress = fraction;
-            setState(() {
-              _updateStatus = total > 0
-                  ? '正在下载 ${candidate.version} '
-                      '${(fraction * 100).round()}%'
-                      '（${_megabytes(received)} / ${_megabytes(total)}）'
-                  : '正在下载 ${candidate.version}（${_megabytes(received)}）';
-            });
-          },
+      void onProgress(int received, int total) {
+        if (!mounted) {
+          return;
+        }
+        final double fraction = total > 0 ? received / total : 0;
+        NoticeCenter.instance.activity(
+          'update-download',
+          '正在下载 ${candidate.version}',
+          progress: fraction,
+          body: total > 0
+              ? '${_megabytes(received)} / ${_megabytes(total)}'
+              : _megabytes(received),
         );
+        // The sink reports every chunk; repaint at 2 % steps instead.
+        if (received != total && fraction - _downloadProgress < 0.02) {
+          return;
+        }
+        _downloadProgress = fraction;
+        setState(() {
+          _updateStatus = total > 0
+              ? '正在下载 ${candidate.version} '
+                  '${(fraction * 100).round()}%'
+                  '（${_megabytes(received)} / ${_megabytes(total)}）'
+              : '正在下载 ${candidate.version}（${_megabytes(received)}）';
+        });
+      }
+
+      try {
+        if (options.useInstaller) {
+          // Installed copies (and a portable copy that opted in) update
+          // through the setup program: it is what keeps the uninstall entry
+          // and shortcuts correct, and its wizard confirms the data folder.
+          final String setup =
+              await _updater.prepareInstaller(candidate, onProgress: onProgress);
+          if (!mounted) {
+            return;
+          }
+          NoticeCenter.instance.finish(
+            'update-download',
+            title: '正在启动安装程序 ${candidate.version}',
+            body: '按向导完成安装，现有数据目录会被沿用',
+          );
+          setState(() => _updateStatus = '正在启动安装程序…');
+          await _updater.applyInstaller(setup);
+          return;
+        }
+        final String payload =
+            await _updater.prepareInstall(candidate, onProgress: onProgress);
         if (!mounted) {
           return;
         }
@@ -352,7 +389,10 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (BuildContext context) => _UpdateConfirmDialog(
         version: target,
         portable: _updater.isPortable,
+        installed: false,
+        hasInstaller: false,
         dataDir: AppPaths.dataDir,
+        rollback: true,
       ),
     );
     if (options == null || !mounted) {
@@ -977,9 +1017,13 @@ class _KernelCard extends StatelessWidget {
 /// contract the add-source sheet uses.
 /// What the install confirmation decided. A null dialog result means cancel.
 class _UpdateOptions {
-  const _UpdateOptions({required this.keepData});
+  const _UpdateOptions({required this.keepData, required this.useInstaller});
 
   final bool keepData;
+
+  /// Route the update through the setup program instead of unzipping in place.
+  /// Forced on for an installed copy; optional for a portable one.
+  final bool useInstaller;
 }
 
 /// "Install update X" — the step that used to be a silent exit and restart.
@@ -987,16 +1031,30 @@ class _UpdateConfirmDialog extends StatefulWidget {
   const _UpdateConfirmDialog({
     required this.version,
     required this.portable,
+    required this.installed,
+    required this.hasInstaller,
     required this.dataDir,
+    this.rollback = false,
   });
 
   /// The version being installed (or rolled back to).
   final String version;
 
   /// True when the data folder lives inside the install folder: the only
-  /// layout the swap can damage, and the only one worth asking about.
+  /// layout the in-place swap can damage, and the only one worth asking about.
   final bool portable;
+
+  /// True when this copy is managed by the setup program. Such a copy must
+  /// update through it, or the uninstall entry and shortcuts go stale.
+  final bool installed;
+
+  /// Whether the candidate actually ships a setup exe.
+  final bool hasInstaller;
   final String dataDir;
+
+  /// A rollback swaps an already-extracted local build: there is no download
+  /// and no data decision, so the dialog drops both.
+  final bool rollback;
 
   @override
   State<_UpdateConfirmDialog> createState() => _UpdateConfirmDialogState();
@@ -1004,6 +1062,7 @@ class _UpdateConfirmDialog extends StatefulWidget {
 
 class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
   bool _keepData = true;
+  late bool _useInstaller = widget.installed;
   InputSubscription? _inputSub;
 
   @override
@@ -1055,62 +1114,37 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
                 ),
               ),
               const SizedBox(height: 22),
-              if (widget.portable)
-                TvFocusable(
-                  radius: 12,
-                  onSelect: () => setState(() => _keepData = !_keepData),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: PsColor.text.withValues(alpha: 0.05),
-                      border: Border.all(
-                        color: _keepData
-                            ? PsColor.accent
-                            : PsColor.text.withValues(alpha: 0.18),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Icon(
-                              _keepData
-                                  ? Icons.check_circle_rounded
-                                  : Icons.radio_button_unchecked,
-                              size: 22,
-                              color: _keepData ? PsColor.accent : PsColor.textFaint,
-                            ),
-                            const SizedBox(width: 10),
-                            Text('保留用户数据',
-                                style: PsType.body.copyWith(fontSize: 19)),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '便携版的数据在程序目录内：\n${widget.dataDir}\n'
-                          '取消勾选会删除配置（state.json），让新版本以全新状态启动。',
-                          style: PsType.micro.copyWith(
-                            fontSize: 15,
-                            height: 1.55,
-                            color: PsColor.textFaint,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+              if (widget.rollback)
+                _UpdateNote('将用本机保留的 ${widget.version} 覆盖程序文件。'
+                    '用户配置与数据目录不受影响。')
+              else if (widget.installed)
+                _UpdateNote('将通过安装程序更新：程序关闭后由向导接管，'
+                    '完成安装后自动重新启动。当前数据目录会被沿用。')
+              else if (_useInstaller)
+                _UpdateNote('将通过安装程序更新，并把便携版升级为安装版：'
+                    '会注册卸载项与开始菜单快捷方式，数据目录保持 ${widget.dataDir}。')
+              else if (widget.portable)
+                _UpdateToggle(
+                  checked: _keepData,
+                  title: '保留用户数据',
+                  body: '便携版的数据在程序目录内：\n${widget.dataDir}\n'
+                      '取消勾选会删除配置（state.json），让新版本以全新状态启动。',
+                  onTap: () => setState(() => _keepData = !_keepData),
                 )
               else
-                Text(
-                  '用户数据保存在 ${widget.dataDir}，安装过程不会改动它。',
-                  style: PsType.micro.copyWith(
-                    fontSize: 15,
-                    height: 1.55,
-                    color: PsColor.textFaint,
-                  ),
+                _UpdateNote('用户数据保存在 ${widget.dataDir}，更新不会改动它。'),
+              if (!widget.rollback &&
+                  !widget.installed &&
+                  widget.hasInstaller) ...<Widget>[
+                const SizedBox(height: 12),
+                _UpdateToggle(
+                  checked: _useInstaller,
+                  title: '改用安装程序更新',
+                  body: '把便携版切成安装版：注册卸载项与快捷方式，'
+                      '数据目录不变。',
+                  onTap: () => setState(() => _useInstaller = !_useInstaller),
                 ),
+              ],
               const SizedBox(height: 28),
               Row(
                 children: <Widget>[
@@ -1123,13 +1157,97 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
                     label: '开始更新',
                     primary: true,
                     onSelect: () => Navigator.of(context).pop(
-                      _UpdateOptions(keepData: _keepData),
+                      _UpdateOptions(
+                        keepData: _keepData,
+                        useInstaller: _useInstaller,
+                      ),
                     ),
                   ),
                 ],
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A grey line of explanation inside the update dialog.
+class _UpdateNote extends StatelessWidget {
+  const _UpdateNote(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: PsType.micro.copyWith(
+        fontSize: 15,
+        height: 1.55,
+        color: PsColor.textFaint,
+      ),
+    );
+  }
+}
+
+/// A checkable option row for the update dialog.
+class _UpdateToggle extends StatelessWidget {
+  const _UpdateToggle({
+    required this.checked,
+    required this.title,
+    required this.body,
+    required this.onTap,
+  });
+
+  final bool checked;
+  final String title;
+  final String body;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      radius: 12,
+      onSelect: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: PsColor.text.withValues(alpha: 0.05),
+          border: Border.all(
+            color: checked
+                ? PsColor.accent
+                : PsColor.text.withValues(alpha: 0.18),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(
+                  checked
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked,
+                  size: 22,
+                  color: checked ? PsColor.accent : PsColor.textFaint,
+                ),
+                const SizedBox(width: 10),
+                Text(title, style: PsType.body.copyWith(fontSize: 19)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              body,
+              style: PsType.micro.copyWith(
+                fontSize: 15,
+                height: 1.55,
+                color: PsColor.textFaint,
+              ),
+            ),
+          ],
         ),
       ),
     );

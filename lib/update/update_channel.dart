@@ -19,14 +19,16 @@ enum UpdateChannel { stable, beta, dev }
 
 /// One installable candidate, whatever its source.
 ///
-/// `assetUrl` points at the portable zip that contains the application
-/// payload — for every channel, including [UpdateChannel.dev], it is an
-/// anonymous-downloadable GitHub Release asset.
+/// `assetUrl` points at the portable zip; [installerUrl] at the Inno setup exe
+/// when the release carries one. An installed copy updates only through the
+/// installer (so the uninstall entry stays correct); a portable copy defaults
+/// to the zip and may opt into the installer.
 class UpdateCandidate {
   const UpdateCandidate({
     required this.version,
     this.name = '',
     this.assetUrl = '',
+    this.installerUrl = '',
     this.notes = '',
     this.publishedAt = '',
     this.isPrerelease = false,
@@ -36,6 +38,7 @@ class UpdateCandidate {
         version: json['version'] as String? ?? '',
         name: json['name'] as String? ?? '',
         assetUrl: json['assetUrl'] as String? ?? '',
+        installerUrl: json['installerUrl'] as String? ?? '',
         notes: json['notes'] as String? ?? '',
         publishedAt: json['publishedAt'] as String? ?? '',
         isPrerelease: json['isPrerelease'] as bool? ?? false,
@@ -44,14 +47,21 @@ class UpdateCandidate {
   final String version;
   final String name;
   final String assetUrl;
+
+  /// Setup.exe for the same version; empty for channels that ship no installer
+  /// (dev nightlies are portable-only).
+  final String installerUrl;
   final String notes;
   final String publishedAt;
   final bool isPrerelease;
+
+  bool get hasInstaller => installerUrl.isNotEmpty;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'version': version,
         'name': name,
         'assetUrl': assetUrl,
+        'installerUrl': installerUrl,
         'notes': notes,
         'publishedAt': publishedAt,
         'isPrerelease': isPrerelease,

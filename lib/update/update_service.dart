@@ -23,6 +23,14 @@ import 'update_channel.dart';
 /// `data-dir.txt`, `updates/`, `log/` and the Inno Setup uninstaller, and keep
 /// each extracted build under `<install>/updates/<version>/` so rollback is the
 /// same path as forward.
+/// How this copy of the app got onto the machine.
+///
+/// The distinction decides which update package a user may take: an installed
+/// copy must update through the setup program so the uninstall entry, shortcut
+/// and registry stay correct; a portable copy replaces files in place and may
+/// opt into the installer.
+enum InstallKind { portable, installed }
+
 class UpdateService {
   UpdateService({
     this.repository = '9thChasingWindGirl/XnX-Player',
@@ -90,26 +98,39 @@ class UpdateService {
 
   UpdateCandidate _releaseCandidate(Map<String, dynamic> release) {
     final String tag = release['tag_name'] as String? ?? '';
-    String? assetUrl;
+    String? zipUrl;
+    String? exeUrl;
     for (final Object? entry in release['assets'] as List<dynamic>? ?? <dynamic>[]) {
-      final Map<String, dynamic> asset = entry! as Map<String, dynamic>;
+      final Object? raw = entry;
+      if (raw is! Map) {
+        continue;
+      }
+      final Map<Object?, Object?> asset = raw;
       final String name = asset['name'] as String? ?? '';
-      if (!name.endsWith('.zip')) {
-        // The installer is a .exe; in-app updates always use the portable zip.
+      final String lower = name.toLowerCase();
+      final String? url = asset['browser_download_url'] as String?;
+      if (lower.endsWith('.exe')) {
+        // The setup program. An installed copy needs it; a portable copy may
+        // choose it. Keep scanning: the zip may come after it in the list.
+        exeUrl ??= url;
+        continue;
+      }
+      if (!lower.endsWith('.zip')) {
         continue;
       }
       // Prefer the explicitly portable asset; fall back to any zip so older
       // releases keep working.
-      if (name.toLowerCase().contains('portable')) {
-        assetUrl = asset['browser_download_url'] as String?;
-        break;
+      if (lower.contains('portable')) {
+        zipUrl = url ?? zipUrl;
+      } else {
+        zipUrl ??= url;
       }
-      assetUrl ??= asset['browser_download_url'] as String?;
     }
     return UpdateCandidate(
       version: tag,
       name: release['name'] as String? ?? tag,
-      assetUrl: assetUrl ?? '',
+      assetUrl: zipUrl ?? '',
+      installerUrl: exeUrl ?? '',
       notes: release['body'] as String? ?? '',
       publishedAt: release['published_at'] as String? ?? '',
       isPrerelease: release['prerelease'] as bool? ?? false,
@@ -199,6 +220,61 @@ class UpdateService {
     final String prefix = install.endsWith(sep) ? install : '$install$sep';
     // The separator matters: `C:\app` must not claim `C:\appdata` as inside it.
     return data.startsWith(prefix);
+  }
+
+  /// Whether this copy is managed by the Inno setup program.
+  ///
+  /// The uninstaller (`unins000.exe`) is written next to the exe by the setup
+  /// and by nothing else, so its presence is the one reliable signal. A folder
+  /// that cannot be read is treated as portable, which never touches the
+  /// registry.
+  InstallKind get installKind {
+    try {
+      for (final FileSystemEntity entity
+          in Directory(AppPaths.installDir).listSync(recursive: false)) {
+        final String name = entity.uri.pathSegments.last.toLowerCase();
+        if (name.startsWith('unins') && name.endsWith('.exe')) {
+          return InstallKind.installed;
+        }
+      }
+    } on Object {
+      // Unreadable folder: fall through.
+    }
+    return InstallKind.portable;
+  }
+
+  /// Downloads the setup program for [candidate] and returns its path.
+  Future<String> prepareInstaller(
+    UpdateCandidate candidate, {
+    void Function(int received, int total)? onProgress,
+  }) async {
+    if (!candidate.hasInstaller) {
+      throw StateError('该版本没有提供安装包，请改用便携更新');
+    }
+    final String dir = '${_updateRoot()}${Platform.pathSeparator}'
+        '${_safeName(candidate.version)}';
+    Directory(dir).createSync(recursive: true);
+    final String path = '$dir${Platform.pathSeparator}'
+        'XnX-Player-Setup-${_safeName(candidate.version)}.exe';
+    await _download(candidate.installerUrl, path, onProgress: onProgress);
+    return path;
+  }
+
+  /// Hands over to the setup program and exits.
+  ///
+  /// Deliberately not silent: the wizard is the "mini install" the user asked
+  /// for, and it is also where the data folder is confirmed — the installer
+  /// preselects the existing one, so an update keeps the library where it is.
+  /// `/CLOSEAPPLICATIONS` lets the setup shut this process through Restart
+  /// Manager instead of failing on a locked exe.
+  Future<void> applyInstaller(String setupPath) async {
+    await Process.start(
+      setupPath,
+      <String>['/CLOSEAPPLICATIONS', '/NORESTART'],
+      mode: ProcessStartMode.detached,
+    );
+    debugPrint('installer launched from $setupPath');
+    exit(0);
   }
 
   /// Stages a restart-and-swap: a small PowerShell script waits for this
