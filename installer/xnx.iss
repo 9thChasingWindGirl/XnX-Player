@@ -42,9 +42,29 @@ Filename: "{app}\xnx_player.exe"; Description: "启动 XnX Player"; Flags: nowai
 var
   DataModePage: TInputOptionWizardPage;
   DataPage: TInputDirWizardPage;
+  ResetPage: TInputOptionWizardPage;
+  ExistingDataDir: String;
+
+/// The data folder a previous install pointed at, or '' for a fresh install.
+///
+/// Without this an upgrade silently rewrote data-dir.txt to the default and the
+/// app came up empty even though the real config was still on disk.
+function ReadExistingDataDir(): String;
+var
+  Raw: String;
+begin
+  Result := '';
+  if FileExists(ExpandConstant('{app}\data-dir.txt')) then
+  begin
+    if LoadStringFromFile(ExpandConstant('{app}\data-dir.txt'), Raw) then
+      Result := Trim(Raw);
+  end;
+end;
 
 procedure InitializeWizard;
 begin
+  ExistingDataDir := ReadExistingDataDir();
+
   DataModePage := CreateInputOptionPage(
     wpSelectDir,
     '数据存放位置',
@@ -56,7 +76,6 @@ begin
   DataModePage.Add('默认位置（%APPDATA%\XnX Player）');
   DataModePage.Add('程序目录下的 userdata 文件夹（便携式）');
   DataModePage.Add('自定义目录');
-  DataModePage.Values[0] := True;
 
   DataPage := CreateInputDirPage(
     DataModePage.ID,
@@ -68,6 +87,35 @@ begin
   );
   DataPage.Add('数据目录：');
   DataPage.Values[0] := ExpandConstant('{userappdata}\XnX Player');
+
+  // Pre-select where the data already is. The default option was the reason an
+  // upgrade looked like it wiped the library: the files were untouched, but the
+  // pointer moved out from under them.
+  if ExistingDataDir <> '' then
+  begin
+    if CompareText(ExistingDataDir, ExpandConstant('{app}\userdata')) = 0 then
+      DataModePage.Values[1] := True
+    else if CompareText(ExistingDataDir, ExpandConstant('{userappdata}\XnX Player')) = 0 then
+      DataModePage.Values[0] := True
+    else
+    begin
+      DataModePage.Values[2] := True;
+      DataPage.Values[0] := ExistingDataDir;
+    end;
+  end
+  else
+    DataModePage.Values[0] := True;
+
+  ResetPage := CreateInputOptionPage(
+    DataPage.ID,
+    '现有用户数据',
+    '是否保留现有配置',
+    '检测到现有数据目录：' + ExistingDataDir,
+    False, // 非独占：这一项要能取消勾选
+    False
+  );
+  ResetPage.Add('保留现有配置（推荐）');
+  ResetPage.Values[0] := True;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -76,6 +124,9 @@ begin
   // 只有“自定义目录”才进入路径输入页。
   if PageID = DataPage.ID then
     Result := not DataModePage.Values[2];
+  // 全新安装没有旧配置可问。
+  if PageID = ResetPage.ID then
+    Result := ExistingDataDir = '';
 end;
 
 function DataDir(): String;
@@ -115,6 +166,13 @@ begin
   begin
     Dir := DataDir();
     ForceDirectories(Dir);
+    // 只有用户明确取消“保留现有配置”时才清空；数据目录本身留着，
+    // 截图与更新缓存对全新配置同样有用。
+    if (ExistingDataDir <> '') and (ResetPage.Values[0] = False) then
+    begin
+      DeleteFile(Dir + '\state.json');
+      DeleteFile(Dir + '\library.log');
+    end;
     SaveStringToFile(
       ExpandConstant('{app}\data-dir.txt'),
       Dir + #13#10,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../../core/app_paths.dart';
 import '../../core/input/input_action.dart';
 import '../../core/input/input_router.dart';
 import '../../core/strings.dart';
@@ -35,6 +36,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   UpdateChannel _channel = UpdateService.defaultChannel;
   String _updateStatus = '检查更新后在此显示结果';
+
+  /// Last download fraction reported, used to throttle status repaints.
+  double _downloadProgress = 0;
   UpdateCandidate? _pending;
   final UpdateService _updater = UpdateService();
 
@@ -198,16 +202,58 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _checkOrInstall() async {
     if (_pending != null) {
       final UpdateCandidate candidate = _pending!;
+      // Exiting and restarting the app is not something to do silently: confirm
+      // first, and on a portable layout ask whether the config survives.
+      final _UpdateOptions? options = await showDialog<_UpdateOptions>(
+        context: context,
+        builder: (BuildContext context) => _UpdateConfirmDialog(
+          version: candidate.version,
+          portable: _updater.isPortable,
+          dataDir: AppPaths.dataDir,
+        ),
+      );
+      if (options == null || !mounted) {
+        return;
+      }
       setState(() {
-        _updateStatus = '正在下载并安装 ${candidate.version}…安装后会自动重启';
         _pending = null;
+        _downloadProgress = 0;
+        _updateStatus = '正在下载 ${candidate.version}…';
       });
       try {
-        final String payload = await _updater.prepareInstall(candidate);
-        await _updater.apply(payload);
+        final String payload = await _updater.prepareInstall(
+          candidate,
+          onProgress: (int received, int total) {
+            if (!mounted) {
+              return;
+            }
+            final double fraction = total > 0 ? received / total : 0;
+            // The sink reports every chunk; repaint at 2 % steps instead.
+            if (received != total && fraction - _downloadProgress < 0.02) {
+              return;
+            }
+            _downloadProgress = fraction;
+            setState(() {
+              _updateStatus = total > 0
+                  ? '正在下载 ${candidate.version} '
+                      '${(fraction * 100).round()}%'
+                      '（${_megabytes(received)} / ${_megabytes(total)}）'
+                  : '正在下载 ${candidate.version}（${_megabytes(received)}）';
+            });
+          },
+        );
+        if (!mounted) {
+          return;
+        }
+        setState(() => _updateStatus = '正在安装，程序即将重启…');
+        await _updater.apply(payload, keepUserData: options.keepData);
       } on Object catch (error) {
+        if (!mounted) {
+          return;
+        }
         setState(() {
           _updateStatus = '安装失败：$error';
+          _downloadProgress = 0;
         });
       }
       return;
@@ -243,6 +289,9 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  static String _megabytes(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
   Future<void> _rollBackTo(String version) async {
     final String target = _updater.installedVersions().firstWhere(
           (String v) => v == version,
@@ -251,13 +300,28 @@ class _SettingsPageState extends State<SettingsPage> {
     if (target.isEmpty) {
       return;
     }
+    // A rollback exits and restarts too, so it deserves the same confirmation.
+    final _UpdateOptions? options = await showDialog<_UpdateOptions>(
+      context: context,
+      builder: (BuildContext context) => _UpdateConfirmDialog(
+        version: target,
+        portable: _updater.isPortable,
+        dataDir: AppPaths.dataDir,
+      ),
+    );
+    if (options == null || !mounted) {
+      return;
+    }
     setState(() {
-      _updateStatus = '正在回退到 $version…完成后自动重启';
+      _updateStatus = '正在回退到 $version…程序即将重启';
     });
     try {
       final String payload = await _updater.prepareInstalled(target);
-      await _updater.apply(payload);
+      await _updater.apply(payload, keepUserData: options.keepData);
     } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _updateStatus = '回退失败：$error';
       });
@@ -865,6 +929,167 @@ class _KernelCard extends StatelessWidget {
 /// Modal key editor. While it is open a text field owns the keyboard, so the
 /// router is told to forward everything except Back to the caret — the same
 /// contract the add-source sheet uses.
+/// What the install confirmation decided. A null dialog result means cancel.
+class _UpdateOptions {
+  const _UpdateOptions({required this.keepData});
+
+  final bool keepData;
+}
+
+/// "Install update X" — the step that used to be a silent exit and restart.
+class _UpdateConfirmDialog extends StatefulWidget {
+  const _UpdateConfirmDialog({
+    required this.version,
+    required this.portable,
+    required this.dataDir,
+  });
+
+  /// The version being installed (or rolled back to).
+  final String version;
+
+  /// True when the data folder lives inside the install folder: the only
+  /// layout the swap can damage, and the only one worth asking about.
+  final bool portable;
+  final String dataDir;
+
+  @override
+  State<_UpdateConfirmDialog> createState() => _UpdateConfirmDialogState();
+}
+
+class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
+  bool _keepData = true;
+  InputSubscription? _inputSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _inputSub = InputRouter.instance.subscribe(_onIntent, name: 'update-confirm');
+  }
+
+  @override
+  void dispose() {
+    _inputSub?.cancel();
+    super.dispose();
+  }
+
+  bool _onIntent(InputIntent intent) {
+    if (intent.action != InputAction.back) {
+      return false;
+    }
+    Navigator.of(context).pop();
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Material(
+        color: const Color(0xEE141821),
+        borderRadius: BorderRadius.circular(PsRadius.sheet),
+        child: Container(
+          width: 820,
+          padding: const EdgeInsets.all(40),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(PsRadius.sheet),
+            border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('安装更新 ${widget.version}',
+                  style: PsType.page.copyWith(fontSize: 36)),
+              const SizedBox(height: 12),
+              Text(
+                '程序会立即关闭，新版本覆盖安装目录后自动重新启动。',
+                style: PsType.body.copyWith(
+                  fontSize: 18,
+                  height: 1.6,
+                  color: PsColor.text.withValues(alpha: 0.72),
+                ),
+              ),
+              const SizedBox(height: 22),
+              if (widget.portable)
+                TvFocusable(
+                  radius: 12,
+                  onSelect: () => setState(() => _keepData = !_keepData),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color: PsColor.text.withValues(alpha: 0.05),
+                      border: Border.all(
+                        color: _keepData
+                            ? PsColor.accent
+                            : PsColor.text.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Row(
+                          children: <Widget>[
+                            Icon(
+                              _keepData
+                                  ? Icons.check_circle_rounded
+                                  : Icons.radio_button_unchecked,
+                              size: 22,
+                              color: _keepData ? PsColor.accent : PsColor.textFaint,
+                            ),
+                            const SizedBox(width: 10),
+                            Text('保留用户数据',
+                                style: PsType.body.copyWith(fontSize: 19)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '便携版的数据在程序目录内：\n${widget.dataDir}\n'
+                          '取消勾选会删除配置（state.json），让新版本以全新状态启动。',
+                          style: PsType.micro.copyWith(
+                            fontSize: 15,
+                            height: 1.55,
+                            color: PsColor.textFaint,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  '用户数据保存在 ${widget.dataDir}，安装过程不会改动它。',
+                  style: PsType.micro.copyWith(
+                    fontSize: 15,
+                    height: 1.55,
+                    color: PsColor.textFaint,
+                  ),
+                ),
+              const SizedBox(height: 28),
+              Row(
+                children: <Widget>[
+                  PsButton(
+                    label: '取消',
+                    onSelect: () => Navigator.of(context).pop(),
+                  ),
+                  const SizedBox(width: 12),
+                  PsButton(
+                    label: '开始更新',
+                    primary: true,
+                    onSelect: () => Navigator.of(context).pop(
+                      _UpdateOptions(keepData: _keepData),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TmdbKeyDialog extends StatefulWidget {
   const _TmdbKeyDialog({required this.initial, required this.onSave});
 

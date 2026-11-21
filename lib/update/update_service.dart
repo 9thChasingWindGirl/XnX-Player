@@ -141,13 +141,16 @@ class UpdateService {
   /// Downloads and unpacks the candidate into
   /// `<install>/updates/<version>/`, returning the payload directory that
   /// `apply` would copy over the install directory.
-  Future<String> prepareInstall(UpdateCandidate candidate) async {
+  Future<String> prepareInstall(
+    UpdateCandidate candidate, {
+    void Function(int received, int total)? onProgress,
+  }) async {
     final String root = _updateRoot();
     final String versionDir = '$root${Platform.pathSeparator}'
         '${_safeName(candidate.version)}';
     Directory(versionDir).createSync(recursive: true);
     final String zipPath = '$versionDir${Platform.pathSeparator}update.zip';
-    await _download(candidate.assetUrl, zipPath);
+    await _download(candidate.assetUrl, zipPath, onProgress: onProgress);
     final ProcessResult result = await Process.run(
       'powershell.exe',
       <String>[
@@ -185,13 +188,28 @@ class UpdateService {
     return payload.path;
   }
 
+  /// True when user data lives inside the install folder (a portable layout).
+  ///
+  /// That is the only arrangement an in-place swap can plausibly damage, so it
+  /// is also the only one worth asking the user about.
+  bool get isPortable {
+    final String install = AppPaths.installDir.toLowerCase();
+    final String data = AppPaths.dataDir.toLowerCase();
+    final String sep = Platform.pathSeparator;
+    final String prefix = install.endsWith(sep) ? install : '$install$sep';
+    // The separator matters: `C:\app` must not claim `C:\appdata` as inside it.
+    return data.startsWith(prefix);
+  }
+
   /// Stages a restart-and-swap: a small PowerShell script waits for this
   /// process to exit, copies the new build over the install directory while
   /// excluding `updates/` and `log/`, then starts the new exe.
   ///
-  /// Rollback uses the same entry point with an older payload dir — user data
-  /// in `%APPDATA%` is never part of the swap.
-  Future<void> apply(String payloadDir) async {
+  /// [keepUserData] defaults to true: replacing a config the user built up
+  /// with the package defaults is never a silent decision. When it is false the
+  /// script removes `state.json` after the swap, so the new build starts clean
+  /// on purpose.
+  Future<void> apply(String payloadDir, {bool keepUserData = true}) async {
     final String install = File(Platform.resolvedExecutable).parent.path;
     final String sep = Platform.pathSeparator;
     // If the user chose data inside the install directory (portable-style),
@@ -208,42 +226,53 @@ class UpdateService {
         dataSegment = first;
       }
     }
-    final List<String> excluded = <String>[
+    final List<String> patterns = <String>[
       'updates',
       'log',
       'data-dir.txt',
       'apply_update.ps1',
-      // Inno Setup 的卸载器属于安装记录，换掉它会让“应用和功能”里的条目失效。
+      // Inno Setup 的卸载器属于安装记录，换掉它会让"应用和功能"里的条目失效。
       'unins*',
       if (dataSegment != null) dataSegment,
     ];
-    final String excludeList = excluded
-        .map((String name) => "'${name.replaceAll("'", "''")}'")
-        .join(',');
+    final String patternList =
+        patterns.map((String name) => "'${_ps(name)}'").join(',');
     final String script = '$install${Platform.pathSeparator}updates'
         '${Platform.pathSeparator}apply_update.ps1';
     File(script).parent.createSync(recursive: true);
     File(script).writeAsStringSync('''
 \$ErrorActionPreference = 'Stop'
-\$payload = '$payloadDir'
-\$install = '$install'
+\$payload = '${_ps(payloadDir)}'
+\$install = '${_ps(install)}'
+\$dataDir = '${_ps(dataDir)}'
+\$keepData = \$${keepUserData ? 'true' : 'false'}
 \$exe = Join-Path \$install 'xnx_player.exe'
 \$self = \$MyInvocation.MyCommand.Path
-\$exclude = @($excludeList)
+\$patterns = @($patternList)
 Start-Sleep -Seconds 2
-Get-ChildItem -LiteralPath \$install -Exclude \$exclude | ForEach-Object {
-  \$target = Join-Path \$install \$_.Name
-  if (\$_.PSIsContainer) {
-    if (Test-Path \$target) { Remove-Item -Recurse -Force \$target }
-  } else {
-    Remove-Item -Force \$target
-  }
+# `Get-ChildItem -Exclude` is ignored when combined with -LiteralPath, which
+# meant this sweep deleted everything — data-dir.txt, a portable data folder,
+# and even the updates/ folder holding this script. Match names ourselves.
+Get-ChildItem -LiteralPath \$install | Where-Object {
+  \$name = \$_.Name
+  -not (\$patterns | Where-Object { \$name -like \$_ })
+} | ForEach-Object {
+  Remove-Item -LiteralPath \$_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
 # data-dir.txt 记录的是用户的现有数据位置，更新包里的那份只对全新解压有意义。
 # updates/ 与 log/ 是运行时目录，覆盖它们会打断本次更新或清掉日志。
 \$skip = @('data-dir.txt', 'updates', 'log')
 Get-ChildItem -LiteralPath \$payload | Where-Object { \$skip -notcontains \$_.Name } | ForEach-Object {
   Copy-Item -LiteralPath \$_.FullName -Destination \$install -Recurse -Force
+}
+# 用户选了"不保留"：只清配置与库日志，数据目录本身留着（截图、更新缓存还在）。
+if (-not \$keepData) {
+  foreach (\$f in @('state.json', 'library.log')) {
+    \$p = Join-Path \$dataDir \$f
+    if (Test-Path -LiteralPath \$p) {
+      Remove-Item -LiteralPath \$p -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 Start-Process -FilePath \$exe
 Remove-Item -Force \$self
@@ -256,6 +285,9 @@ Remove-Item -Force \$self
     debugPrint('update staged from $payloadDir');
     exit(0);
   }
+
+  /// Escapes a path for a single-quoted PowerShell literal.
+  static String _ps(String value) => value.replaceAll("'", "''");
 
   /// Versions that already have an extracted build on disk, newest first —
   /// the rollback menu.
@@ -288,25 +320,103 @@ Remove-Item -Force \$self
     return null;
   }
 
-  Future<void> _download(String url, String target) async {
-    final Uri uri = Uri.parse(url);
-    final HttpClient client = HttpClient()
-      ..userAgent = Http.userAgentHeader['User-Agent'];
-    try {
-      final HttpClientRequest request = await client.getUrl(uri);
-      if (githubToken.isNotEmpty && uri.host == 'api.github.com') {
-        request.headers.set('Authorization', 'Bearer $githubToken');
-        request.headers.set('Accept', 'application/vnd.github+json');
+  /// Downloads [url] into [target], retrying a failed transfer.
+  ///
+  /// A release asset is tens of megabytes over a link that is often the reason
+  /// the check was slow in the first place, so this is deliberately more
+  /// patient than the JSON calls: a system proxy is honoured (a user who needs
+  /// one to reach GitHub has already configured it), the connection gets 30 s
+  /// and a stalled body 90 s, and a dropped transfer starts over instead of
+  /// leaving half a zip to fail Expand-Archive later.
+  Future<void> _download(
+    String url,
+    String target, {
+    void Function(int received, int total)? onProgress,
+  }) async {
+    Object? lastError;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) {
+        await Future<void>.delayed(Duration(milliseconds: 600 * attempt));
+        try {
+          final File partial = File(target);
+          if (partial.existsSync()) {
+            partial.deleteSync();
+          }
+        } on Object {
+          // A stuck handle only costs a full re-download.
+        }
       }
-      final HttpClientResponse response = await request.close();
-      if (response.statusCode != 200) {
-        throw HttpFailure('下载失败', status: response.statusCode);
+      final HttpClient client = HttpClient()
+        ..userAgent = Http.userAgentHeader['User-Agent']
+        // `api.github.com` often answers while `objects.githubusercontent.com`
+        // (where release assets live) does not. Honouring a proxy is therefore
+        // the difference between "checked fine" and "download impossible".
+        ..findProxy = _proxyFor
+        ..connectionTimeout = const Duration(seconds: 30);
+      try {
+        final Uri uri = Uri.parse(_mirrored(url));
+        final HttpClientRequest request = await client.getUrl(uri);
+        if (githubToken.isNotEmpty && uri.host == 'api.github.com') {
+          request.headers.set('Authorization', 'Bearer $githubToken');
+          request.headers.set('Accept', 'application/vnd.github+json');
+        }
+        final HttpClientResponse response =
+            await request.close().timeout(const Duration(seconds: 60));
+        if (response.statusCode != 200) {
+          throw HttpFailure('下载失败', status: response.statusCode);
+        }
+        final int total = response.contentLength;
+        final IOSink sink = File(target).openWrite();
+        int received = 0;
+        try {
+          await for (final List<int> chunk
+              in response.timeout(const Duration(seconds: 90))) {
+            sink.add(chunk);
+            received += chunk.length;
+            onProgress?.call(received, total);
+          }
+          await sink.flush();
+        } finally {
+          await sink.close();
+        }
+        return;
+      } on Object catch (error) {
+        lastError = error;
+      } finally {
+        client.close(force: true);
       }
-      final IOSink sink = File(target).openWrite();
-      await response.pipe(sink);
-    } finally {
-      client.close(force: true);
     }
+    throw StateError(
+      '下载更新包失败（已重试 3 次）：$lastError\n'
+      '若网络无法直连 GitHub，可设置环境变量 XNX_UPDATE_PROXY（如 127.0.0.1:7890）'
+      '或 XNX_UPDATE_MIRROR（镜像前缀）。',
+    );
+  }
+
+  /// Proxy for a request: the explicit override first, then the environment.
+  ///
+  /// Dart does not read the Windows "Internet options" proxy, so an explicit
+  /// variable is the only dependable hook for a user who set it system-wide.
+  static String _proxyFor(Uri uri) {
+    final String explicit = (Platform.environment['XNX_UPDATE_PROXY'] ?? '').trim();
+    if (explicit.isNotEmpty) {
+      return 'PROXY $explicit';
+    }
+    return HttpClient.findProxyFromEnvironment(uri);
+  }
+
+  /// Optional prefix for asset downloads (a GitHub mirror).
+  ///
+  /// Release assets are served from a host that is commonly unreachable on some
+  /// networks while the API itself works. A prefix is the only remedy that does
+  /// not require shipping a proxy; empty by default so the official host is
+  /// what everyone else gets.
+  static String _mirrored(String url) {
+    final String prefix = (Platform.environment['XNX_UPDATE_MIRROR'] ?? '').trim();
+    if (prefix.isEmpty || !url.startsWith('http')) {
+      return url;
+    }
+    return prefix.endsWith('/') ? '$prefix$url' : '$prefix/$url';
   }
 
   static String _safeName(String version) =>
