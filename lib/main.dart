@@ -2,9 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/rendering.dart' show debugPaintBaselinesEnabled, debugPaintSizeEnabled;
-import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -15,7 +12,6 @@ import 'core/strings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  _keepDebugPaintersOff();
 
   // The app's own log comes up before anything that can fail: a launch that
   // dies in the window manager or never reaches the player has to leave a
@@ -58,27 +54,6 @@ Future<void> main() async {
   _ensureInstallDirs();
 
   runApp(const XnXApp());
-}
-
-/// Keeps Flutter's debug painters off for good.
-///
-/// `debugPaintBaselinesEnabled` draws an orange (yellow-looking) line under
-/// every `RenderParagraph` baseline — on a page with a lot of copy it reads as
-/// "the UI underlines everything". Setting it once in [main] is not enough: a
-/// DevTools session can flip the "Show baselines" switch back on at any time,
-/// and hot restart re-runs binding setup. In debug builds we therefore
-/// re-assert the flags on every frame; in release/profile the setter is a
-/// no-op anyway, so nothing is paid there.
-void _keepDebugPaintersOff() {
-  debugPaintBaselinesEnabled = false;
-  debugPaintSizeEnabled = false;
-  if (!kDebugMode) {
-    return;
-  }
-  SchedulerBinding.instance.addPersistentFrameCallback((_) {
-    debugPaintBaselinesEnabled = false;
-    debugPaintSizeEnabled = false;
-  });
 }
 
 /// Creates the install-side directories up front instead of waiting for the
