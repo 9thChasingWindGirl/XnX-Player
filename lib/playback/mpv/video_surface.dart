@@ -46,7 +46,7 @@ class VideoSurface {
 
   bool get isVisible => visible;
 
-  void start({Duration interval = const Duration(milliseconds: 400)}) {
+  void start({Duration interval = const Duration(milliseconds: 150)}) {
     if (!Platform.isWindows) {
       return;
     }
@@ -205,6 +205,49 @@ class VideoSurface {
     _hostBox = null;
     _videoBox = null;
     sync();
+  }
+
+  /// Re-fits only when the parent's client area no longer matches the cached
+  /// rectangle.
+  ///
+  /// The OSD is rendered by mpv at the size of this surface, while pointer
+  /// coordinates are normalized against the Flutter view. If the two disagree
+  /// — even for the few frames between a window resize and Flutter's metrics
+  /// callback — a click is mapped onto a scale the chrome is not drawn at.
+  /// The pointer forwarder calls this before every event, so the surface is
+  /// brought to the current rectangle before the coordinates are used. In the
+  /// steady state it costs one `GetClientRect`.
+  void ensureAligned() {
+    if (!Platform.isWindows || !visible) {
+      return;
+    }
+    final WindowBox? outer = Win32.clientBox(parent);
+    if (outer == null || outer.isEmpty) {
+      return;
+    }
+    final WindowBox? known = _hostBox;
+    bool stale = known == null || !_sameBox(outer, known);
+    final int? host = _host;
+    final int? video = _video;
+    if (!stale && host != null && video != null) {
+      // mpv can recreate or resize its child during a VO reconfig; compare the
+      // rectangle the OSD is actually rendered into, not just the outer one.
+      // One pixel of slack keeps DPI rounding from turning every mouse move
+      // into a full re-fit.
+      final WindowBox? target = Win32.clientBox(host);
+      final WindowBox? actual = Win32.clientBox(video);
+      stale = target == null || actual == null || !_sameBox(actual, target, tolerance: 1);
+    }
+    if (stale) {
+      refit();
+    }
+  }
+
+  static bool _sameBox(WindowBox a, WindowBox b, {int tolerance = 0}) {
+    return (a.left - b.left).abs() <= tolerance &&
+        (a.top - b.top).abs() <= tolerance &&
+        (a.width - b.width).abs() <= tolerance &&
+        (a.height - b.height).abs() <= tolerance;
   }
 
   void dispose() {

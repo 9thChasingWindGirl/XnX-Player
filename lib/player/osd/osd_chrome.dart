@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 /// One frame of the independent OSD chrome, drawn with plain `dart:ui`.
@@ -19,16 +20,41 @@ abstract final class OsdChrome {
 
   static const double safeX = 96;
 
-  /// The rectangles that answer to the chrome. Everything else in the OSD
+  /// Horizontal insets of the seek line. They are constants rather than
+  /// measurements of the clock text so the drawn line and the hit strip can
+  /// share one rectangle: a hit test derived from a different width is how a
+  /// click ends up seeking a different moment than the one under the cursor.
+  static const double seekLeftInset = safeX + 96;
+
+  /// Right inset: the duration readout plus breathing room.
+  static const double seekRightInset = safeX + 96 + 140;
+
+  /// The seek line's rectangle — the single source of truth for painting,
+  /// hit-testing and pointer-to-fraction conversion.
+  static ui.Rect seekTrack(ui.Size size) {
+    final double y = size.height - 34 - 8;
+    final double left = seekLeftInset;
+    final double right = math.max(left + 40, size.width - seekRightInset);
+    return ui.Rect.fromLTRB(left, y - 4, right, y + 4);
+  }
+
+  /// Maps a window x coordinate onto 0..1 along [seekTrack].
+  static double fractionAt(ui.Size size, double x) {
+    final ui.Rect track = seekTrack(size);
+    return ((x - track.left) / track.width).clamp(0.0, 1.0);
+  }
+
+  /// The rectangle that answers to the chrome. Everything else in the OSD
   /// window's area belongs to the video below (the layer itself is
   /// see-through; this is what the Dart-side forwarder tests against).
   static List<ui.Rect> hotZones(ui.Size size) {
+    final ui.Rect track = seekTrack(size);
     return <ui.Rect>[
-      ui.Rect.fromLTWH(
-        safeX,
-        size.height - seekHitHeight - 24,
-        size.width - safeX * 2,
-        seekHitHeight + 24,
+      ui.Rect.fromLTRB(
+        track.left,
+        track.center.dy - seekHitHeight / 2,
+        track.right,
+        track.center.dy + seekHitHeight / 2,
       ),
     ];
   }
@@ -65,14 +91,14 @@ abstract final class OsdChrome {
         ui.Offset(size.width - safeX - totalWidth, innerBottom - 16), 20,
         color: const ui.Color(0x9EF2F4F8));
 
-    // Seek line between the two clocks.
-    const double seekLeft = safeX + 96;
-    final double seekRight = size.width - safeX - 96 - totalWidth - 40;
-    final double seekY = innerBottom - 8;
+    // Seek line between the two clocks. Painting, hot-zone testing and the
+    // pointer-to-fraction conversion all read [seekTrack], so the knob always
+    // lands where the click was.
+    final ui.Rect track = seekTrack(size);
     final double progress =
         model.duration > 0 ? (model.position / model.duration).clamp(0.0, 1.0) : 0;
     final double knobValue = model.scrubbing ?? progress;
-    _seekLine(canvas, seekLeft, seekRight, seekY, knobValue, model.accent,
+    _seekLine(canvas, track.left, track.right, track.center.dy, knobValue, model.accent,
         hover: model.hoverSeek || model.scrubbing != null);
 
     // Left badges: what the file is being decoded as. Half the ink of the Lua

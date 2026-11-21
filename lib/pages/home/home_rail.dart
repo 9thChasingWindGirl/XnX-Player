@@ -11,13 +11,23 @@ import '../../ui/core/tv_focusable.dart';
 import '../../ui/core/tv_scale.dart';
 import 'home_tile.dart';
 
-/// One shelf of covers.
+/// Builds one card. [width] is the resting width; [height] is the animated
+/// height, so artwork and ring stay welded together.
+typedef RailCardBuilder = Widget Function(
+  MediaItem item,
+  double width,
+  double height,
+  bool focused,
+);
+
+/// One horizontal shelf of covers.
 ///
-/// Geometry is the reference's: 196 px cards, 26 px gaps, the focused card
-/// grows to 1.2 with its bottom-left corner pinned so the row keeps its
-/// baseline, and the cards to its right slide over to make room. Scrolling is a
-/// spring chasing a target column, so held D-pad movement blends instead of
-/// stepping.
+/// Geometry is configurable: card size, gutter, left inset and growth are
+/// passed in, so the same rail serves the Plex home (168 px posters, 16 px
+/// gutters, 1.06 growth) and any future shelf. The focused card grows with its
+/// bottom edge pinned, the cards to its right slide over to make room, and the
+/// scroll is a spring chasing a target column so held D-pad movement blends
+/// instead of stepping.
 class HomeRail extends StatefulWidget {
   const HomeRail({
     super.key,
@@ -30,6 +40,11 @@ class HomeRail extends StatefulWidget {
     this.cardSize = PsSpace.tileSize,
     this.cardWidth,
     this.startIndex = 2,
+    this.grow = PsSpace.cardGrow,
+    this.gap = PsSpace.cardGap,
+    this.paddingLeft = PsSpace.safeX,
+    this.cornerRadius = PsRadius.card,
+    this.cardBuilder,
   });
 
   final List<MediaItem> items;
@@ -53,6 +68,21 @@ class HomeRail extends StatefulWidget {
   /// Which slot the focused card is pulled toward.
   final int startIndex;
 
+  /// How much the focused card grows. Plex shelves use a restrained 1.06–1.08
+  /// instead of the console stage's 1.2, so rows stay dense.
+  final double grow;
+
+  /// Width of the gutter between resting cards.
+  final double gap;
+
+  /// Left inset of the rail inside the page.
+  final double paddingLeft;
+
+  final double cornerRadius;
+
+  /// Optional card presentation. Defaults to the console [PosterCard].
+  final RailCardBuilder? cardBuilder;
+
   @override
   State<HomeRail> createState() => _HomeRailState();
 }
@@ -69,7 +99,7 @@ class _HomeRailState extends State<HomeRail> {
   /// instead of an assumed size.
   double get _designWidth => TvScale.widthOf(context);
 
-  double get _pitch => _width + PsSpace.cardGap;
+  double get _pitch => _width + widget.gap;
 
   double get _width => widget.cardWidth ?? widget.cardSize;
 
@@ -94,7 +124,7 @@ class _HomeRailState extends State<HomeRail> {
   }
 
   double _restLeft(int index) {
-    final double baseline = PsSpace.safeX + index * _pitch;
+    final double baseline = widget.paddingLeft + index * _pitch;
     if (widget.focusedIndex >= 0 && index > widget.focusedIndex) {
       return baseline + _width * (_focusedGrow - 1);
     }
@@ -104,16 +134,16 @@ class _HomeRailState extends State<HomeRail> {
   void _sync(double dt) {
     for (int i = 0; i < widget.items.length; i++) {
       _growthFor(widget.items[i].id).target =
-          i == widget.focusedIndex ? PsSpace.cardGrow : 1;
+          i == widget.focusedIndex ? widget.grow : 1;
     }
 
     if (widget.active && widget.focusedIndex >= 0) {
       final double pitch = _pitch;
-      final double anchor = PsSpace.safeX + pitch * widget.startIndex;
-      final double focusedLeft = PsSpace.safeX + widget.focusedIndex * pitch;
-      final double contentRight = PsSpace.safeX + widget.items.length * pitch;
+      final double anchor = widget.paddingLeft + pitch * widget.startIndex;
+      final double focusedLeft = widget.paddingLeft + widget.focusedIndex * pitch;
+      final double contentRight = widget.paddingLeft + widget.items.length * pitch;
       final double maxScroll =
-          math.max(0.0, contentRight + PsSpace.safeX - _designWidth);
+          math.max(0.0, contentRight + widget.paddingLeft - _designWidth);
       _scroll.target = (focusedLeft - anchor).clamp(0.0, maxScroll).toDouble();
     }
 
@@ -131,7 +161,7 @@ class _HomeRailState extends State<HomeRail> {
     if (widget.items.isEmpty) {
       return const SizedBox.shrink();
     }
-    final double height = widget.cardSize * PsSpace.cardGrow;
+    final double height = widget.cardSize * widget.grow;
 
     return SizedBox(
       width: _designWidth,
@@ -165,8 +195,8 @@ class _HomeRailState extends State<HomeRail> {
                 child: TvFocusable(
                   key: ValueKey<String>(item.id),
                   focusId: FocusIds.media(item.id),
-                  radius: PsRadius.card,
-                  focusedRadius: PsRadius.cardFocused,
+                  radius: widget.cornerRadius,
+                  focusedRadius: widget.cornerRadius,
                   accent: item.accentColor,
                   onSelect: () => widget.onSelect(item),
                   onLongSelect:
@@ -176,12 +206,18 @@ class _HomeRailState extends State<HomeRail> {
                       widget.onFocus(i);
                     }
                   },
-                  child: PosterCard(
-                    item: item,
-                    width: _width,
-                    height: size,
-                    focused: i == widget.focusedIndex,
-                  ),
+                  child: widget.cardBuilder?.call(
+                        item,
+                        _width,
+                        size,
+                        i == widget.focusedIndex,
+                      ) ??
+                      PosterCard(
+                        item: item,
+                        width: _width,
+                        height: size,
+                        focused: i == widget.focusedIndex,
+                      ),
                 ),
               ),
             );

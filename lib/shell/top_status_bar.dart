@@ -7,13 +7,12 @@ import '../design/ps_tokens.dart';
 import '../ui/core/focus_zone.dart';
 import '../ui/core/tv_focusable.dart';
 
-/// Top chrome, rebuilt to the reference layout: the media-source entry on the
-/// left, navigation and search centred, window controls on the right.
+/// Plex-style top chrome: wordmark, library switcher, flat text tabs, and the
+/// window controls on the far right.
 ///
-/// The source pill opens the dock's source panel — adding, editing and
-/// switching all live in one place instead of a second list here. Window
-/// controls are real buttons, not decorations: a desktop player that hides
-/// its own close button behind a native title bar reads as unfinished.
+/// The previous bar centred the tabs and wrapped the source in a large pill.
+/// Plex anchors everything left after the logo and keeps one line of quiet
+/// 18 px text, so the banner underneath stays the loudest thing on screen.
 class TopStatusBar extends StatefulWidget {
   const TopStatusBar({
     super.key,
@@ -36,8 +35,8 @@ class TopStatusBar extends StatefulWidget {
   final VoidCallback onToggleMaximize;
   final VoidCallback onClose;
 
-  /// The registered sources, for the switcher pill. Switching filters the
-  /// home shelves to one source; managing them stays in the dock panel.
+  /// The registered sources, for the switcher. Switching filters the home
+  /// shelves to one source; managing them stays in the dock panel.
   final List<SourceOption> sources;
   final String? currentSourceId;
   final ValueChanged<String?> onPickSource;
@@ -49,6 +48,7 @@ class TopStatusBar extends StatefulWidget {
 
 class _TopStatusBarState extends State<TopStatusBar> {
   static const List<String> _tabs = <String>[S.tabHome, S.tabLibrary, S.tabSettings];
+  static const double _margin = 64;
 
   Timer? _clock;
   DateTime _now = DateTime.now();
@@ -94,9 +94,14 @@ class _TopStatusBarState extends State<TopStatusBar> {
 
   @override
   Widget build(BuildContext context) {
+    // Flutter does not hit-test outside a render box, so the source menu needs
+    // the box itself to be tall while it is open; otherwise only the strip
+    // inside the bar answers to the pointer and every row below it is dead.
+    final double boxHeight = _pickerOpen ? 420 : 96;
     return SizedBox(
-      height: 104,
+      height: boxHeight,
       child: Stack(
+        clipBehavior: Clip.none,
         children: <Widget>[
           Positioned(
             left: 0,
@@ -110,7 +115,7 @@ class _TopStatusBarState extends State<TopStatusBar> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: <Color>[
-                      const Color(0xFF000000).withValues(alpha: 0.55),
+                      const Color(0xFF000000).withValues(alpha: 0.62),
                       const Color(0x00000000),
                     ],
                   ),
@@ -118,134 +123,136 @@ class _TopStatusBarState extends State<TopStatusBar> {
               ),
             ),
           ),
-          // Left: the source switcher. The pill names what the shelves
-          // currently show; opening it lists every source plus "all".
-          // Managing sources (add/edit/delete) stays in the dock panel.
           Positioned(
-            left: PsSpace.safeX,
-            top: 30,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            left: _margin,
+            right: _margin,
+            top: 24,
+            child: Row(
               children: <Widget>[
+                const Text(
+                  'XnX',
+                  style: TextStyle(
+                    fontSize: 24,
+                    height: 1.1,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                    color: PlexColor.amber,
+                  ),
+                ),
+                const SizedBox(width: 18),
+                Container(width: 1, height: 22, color: PlexColor.line),
+                const SizedBox(width: 18),
                 TvFocusable(
-                  radius: PsRadius.pill,
+                  radius: 4,
                   showRing: false,
                   onSelect: () => setState(() => _pickerOpen = !_pickerOpen),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                    height: 34,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(PsRadius.pill),
-                      color: PsColor.text.withValues(
-                        alpha: _pickerOpen ? 0.18 : 0.10,
-                      ),
-                      border: Border.all(color: PsColor.text.withValues(alpha: 0.18)),
+                      color: Colors.white.withValues(alpha: _pickerOpen ? 0.14 : 0.06),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: PlexColor.line),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        const Icon(Icons.source_rounded, size: 20, color: PsColor.text),
-                        const SizedBox(width: 10),
-                        Text(_currentLabel(), style: PsType.label.copyWith(fontSize: 19)),
+                        const Icon(
+                          Icons.video_library_outlined,
+                          size: 16,
+                          color: PlexColor.textDim,
+                        ),
                         const SizedBox(width: 8),
-                        AnimatedRotation(
-                          turns: _pickerOpen ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 160),
-                          child: Icon(
-                            Icons.expand_more_rounded,
-                            size: 18,
-                            color: PsColor.text.withValues(alpha: 0.7),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
+                          child: Text(
+                            _currentLabel(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              height: 1.1,
+                              fontWeight: FontWeight.w500,
+                              color: PlexColor.text,
+                            ),
                           ),
+                        ),
+                        const SizedBox(width: 6),
+                        const Icon(
+                          Icons.expand_more_rounded,
+                          size: 18,
+                          color: PlexColor.textFaint,
                         ),
                       ],
                     ),
                   ),
                 ),
-                if (_pickerOpen)
-                  Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xE6111420),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: PsColor.text.withValues(alpha: 0.14)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        _SourceOptionRow(
-                          label: S.allSources,
-                          selected: widget.currentSourceId == null,
-                          onPick: () => _pick(null),
-                        ),
-                        for (final SourceOption option in widget.sources)
-                          _SourceOptionRow(
-                            label: option.label,
-                            selected: widget.currentSourceId == option.id,
-                            onPick: () => _pick(option.id),
-                          ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          // Centre: navigation plus search, one cluster.
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 30,
-            child: Center(
-              child: FocusZone(
-                id: 'tabs',
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    for (int i = 0; i < _tabs.length; i++)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 36),
-                        child: TvFocusable(
-                          radius: 14,
-                          onSelect: () => widget.onTabSelected(i),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
-                            child: Text(
-                              _tabs[i],
-                              style: PsType.meta.copyWith(
-                                fontSize: 26,
-                                color: PsColor.text.withValues(
-                                  alpha: i == widget.tabIndex ? 1 : 0.55,
-                                ),
-                                fontWeight: i == widget.tabIndex
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
+                const SizedBox(width: 34),
+                FocusZone(
+                  id: 'tabs',
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      for (int i = 0; i < _tabs.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 28),
+                          child: TvFocusable(
+                            radius: 4,
+                            onSelect: () => widget.onTabSelected(i),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Text(
+                                    _tabs[i],
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      height: 1.2,
+                                      fontWeight: i == widget.tabIndex
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                      color: i == widget.tabIndex
+                                          ? PlexColor.text
+                                          : PlexColor.textDim,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Container(
+                                    width: 18,
+                                    height: 2,
+                                    color: i == widget.tabIndex
+                                        ? PlexColor.amber
+                                        : const Color(0x00000000),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    const SizedBox(width: 8),
-                    TvFocusable(
-                      radius: PsRadius.pill,
-                      showRing: false,
-                      onSelect: widget.onSearch,
-                      child: const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: Icon(Icons.search_rounded, size: 26, color: PsColor.text),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ),
-          ),
-          // Right: clock, then real window controls.
-          Positioned(
-            right: PsSpace.safeX,
-            top: 26,
-            child: Row(
-              children: <Widget>[
-                Text(_timeLabel, style: PsType.meta.copyWith(fontSize: 26)),
-                const SizedBox(width: 24),
+                const Spacer(),
+                TvFocusable(
+                  radius: 4,
+                  showRing: false,
+                  onSelect: widget.onSearch,
+                  child: const Padding(
+                    padding: EdgeInsets.all(6),
+                    child: Icon(Icons.search_rounded, size: 22, color: PlexColor.text),
+                  ),
+                ),
+                const SizedBox(width: 18),
+                Text(
+                  _timeLabel,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: PlexColor.textDim,
+                  ),
+                ),
+                const SizedBox(width: 18),
                 _WindowIcon(
                   icon: Icons.minimize_rounded,
                   label: S.minimize,
@@ -266,6 +273,40 @@ class _TopStatusBarState extends State<TopStatusBar> {
               ],
             ),
           ),
+          if (_pickerOpen)
+            Positioned(
+              left: _margin,
+              top: 68,
+              child: Container(
+                width: 280,
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xF21C1C1F),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: PlexColor.line),
+                  boxShadow: const <BoxShadow>[
+                    BoxShadow(color: Color(0x99000000), blurRadius: 24, offset: Offset(0, 10)),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _SourceOptionRow(
+                      label: S.allSources,
+                      selected: widget.currentSourceId == null,
+                      onPick: () => _pick(null),
+                    ),
+                    for (final SourceOption option in widget.sources)
+                      _SourceOptionRow(
+                        label: option.label,
+                        selected: widget.currentSourceId == option.id,
+                        onPick: () => _pick(option.id),
+                      ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -287,18 +328,21 @@ class _WindowIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TvFocusable(
-      radius: 10,
-      showRing: false,
-      onSelect: onSelect,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Icon(icon, size: 22, color: PsColor.text.withValues(alpha: 0.82)),
+    return Semantics(
+      button: true,
+      label: label,
+      child: TvFocusable(
+        radius: 4,
+        showRing: false,
+        onSelect: onSelect,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, size: 18, color: PlexColor.textDim),
+        ),
       ),
     );
   }
 }
-
 
 /// One selectable source in the switcher.
 class SourceOption {
@@ -322,24 +366,29 @@ class _SourceOptionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
-      radius: 10,
+      radius: 4,
+      showRing: false,
       onSelect: onPick,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Icon(
-              selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-              size: 18,
-              color: selected ? PsColor.accent : PsColor.text.withValues(alpha: 0.4),
+              selected ? Icons.check_rounded : Icons.circle_outlined,
+              size: 16,
+              color: selected ? PlexColor.amber : PlexColor.textFaint,
             ),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: PsType.label.copyWith(
-                fontSize: 18,
-                color: PsColor.text.withValues(alpha: selected ? 1 : 0.72),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: selected ? PlexColor.text : PlexColor.textDim,
+                ),
               ),
             ),
           ],

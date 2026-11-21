@@ -609,6 +609,15 @@ class MpvPlayer {
     sendScriptMessage(<String, Object?>{'cmd': 'show'});
   }
 
+  /// Repaints the OSD without changing whether it is visible.
+  ///
+  /// A window resize changes the frame the OSD is laid out in, but a paused
+  /// player may not render a new frame on its own; this asks the Lua side to
+  /// rebuild the overlay at the new size.
+  void redrawOsd() {
+    sendScriptMessage(<String, Object?>{'cmd': 'redraw'});
+  }
+
   void togglePause() {
     command(<String>['cycle', 'pause']);
   }

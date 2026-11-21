@@ -43,8 +43,22 @@ void main() {
       final ui.Rect wide = OsdChrome.hotZones(const ui.Size(2560, 1440)).first;
       final ui.Rect narrow = OsdChrome.hotZones(const ui.Size(1280, 720)).first;
       expect(wide.width, greaterThan(narrow.width));
-      expect(wide.right, closeTo(2560 - OsdChrome.safeX, 1));
-      expect(narrow.right, closeTo(1280 - OsdChrome.safeX, 1));
+      // The strip ends where the drawn line does, not at the window edge:
+      // time readout on the left, duration readout on the right.
+      expect(wide.left, closeTo(OsdChrome.seekLeftInset, 1));
+      expect(narrow.left, closeTo(OsdChrome.seekLeftInset, 1));
+      expect(wide.right, closeTo(2560 - OsdChrome.seekRightInset, 1));
+      expect(narrow.right, closeTo(1280 - OsdChrome.seekRightInset, 1));
+    });
+
+    test('pointer fraction uses the same line as paint and hit testing', () {
+      const ui.Size stage = ui.Size(1920, 1080);
+      final ui.Rect track = OsdChrome.seekTrack(stage);
+      expect(OsdChrome.fractionAt(stage, track.left), closeTo(0, 0.0001));
+      expect(OsdChrome.fractionAt(stage, track.center.dx), closeTo(0.5, 0.0001));
+      expect(OsdChrome.fractionAt(stage, track.right), closeTo(1, 0.0001));
+      expect(OsdChrome.hotZones(stage).first.left, closeTo(track.left, 0.0001));
+      expect(OsdChrome.hotZones(stage).first.right, closeTo(track.right, 0.0001));
     });
   });
 

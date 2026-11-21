@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/app_log.dart';
 import '../core/input/input_action.dart';
 import '../core/input/input_router.dart';
 import '../design/ps_tokens.dart';
@@ -60,6 +61,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   Timer? _escFallback;
   Timer? _health;
 
+  /// Debounces the post-resize OSD rebuild. Dragging a window edge produces a
+  /// metrics event per frame; re-laying the overlay once the size has settled
+  /// is what keeps the chrome and the hit boxes on the same scale.
+  Timer? _geometrySettle;
+
   /// Pointer → OSD forwarding. mpv never sees the mouse in this embedding, so
   /// every hover, click, drag and wheel notch has to travel from Flutter to the
   /// Lua OSD as a `mouse` command. Moves are coalesced to one message per
@@ -110,8 +116,38 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   /// the chrome was painted at the old size — the mismatch in the screenshot.
   @override
   void didChangeMetrics() {
+    _onGeometryChanged();
+  }
+
+  /// Brings both native layers onto the window's current rectangle and asks
+  /// mpv to rebuild the OSD at the final size.
+  ///
+  /// The OSD is drawn by mpv at the size of its own surface, while clicks are
+  /// normalized against the Flutter view. During a resize the two are briefly
+  /// different, so the chrome appears at one scale and reacts at another.
+  /// Refitting immediately shortens that window to a frame; the debounced
+  /// redraw catches the final size after a drag-resize.
+  void _onGeometryChanged() {
     _surface?.refit();
     _osd?.syncSize();
+    _geometrySettle?.cancel();
+    // A window animation (maximize, snap, fullscreen) reports several sizes
+    // over ~200–400 ms, so keep re-checking for a moment after the last event
+    // and rebuild the OSD once at the end.
+    int ticks = 0;
+    _geometrySettle = Timer.periodic(const Duration(milliseconds: 100), (Timer timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      _surface?.ensureAligned();
+      _osd?.syncSize();
+      ticks++;
+      if (ticks >= 8) {
+        timer.cancel();
+        _player?.redrawOsd();
+      }
+    });
   }
 
   @override
@@ -122,6 +158,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _escFallback?.cancel();
     _mouseTimer?.cancel();
     _health?.cancel();
+    _geometrySettle?.cancel();
     _loadedSub?.cancel();
     _bridge?.dispose();
     _osd?.dispose();
@@ -171,12 +208,12 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       // Window manager unavailable: the picture keeps playing unchanged.
       return;
     }
-    _surface?.refit();
-    _osd?.syncSize();
+    _onGeometryChanged();
     _player?.showUi();
   }
 
   Future<void> _boot() async {
+    AppLog.info('开始播放：${widget.item.title}（${widget.item.id}）');
     try {
       final PlaybackPrefs prefs = AppStore.instance.prefs;
       try {
@@ -231,6 +268,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         // Read-only install location; keep the temp path.
       }
       _logPath = logPath;
+      AppLog.info('mpv 播放日志：$logPath');
 
       // Screenshots land next to the app state rather than in the working
       // directory, which is the build folder during development.
@@ -342,8 +380,12 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         // setProperty swallows the mpv error code, and a build without
         // writable user-data would silently keep the Lua chrome — which is
         // the one thing HDR passthrough can still darken. Verify the
-        // round-trip and say so, instead of leaving the handoff assumed.
-        if (player.getProperty('user-data/player/osd-engine') != 'window') {
+        // round-trip, tell the overlay which engine really owns the band, and
+        // say so, instead of leaving the handoff assumed.
+        final bool ownsChrome =
+            player.getProperty('user-data/player/osd-engine') == 'window';
+        osd.bindHandoff(ownsChrome);
+        if (!ownsChrome) {
           _scriptNote = '$_scriptNote · chrome 交接失败（独立 OSD 层未接管，HDR 会影响 OSD）';
         }
       }
@@ -393,7 +435,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {});
       }
-    } catch (error) {
+    } catch (error, stack) {
+      AppLog.error('播放初始化失败：${widget.item.title}', error, stack);
       if (mounted) {
         setState(() {
           _error = error.toString();
@@ -408,6 +451,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (message == null || !mounted) {
       return;
     }
+    AppLog.error('mpv 播放错误：$message');
     _surface?.hide();
     setState(() {
       _error = message;
@@ -883,6 +927,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     // Test the pointer against the layer's *current* rectangle. A resize can
     // land between Flutter's layout and the next size poll; syncing here makes
     // the hit test and the painted chrome agree at the moment of the event.
+    // The video surface is the frame mpv actually renders the OSD into, so it
+    // has to be brought onto the same rectangle before the coordinates are
+    // normalized — otherwise a click right after a resize is scaled twice.
+    _surface?.ensureAligned();
     _osd?.syncSize();
     final Size? size = _inputKey.currentContext?.size;
     if (size == null || size.isEmpty) {
@@ -917,9 +965,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     InputRouter.instance.notePointer();
     final OsdOverlay? osd = _osd;
     if (osd != null) {
-      osd
-        ..poke()
-        ..setSeekHover(osd.inSeekZone(unit.dx, unit.dy));
+      osd.poke();
+      // A drag belongs to the Dart chrome until the button is released. It
+      // keeps following the pointer even when the cursor leaves the strip;
+      // testing the zone again would end the drag silently.
+      if (osd.scrubbing) {
+        osd.scrub(osd.seekFraction(unit.dx));
+        return;
+      }
+      osd.setSeekHover(osd.inSeekZone(unit.dx, unit.dy));
     }
     _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
   }
@@ -935,13 +989,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
     InputRouter.instance.notePointer();
     final OsdOverlay? osd = _osd;
-    if (osd != null && osd.inSeekZone(unit.dx, unit.dy)) {
+    if (osd != null && (osd.scrubbing || osd.inSeekZone(unit.dx, unit.dy))) {
       // The chrome owns this press: scrub locally, seek once on release, and
       // never let the Lua side act on a pointer the bar has already claimed.
+      // `scrubbing` is checked first so a release outside the strip still
+      // finishes the drag instead of falling through as a stray click.
       if (down) {
         osd
           ..poke()
-          ..scrub(unit.dx);
+          ..scrub(osd.seekFraction(unit.dx));
       } else {
         osd.endScrub();
       }

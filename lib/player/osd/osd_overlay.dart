@@ -129,6 +129,21 @@ class OsdOverlay {
   /// the hot path; the flag is set once during boot and never flips back.
   bool? _ownsChrome;
 
+  /// Whether this layer — not the Lua stage — is drawing the bottom band.
+  ///
+  /// Input is only claimed when it is: if the handoff failed, the Lua chrome
+  /// is what the user sees, and a hidden Dart layer that still tested itself
+  /// against its own (invisible) seek strip would swallow presses aimed at the
+  /// visible menu row. That is exactly the "OSD acts a band away" symptom.
+  bool get ownsChrome => _ownsChrome == true;
+
+  /// Records the result of the handoff verification. Called once, right after
+  /// the `osd-engine` property round-trip is checked.
+  void bindHandoff(bool accepted) {
+    _ownsChrome = accepted;
+    _schedulePaint();
+  }
+
   void setVisible(bool visible) {
     if (visible) {
       final bool owns = _ownsChrome ??=
@@ -190,7 +205,7 @@ class OsdOverlay {
   /// Whether a normalized pointer position is over the chrome band at all —
   /// the wheel's volume strip.
   bool inChromeZone(double nx, double ny) {
-    if (!_visible || _size.isEmpty) {
+    if (!_visible || !ownsChrome || _size.isEmpty) {
       return false;
     }
     return ny * _size.height > _size.height - OsdChrome.bandHeight;
@@ -301,7 +316,7 @@ class OsdOverlay {
 
   /// Whether a normalized pointer position lands on a chrome control.
   bool inSeekZone(double nx, double ny) {
-    if (!_visible || _size.isEmpty) {
+    if (!_visible || !ownsChrome || _size.isEmpty) {
       return false;
     }
     return OsdChrome.hotZones(_size).first.contains(ui.Offset(
@@ -309,6 +324,22 @@ class OsdOverlay {
           ny * _size.height,
         ));
   }
+
+  /// A window-normalized x mapped onto 0..1 along the painted seek line.
+  ///
+  /// The line is inset from the window edges, so passing the raw window
+  /// fraction to [scrub] would put the knob — and the resulting seek — at a
+  /// different place than the cursor.
+  double seekFraction(double nx) {
+    if (_size.isEmpty) {
+      return nx.clamp(0.0, 1.0).toDouble();
+    }
+    return OsdChrome.fractionAt(_size, nx * _size.width);
+  }
+
+  /// Whether a drag is in progress, so the pointer forwarder keeps feeding it
+  /// positions even after the cursor leaves the strip.
+  bool get scrubbing => _scrubbing != null;
 
   /// Hover state for the seek strip (a slightly larger knob).
   void setSeekHover(bool hover) {

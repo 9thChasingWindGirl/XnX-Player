@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/app_log.dart';
 import '../playback/mpv/hw_profile.dart';
 import 'models/media_item.dart';
 import 'net.dart';
@@ -74,6 +75,7 @@ class AppStore extends ChangeNotifier {
   bool get isEmpty => items.isEmpty;
 
   Future<void> load() async {
+    AppLog.info('读取配置：$statePath');
     try {
       final File file = File(statePath);
       if (await file.exists()) {
@@ -105,10 +107,12 @@ class AppStore extends ChangeNotifier {
           }
         }
       }
-    } on Object catch (error) {
+    } on Object catch (error, stack) {
       errors.add('读取配置失败：$error');
+      AppLog.error('读取配置失败', error, stack);
     }
     ready = true;
+    AppLog.info('配置已载入：${sources.length} 个来源，${items.length} 项媒体');
     _notify();
     if (sources.isNotEmpty) {
       unawaited(refresh());
@@ -131,8 +135,9 @@ class AppStore extends ChangeNotifier {
         ),
       };
       await File(statePath).writeAsString(jsonEncode(snapshot));
-    } on Object catch (error) {
+    } on Object catch (error, stack) {
       errors.add('保存配置失败：$error');
+      AppLog.error('保存配置失败', error, stack);
     }
   }
 
@@ -161,12 +166,14 @@ class AppStore extends ChangeNotifier {
       sources.add(config);
     }
     _open.remove(config.id);
+    AppLog.info('保存媒体源：${config.label}（${config.kind.name}）${config.url}');
     await _persist();
     _notify();
     await refresh();
   }
 
   Future<void> removeSource(String id) async {
+    AppLog.info('移除媒体源：$id');
     sources.removeWhere((SourceConfig config) => config.id == id);
     final MediaSource? source = _open.remove(id);
     await source?.close();
@@ -206,6 +213,7 @@ class AppStore extends ChangeNotifier {
     }
     loading = true;
     errors.clear();
+    AppLog.info('刷新媒体库开始（${sources.length} 个来源）');
     LibraryLog.write('刷新开始（${sources.length} 个来源）');
     _notify();
 
@@ -234,8 +242,9 @@ class AppStore extends ChangeNotifier {
             }
           }
           LibraryLog.write('${config.label}：${listing.length} 项');
-        } on Object catch (error) {
+        } on Object catch (error, stack) {
           errors.add('${config.label}：$error');
+          AppLog.error('媒体源刷新失败：${config.label}', error, stack);
           LibraryLog.write('${config.label}：失败 — $error');
         }
       }
@@ -243,6 +252,7 @@ class AppStore extends ChangeNotifier {
       items
         ..clear()
         ..addAll(collected);
+      AppLog.info('刷新媒体库完成：${collected.length} 项，${errors.length} 个错误');
       LibraryLog.write('刷新完成：${collected.length} 项');
     } finally {
       // A timeout or an unexpected throw above must still release the flag,

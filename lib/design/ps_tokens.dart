@@ -81,6 +81,26 @@ abstract final class PsColor {
   static Color artAccent(String seed) => artFor(seed)[2];
 }
 
+/// Palette of the Plex-style home layout.
+///
+/// Kept next to the console tokens rather than folded into [PsColor]: the home
+/// screen is deliberately denser and warmer than the PS5 stage, and mixing the
+/// two would make every other page inherit the change. Values follow Plex's
+/// neutral dark UI: near-black surfaces, a single amber accent, and white ink
+/// that only reaches 90 % so dense text stays readable.
+abstract final class PlexColor {
+  static const Color bg = Color(0xFF141416);
+  static const Color bgDeep = Color(0xFF0D0D0F);
+  static const Color surface = Color(0xFF1F1F22);
+  static const Color surfaceHigh = Color(0xFF2A2A2E);
+  static const Color amber = Color(0xFFE5A00D);
+  static const Color text = Color(0xFFF5F5F7);
+  static const Color textDim = Color(0xFFB3B3B9);
+  static const Color textFaint = Color(0xFF8A8A91);
+  static const Color line = Color(0x24FFFFFF);
+  static const Color scrim = Color(0xE60C0C0E);
+}
+
 abstract final class PsSpace {
   /// Horizontal safe area at 1920x1080 (reference `kMargin`).
   static const double safeX = 96;

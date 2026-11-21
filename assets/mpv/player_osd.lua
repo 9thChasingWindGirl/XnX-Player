@@ -2137,27 +2137,21 @@ end
 
 --- Maps window pixels into the 1920x1080 design space.
 ---
---- Both axes are scaled independently on purpose. libass maps PlayRes onto the
---- *video* rectangle, so a 2.39:1 film in a 16:9 window stretches the design
---- space vertically as well — using one scale derived from the width put the
---- seekbar's hitbox roughly ten percent off at the bottom of the frame, which
---- reads as "the bar only responds if you aim above it".
+--- mpv renders an `ass-events` overlay into the *whole* OSD frame: the only
+--- geometry call in `sub/osd_libass.c` is
+--- `ass_set_frame_size(render, res->w, res->h)` — there is no
+--- `ass_set_margins`. libass therefore stretches PlayResX/Y across the full
+--- client area, independently per axis, and `osd-dimensions.w/h` are exactly
+--- that area. The picture's letterbox margins (`dim.ml/mt/mr/mb`) describe
+--- where the video sits *inside* the frame; they never move the overlay.
+---
+--- Subtracting those margins — which this function used to do — shifted every
+--- hit box by half the letterbox, which is why the seek bar only answered when
+--- the pointer was aimed away from it. The scale has to be window/W.
 local function to_design(mx, my)
   local dim = mp.get_property_native('osd-dimensions')
   if dim and dim.w and dim.w > 0 and dim.h and dim.h > 0 then
-    local ox = dim.ml or 0
-    local oy = dim.mt or 0
-    -- The video rect is the OSD inset by its margins, and PlayRes maps onto
-    -- *that* rect — so the scale is video/W, not window/W. Deriving it from
-    -- dim.w made every hitbox drift by the margins the moment the picture was
-    -- letterboxed.
-    local vw = dim.w - ox - (dim.mr or 0)
-    local vh = dim.h - oy - (dim.mb or 0)
-    local sx = vw / W
-    local sy = vh / H
-    if sx > 0.0001 and sy > 0.0001 then
-      return (mx - ox) / sx, (my - oy) / sy
-    end
+    return mx * W / dim.w, my * H / dim.h
   end
   return mx, my
 end
@@ -2378,38 +2372,23 @@ end
 
 --- Window-normalized coordinates (0..1) into the 1920x1080 design space.
 ---
---- The exact inverse of [to_design], and it exists because the host only knows
---- where the pointer is *inside its own widget* — it has no idea how libass
---- decided to letterbox the OSD. Reconstructing the window size from
---- `osd-dimensions` plus its margins keeps both input paths landing on the same
---- numbers, so a click forwarded by the host hits the same button a real
---- `mouse-pos` event would have hit.
+--- The exact inverse of [to_design]: the host's widget is the same rectangle
+--- mpv calls the OSD frame, so the mapping is a plain scale, nx*W and ny*H.
+--- It must never consult `osd-dimensions.margins` — those describe the picture,
+--- not the overlay, and folding them in here is what made a forwarded click
+--- land on a different control than the one under the cursor.
 local function unit_to_design(nx, ny)
-  local dim = mp.get_property_native('osd-dimensions')
-  if dim and dim.w and dim.w > 0 and dim.h and dim.h > 0 then
-    local ml, mt = dim.ml or 0, dim.mt or 0
-    -- `w`/`h` already IS the window; the video sits inside it, inset by the
-    -- margins. The old `win_w = w + ml + mr` inflated the window by the
-    -- margins, so a forwarded click landed off by exactly that amount — the
-    -- same letterbox drift the native path suffered from.
-    local vid_w = dim.w - ml - (dim.mr or 0)
-    local vid_h = dim.h - mt - (dim.mb or 0)
-    local sx = vid_w / W
-    local sy = vid_h / H
-    if sx > 0.0001 and sy > 0.0001 then
-      return (nx * dim.w - ml) / sx, (ny * dim.h - mt) / sy
-    end
-  end
   return nx * W, ny * H
 end
 
 --- Pointer events forwarded by the host.
 ---
 --- `ev` is `move`, `down`, `up` or `wheel`; `button` is `left`/`right`; `delta`
---- is +1/-1 for wheels. Coordinates arrive normalized against the video area so
---- the host never has to model the 1920x1080 design space — the moment two
---- places both "know" the layout they start disagreeing, and the symptom is
---- controls that highlight one place and act in another.
+--- is +1/-1 for wheels. Coordinates are normalized against the whole window,
+--- the same space the OSD is rendered in, so the host never has to model the
+--- 1920x1080 design space — the moment two places both "know" the layout they
+--- start disagreeing, and the symptom is controls that highlight one place and
+--- act in another.
 local function handle_mouse(payload)
   state.external_pointer = true
   state.mouse_seen = true
@@ -2510,6 +2489,14 @@ mp.register_script_message('player-cmd', function(json)
   elseif cmd == 'hide' then
     state.visible = false
     render()
+  elseif cmd == 'redraw' then
+    -- Window resized: rebuild the overlay for the new OSD frame without
+    -- touching visibility. The hit boxes live in design space, so this is
+    -- purely about the pixels matching the new scale.
+    mark_dirty()
+    if state.visible or state.menu or state.stats or state.help or state.toast then
+      render()
+    end
   elseif cmd == 'key' and payload.key then
     handle_key(payload.key)
   elseif cmd == 'title' then

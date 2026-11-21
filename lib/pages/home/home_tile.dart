@@ -229,6 +229,211 @@ class _ArtFallback extends StatelessWidget {
   }
 }
 
+/// A Plex-style shelf card: plain artwork at rest, with a caption that appears
+/// when the card is focused.
+///
+/// Plex keeps its rows visually quiet — no scrim or title on every poster, just
+/// the artwork — and reveals the name on hover. That is the opposite of the
+/// console card, which always writes the title over the art, so the home screen
+/// uses this widget while the library grid keeps [PosterCard].
+class PlexCard extends StatelessWidget {
+  const PlexCard({
+    super.key,
+    required this.item,
+    required this.width,
+    required this.height,
+    this.focused = false,
+    this.wide = false,
+  });
+
+  final MediaItem item;
+  final double width;
+  final double height;
+  final bool focused;
+
+  /// 16:9 shelves (continue watching, live) caption every card; poster shelves
+  /// caption only the focused one.
+  final bool wide;
+
+  static const double radius = 8;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool channel = item.kind == MediaKind.channel;
+    final bool caption = focused || wide || channel;
+    final List<Color> art = item.palette;
+    // Wide shelves are 16:9, so they prefer the thumbnail (a still) over the
+    // 2:3 poster; a poster shelf does the opposite.
+    final String? imageUrl = wide ? item.thumbUrl : item.posterUrl;
+    final bool hasImage = imageUrl != null && imageUrl.isNotEmpty;
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: PlexColor.surface,
+          borderRadius: BorderRadius.circular(radius),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: <Color>[art[1], art[0]],
+                  ),
+                ),
+              ),
+              if (hasImage)
+                (channel
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 46),
+                        child: posterImage(
+                          imageUrl!,
+                          fit: BoxFit.contain,
+                          errorBuilder:
+                              (BuildContext context, Object error, StackTrace? stack) =>
+                                  const SizedBox.shrink(),
+                        ),
+                      )
+                    : posterImage(
+                        imageUrl!,
+                        fit: BoxFit.cover,
+                        gapless: true,
+                        errorBuilder:
+                            (BuildContext context, Object error, StackTrace? stack) =>
+                                _ArtFallback(item: item),
+                      ))
+              else
+                _ArtFallback(item: item),
+              if (caption)
+                const Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: <Color>[
+                          Color(0xE6000000),
+                          Color(0x66000000),
+                          Color(0x00000000),
+                        ],
+                        stops: <double>[0.0, 0.42, 0.78],
+                      ),
+                    ),
+                  ),
+                ),
+              if (item.badge != null && item.badge!.isNotEmpty)
+                Positioned(
+                  left: 8,
+                  top: 8,
+                  child: Container(
+                    height: 20,
+                    padding: const EdgeInsets.symmetric(horizontal: 7),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xCC000000),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text(
+                      item.badge!,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.1,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                        color: PlexColor.text,
+                      ),
+                    ),
+                  ),
+                ),
+              if (caption)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: item.progress > 0.01 ? 15 : 10,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(
+                        item.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: wide ? 18 : 16,
+                          height: 1.22,
+                          fontWeight: FontWeight.w600,
+                          color: PlexColor.text,
+                          shadows: const <Shadow>[
+                            Shadow(color: Color(0xB3000000), blurRadius: 6),
+                          ],
+                        ),
+                      ),
+                      if (wide || focused) ...<Widget>[
+                        const SizedBox(height: 3),
+                        Text(
+                          _caption(item),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            height: 1.2,
+                            fontWeight: FontWeight.w500,
+                            color: PlexColor.textDim,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              if (item.progress > 0.01)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SizedBox(
+                    height: 3,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        ColoredBox(color: Colors.white.withValues(alpha: 0.25)),
+                        FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: item.progress.clamp(0.0, 1.0).toDouble(),
+                          child: const ColoredBox(color: PlexColor.amber),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _caption(MediaItem item) {
+    if (item.kind == MediaKind.channel) {
+      return item.group ?? '直播';
+    }
+    if (item.subtitle != null && item.subtitle!.isNotEmpty) {
+      return item.subtitle!;
+    }
+    final List<String> parts = <String>[
+      if (item.year != null) '${item.year}',
+      if (item.duration != null) item.runtimeLabel,
+    ];
+    return parts.join('  ·  ');
+  }
+}
+
 /// Wide card for a live channel: logo top-left, name and group at the bottom.
 class ChannelCard extends StatelessWidget {
   const ChannelCard({

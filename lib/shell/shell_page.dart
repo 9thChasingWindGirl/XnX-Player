@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/app_log.dart';
 import '../core/input/input_action.dart';
 import '../core/input/input_router.dart';
 import '../core/sound/sound_cue.dart';
@@ -299,6 +300,7 @@ class _ShellPageState extends State<ShellPage> {
   void _selectTab(int index, {bool fromDock = false}) {
     final bool changed = index != _tab;
     if (changed) {
+      AppLog.info('切换页面：${_tab} → $index');
       _tabMarks[_tab] = FocusMemory.instance.mark();
     }
     setState(() {
@@ -452,6 +454,7 @@ class _ShellPageState extends State<ShellPage> {
   }
 
   Future<void> _quitApp() async {
+    AppLog.info('用户退出应用');
     try {
       await windowManager.destroy();
     } on Object {
@@ -597,6 +600,7 @@ class _ShellPageState extends State<ShellPage> {
       onOpenItem: _openHub,
       onOpenFile: _openFile,
       onAddSource: _addSource,
+      onOpenLibrary: () => _selectTab(1),
       heroItem: _hero,
     );
   }
@@ -710,19 +714,22 @@ class _ShellPageState extends State<ShellPage> {
                   },
                 ),
               ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 20,
-              child: IgnorePointer(
-                child: Center(
-                  child: Text(
-                    '${S.hintNavigate}    ·    ${S.hintSelect}    ·    ${S.hintDock}    ·    ${S.hintBack}',
-                    style: PsType.micro.copyWith(fontSize: 14, color: PsColor.textFaint),
+            // The home screen keeps the Plex surface clean; the hint strip
+            // belongs to the library and settings grids, which are denser.
+            if (_tab != 0)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 20,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Text(
+                      '${S.hintNavigate}    ·    ${S.hintSelect}    ·    ${S.hintDock}    ·    ${S.hintBack}',
+                      style: PsType.micro.copyWith(fontSize: 14, color: PsColor.textFaint),
+                    ),
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ),
