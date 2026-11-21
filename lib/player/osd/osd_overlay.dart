@@ -395,7 +395,7 @@ class OsdOverlay {
     } else if (height >= 700) {
       add('720p', OsdBadge.plainWhite, OsdBadgeTier.fact);
     } else if (width > 0 && height > 0) {
-      add('${width}×${height}', OsdBadge.plainWhite, OsdBadgeTier.fact);
+      add('$width×$height', OsdBadge.plainWhite, OsdBadgeTier.fact);
     }
 
     if (codec.isNotEmpty) {
