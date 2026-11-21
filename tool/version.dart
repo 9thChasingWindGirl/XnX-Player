@@ -18,6 +18,8 @@
 ///   dart run tool/version.dart bump minor
 ///   dart run tool/version.dart resolve --base 0.02.00 --channel dev --commits 3
 ///   dart run tool/version.dart auto --write
+library;
+
 import 'dart:io';
 
 void main(List<String> argv) {
