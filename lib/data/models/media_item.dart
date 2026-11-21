@@ -81,6 +81,8 @@ class MediaItem {
     this.tech,
     this.seriesStatus,
     this.tmdbId,
+    this.season,
+    this.episode,
   });
 
   final String id;
@@ -155,6 +157,13 @@ class MediaItem {
   /// keeps its media source for playback but this id lets the detail page pull
   /// the richer TMDB record.
   final int? tmdbId;
+
+  /// Season / episode numbers, parsed from file names for local TV libraries
+  /// and returned by servers for episode items. Null for movies and files.
+  /// Together with [group] (the show name) these turn loose episode files into
+  /// a browsable series.
+  final int? season;
+  final int? episode;
 
   /// Cast with a role, which is what a detail page shows first.
   List<MediaPerson> get cast =>
@@ -262,6 +271,8 @@ class MediaItem {
     String? seriesStatus,
     int? tmdbId,
     Artwork? artwork,
+    int? season,
+    int? episode,
   }) {
     return MediaItem(
       id: id,
@@ -294,6 +305,8 @@ class MediaItem {
       tech: tech ?? this.tech,
       seriesStatus: seriesStatus ?? this.seriesStatus,
       tmdbId: tmdbId ?? this.tmdbId,
+      season: season ?? this.season,
+      episode: episode ?? this.episode,
     );
   }
 }

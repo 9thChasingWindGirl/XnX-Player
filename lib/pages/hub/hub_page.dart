@@ -579,7 +579,10 @@ class _Info extends StatelessWidget {
         ] else if (item.sourceKind == SourceKind.local) ...<Widget>[
           const SizedBox(height: 14),
           Text(
-            '本地文件没有内嵌的剧情简介与演职员表。下方“文件信息”读取自文件名与文件属性。',
+            item.kind == MediaKind.episode && item.season != null && item.episode != null
+                ? '本地剧集文件：${item.group ?? ''} 第 ${item.season} 季第 ${item.episode} 集。'
+                    '下方“文件信息”读取自文件名与文件属性。'
+                : '本地文件没有内嵌的剧情简介与演职员表。下方“文件信息”读取自文件名与文件属性。',
             style: PsType.body.copyWith(
               fontSize: 19,
               height: 1.55,

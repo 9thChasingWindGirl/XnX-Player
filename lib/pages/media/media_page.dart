@@ -8,6 +8,7 @@ import '../../design/ps_tokens.dart';
 import '../../ui/core/focus_ids.dart';
 import '../../ui/core/motion_clock.dart';
 import '../../ui/core/tv_focusable.dart';
+import '../../ui/core/tv_scale.dart';
 import '../../ui/widgets/ps_button.dart';
 import '../home/home_tile.dart';
 import 'source_dialog.dart';
@@ -107,13 +108,41 @@ class MediaPageState extends State<MediaPage> {
         }
         final double entrance = (_age / 0.45).clamp(0.0, 1.0).toDouble();
         final List<MediaItem> items = _visible;
+        final String? genre = _genre;
+        // One filtered list, shared by the header, the grid and the chips, so
+        // every count on this page answers the same question.
+        final List<MediaItem> shown = genre == null
+            ? items
+            : items
+                .where((MediaItem item) => item.genres.contains(genre))
+                .toList(growable: false);
+        // Seasons are children of a series, not library entries; the rail's
+        // "all" badge now uses the same calibre as the header and the grid.
+        final int allCount = AppStore.instance.items
+            .where((MediaItem item) => item.kind != MediaKind.season)
+            .length;
+
+        // The shell scales the whole app from a 1920x1080 design canvas, but a
+        // resized / non-16:9 window changes the *logical* canvas size. Derive
+        // every region from it instead of hard-coding design pixels so the rail
+        // and the grid keep filling the window at any aspect ratio.
+        final double designW = TvScale.widthOf(context);
+        final double designH = TvScale.heightOf(context);
+        final double sx = designW / TvScale.designWidth;
+        final double sy = designH / TvScale.designHeight;
+        final double safeX = PsSpace.safeX * sx;
+        final double railWidth = 400 * sx;
+        final double gridLeft = safeX + railWidth + 60 * sx;
+        final double gridWidth = designW - safeX - gridLeft;
+        final double gridTop = 226 * sy;
+        final double gridHeight = designH - gridTop - 64 * sy;
 
         return Stack(
           fit: StackFit.expand,
           children: <Widget>[
             Positioned(
-              left: PsSpace.safeX,
-              top: 110 + 14 * (1 - entrance),
+              left: safeX,
+              top: (110 + 14 * (1 - entrance)) * sy,
               child: Opacity(
                 opacity: entrance,
                 child: Column(
@@ -122,7 +151,9 @@ class MediaPageState extends State<MediaPage> {
                     const Text(S.tabLibrary, style: PsType.page),
                     const SizedBox(height: 8),
                     Text(
-                      '${AppStore.instance.sources.length} 个来源  ·  ${items.length} 项内容',
+                      genre == null
+                          ? '${AppStore.instance.sources.length} 个来源  ·  ${items.length} 项内容'
+                          : '${AppStore.instance.sources.length} 个来源  ·  $genre ${shown.length} 项 / 共 ${items.length} 项',
                       style: PsType.micro.copyWith(fontSize: 16, letterSpacing: 1.2),
                     ),
                   ],
@@ -130,12 +161,14 @@ class MediaPageState extends State<MediaPage> {
               ),
             ),
             Positioned(
-              left: PsSpace.safeX,
-              top: 236,
-              width: 400,
+              left: safeX,
+              top: 236 * sy,
+              width: railWidth,
               child: Opacity(
                 opacity: entrance,
                 child: _SourceRail(
+                  width: railWidth,
+                  allCount: allCount,
                   filter: _filter,
                   onFilter: (String? id) => setState(() => _filter = id),
                   onAdd: () => setState(() => _dialogOpen = true),
@@ -145,10 +178,10 @@ class MediaPageState extends State<MediaPage> {
               ),
             ),
             Positioned(
-              left: 556,
-              top: 226,
-              width: 1268,
-              height: 790,
+              left: gridLeft,
+              top: gridTop,
+              width: gridWidth,
+              height: gridHeight,
               child: items.isEmpty
                   ? _EmptyLibrary(
                       loading: AppStore.instance.loading,
@@ -156,7 +189,8 @@ class MediaPageState extends State<MediaPage> {
                       onOpenFile: widget.onOpenFile,
                     )
                   : _LibraryGrid(
-                      items: _visible,
+                      items: items,
+                      shown: shown,
                       pickedGenre: _genre,
                       onPickGenre: (String? value) => setState(() => _genre = value),
                       onPlay: widget.onPlay,
@@ -177,6 +211,7 @@ class MediaPageState extends State<MediaPage> {
 
 class _GridCard extends StatefulWidget {
   const _GridCard({
+    super.key,
     required this.item,
     required this.onPlay,
     required this.onOpen,
@@ -191,11 +226,11 @@ class _GridCard extends StatefulWidget {
 }
 
 class _GridCardState extends State<_GridCard> {
-  /// The grid keeps its layout fixed, so focus grows the artwork instead of the
-  /// box. `highlightScale` must carry the same factor or the ring ends up
-  /// floating outside the resting card — which is what "the ring is a bit away
-  /// from the tile" was. 6 % is `CardLook::focus_scale` (`card.h:77`); anything
-  /// larger starts eating the 26 px gutter between tiles.
+  /// The card fills its grid cell exactly, so focus grows the artwork instead
+  /// of the box. `highlightScale` must carry the same factor or the ring ends
+  /// up floating outside the resting card — which is what "the ring is a bit
+  /// away from the tile" was. 6 % is `CardLook::focus_scale` (`card.h:77`);
+  /// anything larger starts eating the 26 px gutter between tiles.
 
   bool _focused = false;
 
@@ -203,8 +238,11 @@ class _GridCardState extends State<_GridCard> {
   Widget build(BuildContext context) {
     final MediaItem item = widget.item;
     final bool channel = item.kind == MediaKind.channel;
-    final double width = channel ? 300 : PsSpace.tileSize;
-    final double height = channel ? 170 : PsSpace.tileSize;
+    // `double.infinity` resolves to the grid cell's tight constraints: the
+    // artwork, the focus ring and the cell now share one rectangle at every
+    // window size. A fixed `PsSpace.tileSize` here used to park a 196x196 card
+    // in the top-left of a ~211x293 cell, which is the visible "misalignment"
+    // that appeared after hovering or switching a genre.
 
     return TvFocusable(
       focusId: FocusIds.media(item.id),
@@ -225,11 +263,11 @@ class _GridCardState extends State<_GridCard> {
           : widget.onOpen(item),
       onLongSelect: () => widget.onPlay(item),
       child: channel
-          ? ChannelCard(item: item, width: width, height: height)
+          ? ChannelCard(item: item, width: double.infinity, height: double.infinity)
           : PosterCard(
               item: item,
-              width: width,
-              height: height,
+              width: double.infinity,
+              height: double.infinity,
               focused: _focused,
             ),
     );
@@ -238,6 +276,8 @@ class _GridCardState extends State<_GridCard> {
 
 class _SourceRail extends StatelessWidget {
   const _SourceRail({
+    required this.width,
+    required this.allCount,
     required this.filter,
     required this.onFilter,
     required this.onAdd,
@@ -245,6 +285,12 @@ class _SourceRail extends StatelessWidget {
     required this.onOpenFile,
   });
 
+  /// Design-space width of the rail region, derived from the live canvas by
+  /// the page so the rows and buttons grow with a resized window.
+  final double width;
+
+  /// Same calibre as the header: every non-season item, across all sources.
+  final int allCount;
   final String? filter;
   final ValueChanged<String?> onFilter;
   final VoidCallback onAdd;
@@ -267,13 +313,15 @@ class _SourceRail extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         _RailRow(
+          width: width,
           label: '全部',
           selected: filter == null,
           onSelect: () => onFilter(null),
-          badge: '${AppStore.instance.items.length}',
+          badge: '$allCount',
         ),
         for (final SourceConfig config in sources)
           _RailRow(
+            width: width,
             label: config.label,
             selected: filter == config.id,
             onSelect: () => onFilter(config.id),
@@ -284,14 +332,14 @@ class _SourceRail extends StatelessWidget {
         PsButton(
           label: S.addSource,
           icon: Icons.add_rounded,
-          width: 300,
+          width: width,
           onSelect: onAdd,
         ),
         const SizedBox(height: 10),
         PsButton(
           label: S.openFile,
           icon: Icons.folder_open_rounded,
-          width: 300,
+          width: width,
           onSelect: onOpenFile,
         ),
         if (AppStore.instance.errors.isNotEmpty) ...<Widget>[
@@ -321,6 +369,7 @@ class _SourceRail extends StatelessWidget {
 
 class _RailRow extends StatelessWidget {
   const _RailRow({
+    required this.width,
     required this.label,
     required this.selected,
     required this.onSelect,
@@ -328,6 +377,7 @@ class _RailRow extends StatelessWidget {
     this.onLongSelect,
   });
 
+  final double width;
   final String label;
   final bool selected;
   final VoidCallback onSelect;
@@ -343,7 +393,7 @@ class _RailRow extends StatelessWidget {
         onSelect: onSelect,
         onLongSelect: onLongSelect,
         child: Container(
-          width: 360,
+          width: width,
           height: 56,
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
@@ -428,13 +478,20 @@ class _EmptyLibrary extends StatelessWidget {
 class _LibraryGrid extends StatelessWidget {
   const _LibraryGrid({
     required this.items,
+    required this.shown,
     required this.pickedGenre,
     required this.onPickGenre,
     required this.onPlay,
     required this.onOpen,
   });
 
+  /// Source-filtered but *genre-unfiltered* items. Chip counts are derived
+  /// from this list, so they never depend on which genre happens to be picked.
   final List<MediaItem> items;
+
+  /// The same list after the genre filter. Counts and the grid agree because
+  /// both are handed down from the page rather than recomputed here.
+  final List<MediaItem> shown;
   final String? pickedGenre;
   final ValueChanged<String?> onPickGenre;
   final ValueChanged<MediaItem> onPlay;
@@ -449,9 +506,6 @@ class _LibraryGrid extends StatelessWidget {
       }
     }
     final List<String> genres = counts.keys.toList()..sort();
-    final List<MediaItem> shown = pickedGenre == null
-        ? items
-        : items.where((MediaItem item) => item.genres.contains(pickedGenre)).toList(growable: false);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -463,13 +517,17 @@ class _LibraryGrid extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               children: <Widget>[
                 _GenreChip(
+                  key: const ValueKey<String>('全部'),
                   label: '全部',
+                  count: items.length,
                   selected: pickedGenre == null,
                   onPick: () => onPickGenre(null),
                 ),
                 for (final String genre in genres)
                   _GenreChip(
+                    key: ValueKey<String>(genre),
                     label: genre,
+                    count: counts[genre] ?? 0,
                     selected: pickedGenre == genre,
                     onPick: () => onPickGenre(genre),
                   ),
@@ -480,14 +538,23 @@ class _LibraryGrid extends StatelessWidget {
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.only(bottom: 60, right: 20),
+            // A cell is a square of at most tileSize + gap; the card fills it
+            // (see _GridCard), so artwork, ring and cell share one rectangle.
+            // The old 0.72 ratio made a ~211x293 cell hold a 196x196 card
+            // parked in its top-left corner — the "hover misalignment" that
+            // showed up after a resize or a genre switch.
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
+              maxCrossAxisExtent: PsSpace.tileSize + PsSpace.cardGap,
               mainAxisSpacing: PsSpace.cardGap,
               crossAxisSpacing: PsSpace.cardGap,
-              childAspectRatio: 0.72,
+              childAspectRatio: 1.0,
             ),
             itemCount: shown.length,
             itemBuilder: (BuildContext context, int index) => _GridCard(
+              // Key by media id so a filter rebuild keeps each card's identity
+              // and its TvFocusable focusId instead of handing a recycled slot
+              // to a different title.
+              key: ValueKey<String>(shown[index].id),
               item: shown[index],
               onPlay: onPlay,
               onOpen: onOpen,
@@ -502,9 +569,19 @@ class _LibraryGrid extends StatelessWidget {
 /// One category chip. A count next to the name keeps the bar honest about
 /// how much each filter actually holds.
 class _GenreChip extends StatelessWidget {
-  const _GenreChip({required this.label, required this.selected, required this.onPick});
+  const _GenreChip({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onPick,
+  });
 
   final String label;
+
+  /// How many of the source-filtered items carry this genre. Shown next to
+  /// the name so the chip states what the filter will actually yield.
+  final int count;
   final bool selected;
   final VoidCallback onPick;
 
@@ -527,7 +604,7 @@ class _GenreChip extends StatelessWidget {
             ),
           ),
           child: Text(
-            label,
+            '$label  $count',
             style: PsType.label.copyWith(
               fontSize: 17,
               color: PsColor.text.withValues(alpha: selected ? 1 : 0.72),

@@ -166,7 +166,78 @@ final List<RegExp> _releaseTags = <RegExp>[
   RegExp(r'\b(?:10bit|8bit|web-?dl|webrip|bluray|blu-ray|bdrip|remux|hdtv|dvdrip)\b',
       caseSensitive: false),
   RegExp(r'\b\d+(?:\.\d+)?\s*(?:gb|mb)\b', caseSensitive: false),
+  // A season/episode tag belongs to the series structure, not to a title.
+  RegExp(r'\b[Ss]\d{1,2}\s*[._ -]?\s*[Ee]\d{1,3}\b'),
 ];
+
+/// A `SxxEyy` tag parsed from a video file name.
+///
+/// Local folders have no metadata server, so the file name is the only place
+/// that knows a clip is episode 5 of season 2. Turning that into a series /
+/// episode structure is what keeps a TV library from looking like a folder of
+/// unrelated single files.
+class EpisodeTag {
+  const EpisodeTag({
+    required this.show,
+    required this.season,
+    required this.episode,
+    this.episodeTitle,
+  });
+
+  /// The show name, cleaned up and used as the grouping key.
+  final String show;
+  final int season;
+  final int episode;
+
+  /// Whatever follows the tag, e.g. "如梦似幻". Null when the name ends at the tag.
+  final String? episodeTitle;
+
+  String get badge =>
+      'S${season.toString().padLeft(2, '0')}E${episode.toString().padLeft(2, '0')}';
+}
+
+/// Parses a `Show.Name.S02E05.1080p.mkv` style name into its series tag.
+///
+/// Returns null for movies and for names with no recognisable season/episode
+/// pair, so ordinary film files keep their single-file behaviour.
+EpisodeTag? episodeTagFromFileName(String name) {
+  final RegExpMatch? match =
+      RegExp(r'[Ss](\d{1,2})\s*[._ -]?\s*[Ee](\d{1,3})').firstMatch(name);
+  if (match == null) {
+    return null;
+  }
+  final int? season = int.tryParse(match.group(1)!);
+  final int? episode = int.tryParse(match.group(2)!);
+  if (season == null || season < 1 || episode == null || episode < 1) {
+    return null;
+  }
+
+  String show = name.substring(0, match.start).replaceAll(RegExp(r'[._]'), ' ');
+  show = show.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+  if (show.isEmpty) {
+    return null;
+  }
+
+  String tail = name.substring(match.end);
+  // Drop the extension and release tags, then whatever separator was left.
+  final int dot = tail.lastIndexOf('.');
+  if (dot > 0) {
+    tail = tail.substring(0, dot);
+  }
+  tail = tail.replaceAll(RegExp(r'[._]'), ' ');
+  for (final RegExp pattern in _releaseTags) {
+    tail = tail.replaceAll(pattern, ' ');
+  }
+  tail = tail.replaceAll(RegExp(r'^\s*[-–—]+'), ' ');
+  tail = tail.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+
+  return EpisodeTag(
+    show: show,
+    season: season,
+    episode: episode,
+    episodeTitle: tail.isEmpty ? null : tail,
+  );
+}
 
 /// Turns `Show.S01E03.1080p.WEB-DL.mkv` into something a person can read.
 ///

@@ -324,7 +324,7 @@ class _HomePageState extends State<HomePage> {
         if (resuming.isNotEmpty)
           _Row('continue', S.continueWatching, resuming, wide: true),
         if (recent.isNotEmpty) _Row('recent', S.recentlyAdded, recent),
-        if (all.isNotEmpty) _Row('all', '全部媒体', all),
+        if (all.isNotEmpty) _Row('all', S.allMedia, all),
         if (favorites.isNotEmpty) _Row('favorites', S.favoritesShelf, favorites),
         if (watching.isNotEmpty) _Row('watching', S.watchingShelf, watching),
         if (live.isNotEmpty) _Row('live', S.liveChannels, live, wide: true),
@@ -359,14 +359,17 @@ class _HomePageState extends State<HomePage> {
       final List<MediaItem> upcoming = portal(tmdb.upcoming);
       final List<MediaItem> trending = portal(tmdb.trending);
       portalRows = <MediaItem>[...nowPlaying, ...movies, ...tv, ...air, ...upcoming, ...trending];
+      // A mix of wide (16:9) and poster (2:3) shelves: a wall of identical
+      // poster rows reads as a grid, while alternating the card shape gives
+      // the eye a rhythm — the grammar Plex itself uses on its home screen.
       tmdbRows = <_Row>[
-        if (nowPlaying.isNotEmpty) _Row('tmdb-now', '正在上映', nowPlaying),
-        if (movies.isNotEmpty) _Row('tmdb-movies', '热门电影', movies),
-        if (tv.isNotEmpty) _Row('tmdb-tv', '热门剧集', tv),
-        if (air.isNotEmpty) _Row('tmdb-air', '正在播出', air),
-        if (upcoming.isNotEmpty) _Row('tmdb-upcoming', '即将上映', upcoming),
-        if (trending.isNotEmpty) _Row('tmdb-trending', '本周趋势', trending),
-        if (recommended.isNotEmpty) _Row('recommended', '关联推荐', recommended),
+        if (trending.isNotEmpty) _Row('tmdb-trending', S.trending, trending, wide: true),
+        if (nowPlaying.isNotEmpty) _Row('tmdb-now', S.nowPlaying, nowPlaying),
+        if (movies.isNotEmpty) _Row('tmdb-movies', S.hotMovies, movies),
+        if (tv.isNotEmpty) _Row('tmdb-tv', S.hotSeries, tv),
+        if (air.isNotEmpty) _Row('tmdb-air', S.airing, air, wide: true),
+        if (upcoming.isNotEmpty) _Row('tmdb-upcoming', S.upcoming, upcoming),
+        if (recommended.isNotEmpty) _Row('recommended', S.recommended, recommended),
       ];
     }
 
@@ -380,11 +383,11 @@ class _HomePageState extends State<HomePage> {
       if (store.recent.isNotEmpty)
         _Row('recent', S.recentlyAdded, store.recent.reversed.toList(growable: false)),
       if (_genre != null) ...<_Row>[
-        if (genreRow.isNotEmpty) _Row('genre', '类型 · $_genre', genreRow),
+        if (genreRow.isNotEmpty) _Row('genre', '${S.genre} · $_genre', genreRow),
       ]
       else if (tmdb == null) ...<_Row>[
-        if (airing.isNotEmpty) _Row('airing', '正在播出', airing),
-        if (recommended.isNotEmpty) _Row('recommended', '关联推荐', recommended),
+        if (airing.isNotEmpty) _Row('airing', S.airing, airing, wide: true),
+        if (recommended.isNotEmpty) _Row('recommended', S.recommended, recommended),
       ]
       else ...tmdbRows,
       if (store.items.any((MediaItem item) => item.favorite))
@@ -570,7 +573,7 @@ class _HomePageState extends State<HomePage> {
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       Text(
-                        '浏览电影和剧集',
+                        S.browseByGenre,
                         style: TextStyle(
                           fontSize: 22,
                           height: 1.2,
@@ -591,7 +594,7 @@ class _HomePageState extends State<HomePage> {
             spacing: 10,
             runSpacing: 10,
             children: <Widget>[
-              _categoryChip('全部', null),
+              _categoryChip(S.allGenres, null),
               for (final String genre in genres) _categoryChip(genre, genre),
             ],
           ),

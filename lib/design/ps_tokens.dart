@@ -423,6 +423,11 @@ abstract final class PsType {
     'Noto Sans SC',
   ];
 
+  // Every style states `decoration: none` explicitly. A Material/DevTools
+  // default that carries an underline must never reach the hero copy — an
+  // orange baseline line under every line reads as "the UI abuses underlines".
+  // `copyWith` keeps this value unless a caller deliberately overrides it.
+
   /// Hero title, 88 in the reference.
   static const TextStyle display = TextStyle(
     fontSize: 88,
@@ -430,6 +435,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w300,
     letterSpacing: -1.2,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   /// Legacy hero size, used by secondary headers.
@@ -439,6 +445,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w300,
     letterSpacing: -0.8,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   /// Page title.
@@ -448,6 +455,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w300,
     letterSpacing: -0.4,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   /// Shelf title, 24 in the reference.
@@ -457,6 +465,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w500,
     letterSpacing: 0.1,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   static const TextStyle stat = TextStyle(
@@ -464,6 +473,7 @@ abstract final class PsType {
     height: 1.1,
     fontWeight: FontWeight.w300,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   static const TextStyle card = TextStyle(
@@ -472,6 +482,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w400,
     letterSpacing: 0.1,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   /// Body copy, 26 in the reference.
@@ -480,6 +491,7 @@ abstract final class PsType {
     height: 1.42,
     fontWeight: FontWeight.w400,
     color: PsColor.textDim,
+    decoration: TextDecoration.none,
   );
 
   static const TextStyle meta = TextStyle(
@@ -487,6 +499,7 @@ abstract final class PsType {
     height: 1.3,
     fontWeight: FontWeight.w400,
     color: PsColor.textDim,
+    decoration: TextDecoration.none,
   );
 
   static const TextStyle label = TextStyle(
@@ -494,6 +507,7 @@ abstract final class PsType {
     height: 1.3,
     fontWeight: FontWeight.w500,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   /// Tracked capitals that organise a screen without shouting.
@@ -503,6 +517,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w600,
     letterSpacing: 4,
     color: PsColor.text,
+    decoration: TextDecoration.none,
   );
 
   static const TextStyle micro = TextStyle(
@@ -511,6 +526,7 @@ abstract final class PsType {
     fontWeight: FontWeight.w500,
     letterSpacing: 0.2,
     color: PsColor.textFaint,
+    decoration: TextDecoration.none,
   );
 
   /// Small numbers that change while you watch them (timers, counters): fixed
@@ -521,5 +537,6 @@ abstract final class PsType {
     fontWeight: FontWeight.w400,
     fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
     color: PsColor.textDim,
+    decoration: TextDecoration.none,
   );
 }

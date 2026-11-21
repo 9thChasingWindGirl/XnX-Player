@@ -1,4 +1,5 @@
 import '../../core/app_log.dart';
+import '../models/artwork.dart';
 import '../models/media_item.dart';
 import '../net.dart';
 
@@ -231,6 +232,19 @@ class Tmdb {
       ];
       final String? poster = entry['poster_path'] as String?;
       final String? backdrop = entry['backdrop_path'] as String?;
+      // A wide shelf asks for a thumb; without a real 16:9 ref MediaItem falls
+      // back to the 2:3 poster and crops it. TMDB has the still, so register it
+      // under both roles — poster shelves still read posterUrl below.
+      final Artwork art = backdrop == null
+          ? const Artwork.empty()
+          : Artwork(<ArtKind, List<ArtRef>>{
+              ArtKind.thumb: <ArtRef>[
+                ArtRef('$_image/w780$backdrop', source: 'tmdb'),
+              ],
+              ArtKind.backdrop: <ArtRef>[
+                ArtRef('$_image/w1280$backdrop', source: 'tmdb'),
+              ],
+            });
       out.add(MediaItem(
         id: 'tmdb::$type::$id',
         sourceId: 'tmdb',
@@ -244,6 +258,7 @@ class Tmdb {
         meta: year == null ? null : '$year',
         posterUrl: poster == null ? null : '$_image/w500$poster',
         backdropUrl: backdrop == null ? null : '$_image/w1280$backdrop',
+        artwork: art,
         tmdbId: id,
         playable: false,
       ));

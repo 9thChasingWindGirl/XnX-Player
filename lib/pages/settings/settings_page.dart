@@ -2,12 +2,17 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../../core/input/input_action.dart';
+import '../../core/input/input_router.dart';
 import '../../core/strings.dart';
 import '../../data/prefs.dart';
 import '../../data/store.dart';
 import '../../design/ps_tokens.dart';
 import '../../ui/core/motion_clock.dart';
+import '../../ui/core/text_entry.dart';
 import '../../ui/core/tv_focusable.dart';
+import '../../ui/core/tv_scale.dart';
+import '../../ui/widgets/ps_button.dart';
 import '../../update/update_channel.dart';
 import '../../update/update_service.dart';
 
@@ -90,6 +95,103 @@ class _SettingsPageState extends State<SettingsPage> {
         UpdateChannel.dev => '开发者测试版Dev',
       };
 
+  /// The key editor is a route: one owner for the text-input/focus flags, and
+  /// closing it always restores whichever row opened it.
+  Future<void> _openTmdbDialog() async {
+    await showDialog<void>(
+      context: context,
+      barrierColor: const Color(0x88000000),
+      builder: (BuildContext context) => _TmdbKeyDialog(
+        initial: _store.tmdbKey,
+        onSave: (String key) => unawaited(_store.setTmdbKey(key)),
+      ),
+    );
+  }
+
+  static String _maskKey(String key) {
+    if (key.length <= 8) {
+      return '••••';
+    }
+    return '${key.substring(0, 4)}••••${key.substring(key.length - 4)}';
+  }
+
+  /// One prominent card for the metadata service. The whole card is the focus
+  /// target — a nested PsButton would add a second, overlapping D-pad stop —
+  /// and the pill on the right only mirrors what selecting the card does.
+  Widget _metadataCard() {
+    final String key = _store.tmdbKey;
+    final bool configured = key.isNotEmpty;
+    final String kind = key.startsWith('eyJ') ? 'v4 Bearer' : 'v3';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TvFocusable(
+        radius: 16,
+        onSelect: _openTmdbDialog,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+          decoration: BoxDecoration(
+            color: PsColor.text.withValues(alpha: configured ? 0.07 : 0.045),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: PsColor.text.withValues(alpha: configured ? 0.18 : 0.07),
+            ),
+          ),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                Icons.movie_filter_rounded,
+                size: 34,
+                color: configured ? PsColor.text : PsColor.textFaint,
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      S.tmdbApiKey,
+                      style: PsType.label.copyWith(fontSize: 24, fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      configured
+                          ? '${S.tmdbConfigured} · $kind · ${_maskKey(key)}'
+                          : S.tmdbNotConfigured,
+                      style: PsType.micro.copyWith(
+                        fontSize: 15,
+                        color: configured ? PsColor.textDim : PsColor.textFaint,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      S.tmdbGuide,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: PsType.micro.copyWith(fontSize: 14, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 20),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+                decoration: BoxDecoration(
+                  color: PsColor.text.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(PsRadius.pill),
+                  border: Border.all(color: PsColor.text.withValues(alpha: 0.18), width: 2),
+                ),
+                child: Text(
+                  configured ? S.tmdbModify : S.tmdbSetUp,
+                  style: PsType.meta.copyWith(fontSize: 22, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// One row, two stages: first press checks the channel, the second installs
   /// what was found (or reports why it can't). Rollback candidates surface
   /// through the row below.
@@ -165,6 +267,17 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final PlaybackPrefs prefs = _store.prefs;
+    // TvScale already scales the whole stage; these are the same measurements
+    // expressed in today's design-space size, so a wider/taller window gives
+    // the columns more room instead of leaving them at fixed pixel widths.
+    final double designW = TvScale.widthOf(context);
+    final double designH = TvScale.heightOf(context);
+    final double headerTop = designH * (110 / TvScale.designHeight);
+    final double bodyTop = designH * (226 / TvScale.designHeight);
+    final double bodyHeight = designH - bodyTop - designH * (70 / TvScale.designHeight);
+    final double leftWidth = designW * (1180 / TvScale.designWidth);
+    final double cardTop = designH * (236 / TvScale.designHeight);
+    final double cardWidth = designW * (520 / TvScale.designWidth);
     return MotionBuilder(
       builder: (BuildContext context, double dt) {
         final MotionClock clock = MotionScope.of(context);
@@ -179,7 +292,7 @@ class _SettingsPageState extends State<SettingsPage> {
           children: <Widget>[
             Positioned(
               left: PsSpace.safeX,
-              top: 110 + 14 * (1 - entrance),
+              top: headerTop + 14 * (1 - entrance),
               child: Opacity(
                 opacity: entrance,
                 child: Column(
@@ -197,9 +310,9 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             Positioned(
               left: PsSpace.safeX,
-              top: 226,
-              width: 1180,
-              height: 800,
+              top: bodyTop,
+              width: leftWidth,
+              height: bodyHeight,
               child: Opacity(
                 opacity: entrance,
                 child: SingleChildScrollView(
@@ -207,6 +320,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
+                      _section(S.settingsMetadata),
+                      _metadataCard(),
                       _section(S.settingsPlayback),
                       _Row(
                         label: S.quality,
@@ -353,8 +468,8 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             Positioned(
               right: PsSpace.safeX,
-              top: 236,
-              width: 520,
+              top: cardTop,
+              width: cardWidth,
               child: Opacity(opacity: entrance, child: _KernelCard(prefs: prefs)),
             ),
           ],
@@ -742,6 +857,147 @@ class _KernelCard extends StatelessWidget {
           Text(key, style: PsType.micro.copyWith(fontSize: 16)),
           Text(value, style: PsType.label.copyWith(fontSize: 18)),
         ],
+      ),
+    );
+  }
+}
+
+/// Modal key editor. While it is open a text field owns the keyboard, so the
+/// router is told to forward everything except Back to the caret — the same
+/// contract the add-source sheet uses.
+class _TmdbKeyDialog extends StatefulWidget {
+  const _TmdbKeyDialog({required this.initial, required this.onSave});
+
+  final String initial;
+  final ValueChanged<String> onSave;
+
+  @override
+  State<_TmdbKeyDialog> createState() => _TmdbKeyDialogState();
+}
+
+class _TmdbKeyDialogState extends State<_TmdbKeyDialog> {
+  late final TextEditingController _key = TextEditingController(text: widget.initial);
+  InputSubscription? _inputSub;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    TextEntry.active.value = true;
+    _inputSub = InputRouter.instance.subscribe(_onIntent, name: 'tmdb-key-dialog');
+  }
+
+  @override
+  void dispose() {
+    _inputSub?.cancel();
+    TextEntry.active.value = false;
+    _key.dispose();
+    super.dispose();
+  }
+
+  bool _onIntent(InputIntent intent) {
+    if (intent.action != InputAction.back) {
+      return false;
+    }
+    Navigator.of(context).pop();
+    return true;
+  }
+
+  void _save() {
+    final String value = _key.text.trim();
+    if (value.isEmpty) {
+      setState(() => _error = S.tmdbEmptyHint);
+      return;
+    }
+    widget.onSave(value);
+    Navigator.of(context).pop();
+  }
+
+  void _clear() {
+    widget.onSave('');
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Material(
+        color: const Color(0xEE141821),
+        borderRadius: BorderRadius.circular(PsRadius.sheet),
+        child: Container(
+          width: 900,
+          padding: const EdgeInsets.all(44),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(PsRadius.sheet),
+            border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(S.tmdbApiKey, style: PsType.page.copyWith(fontSize: 40)),
+              const SizedBox(height: 10),
+              Text(
+                S.tmdbGuide,
+                maxLines: 3,
+                style: PsType.micro.copyWith(fontSize: 16, height: 1.5),
+              ),
+              const SizedBox(height: 24),
+              TextField(
+                controller: _key,
+                autofocus: true,
+                cursorColor: PsColor.text,
+                style: PsType.meta.copyWith(color: PsColor.text, fontSize: 24),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: PsColor.text.withValues(alpha: 0.06),
+                  hintText: S.tmdbKeyHint,
+                  hintStyle: PsType.meta.copyWith(color: PsColor.textFaint, fontSize: 22),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: PsColor.text, width: 2),
+                  ),
+                ),
+              ),
+              if (_error != null) ...<Widget>[
+                const SizedBox(height: 12),
+                Text(_error!, style: PsType.label.copyWith(color: PsColor.danger)),
+              ],
+              const SizedBox(height: 28),
+              Row(
+                children: <Widget>[
+                  PsButton(
+                    label: S.tmdbSave,
+                    icon: Icons.check_rounded,
+                    primary: true,
+                    width: 200,
+                    onSelect: _save,
+                  ),
+                  const SizedBox(width: 16),
+                  if (widget.initial.isNotEmpty)
+                    PsButton(
+                      label: S.tmdbClear,
+                      icon: Icons.delete_outline_rounded,
+                      width: 160,
+                      onSelect: _clear,
+                    ),
+                  const SizedBox(width: 16),
+                  PsButton(
+                    label: S.tmdbCancel,
+                    width: 160,
+                    onSelect: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -78,17 +78,16 @@ class EmbySource extends MediaSource {
   @override
   Future<List<MediaItem>> browse() async {
     await _ensureAuth();
-    // Walk the newest titles only. A full recursive library is what produced
-    // the one-minute hang: a large Emby server answers page after page, the
-    // home screen waits for all of them, and the store's per-source timeout
-    // then throws away everything. The shelves never show more than a few
-    // hundred entries anyway, so a bounded window keeps the page responsive;
-    // the rest of the library is still reachable from the server's own views.
+    // Pull the whole Movie/Series library. The old 600-item window is why a
+    // large server looked incomplete: everything past page three never reached
+    // the store, and the genre chips could only count that window. Each page
+    // still has its own 12 s deadline, and a stall on page N keeps 1..N-1
+    // rather than throwing the whole library away.
     const int pageSize = 200;
-    const int maxItems = 600;
     final List<MediaItem> out = <MediaItem>[];
     int start = 0;
-    while (out.length < maxItems) {
+    int? total;
+    while (true) {
       late Map<String, dynamic> data;
       try {
         data = await Http.getJson(
@@ -105,18 +104,37 @@ class EmbySource extends MediaSource {
           headers: _headers,
         ).timeout(const Duration(seconds: 12));
       } on Object {
-        // A server that stalls on page N must not erase pages 1..N-1: the
-        // shelves are useful with a partial library, and an empty one is not.
         if (out.isEmpty) {
           rethrow;
         }
         break;
       }
-      final List<MediaItem> page = _items(data);
-      out.addAll(page.take(maxItems - out.length));
-      final int total = (data['TotalRecordCount'] as num?)?.toInt() ?? out.length;
-      start += page.length;
-      if (page.isEmpty || start >= total || page.length < pageSize) {
+
+      final Object? raw = data['Items'];
+      final List<dynamic> records = raw is List ? raw : const <dynamic>[];
+      out.addAll(_items(data));
+
+      // The server's count is authoritative, but only when it was actually
+      // returned. Falling back to `out.length` used to end pagination early on
+      // servers that omit TotalRecordCount.
+      final int? reported = (data['TotalRecordCount'] as num?)?.toInt();
+      if (reported != null) {
+        total = reported;
+      }
+
+      if (records.isEmpty) {
+        break;
+      }
+      // Advance by the requested page size, never by how many entries we
+      // managed to parse: a malformed record must not pull the next page back
+      // over titles that were already fetched.
+      start += pageSize;
+      if (total != null) {
+        if (start >= total) {
+          break;
+        }
+      } else if (records.length < pageSize) {
+        // Without an authoritative count a short page is the only end signal.
         break;
       }
     }
@@ -202,11 +220,25 @@ class EmbySource extends MediaSource {
     if (raw is! List) {
       return const <String>[];
     }
-    return raw
-        .whereType<String>()
-        .where((String value) => value.trim().isNotEmpty)
-        .map((String value) => value.trim())
-        .toList(growable: false);
+    // Emby normally sends Genres as strings, but some servers (and plugins)
+    // send {"Name": ...} objects. Taking only strings used to drop those
+    // genres, which then made the library's genre chips under-count.
+    final List<String> out = <String>[];
+    for (final Object? value in raw) {
+      String? text;
+      if (value is String) {
+        text = value;
+      } else if (value is Map) {
+        final Object? name = value['Name'];
+        if (name is String) {
+          text = name;
+        }
+      }
+      if (text != null && text.trim().isNotEmpty) {
+        out.add(text.trim());
+      }
+    }
+    return List<String>.unmodifiable(out);
   }
 
   static String? _studio(Object? raw) {

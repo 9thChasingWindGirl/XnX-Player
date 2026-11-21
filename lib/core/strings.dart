@@ -38,6 +38,24 @@ abstract final class S {
   static const String liveChannels = '直播频道';
   static const String allMedia = '全部媒体';
 
+  // TMDB portal shelves and the genre navigation strip.
+  static const String nowPlaying = '正在上映';
+  static const String hotMovies = '热门电影';
+  static const String hotSeries = '热门剧集';
+  static const String airing = '正在播出';
+  static const String upcoming = '即将上映';
+  static const String trending = '本周趋势';
+  static const String recommended = '关联推荐';
+  static const String browseByGenre = '浏览电影和剧集';
+  static const String genre = '类型';
+  static const String allGenres = '全部';
+  static const String viewAll = '查看全部';
+  static const String moreInfo = '更多信息';
+  static const String liveNow = '正在直播';
+  static const String seriesRecommend = '剧集推荐';
+  static const String forYou = '为你推荐';
+  static const String live = '直播';
+
   // Actions
   static const String play = '播放';
   static const String resume = '继续播放';
@@ -108,6 +126,23 @@ abstract final class S {
   static const String reduceMotionHint = '关闭背景漂移与入场位移';
   static const String skipIntro = '跳过片头';
   static const String runTour = '播放器信息';
+
+  // Metadata service (TMDB). Kept here with the other UI copy so the settings
+  // page and the home portal never drift apart in wording.
+  static const String settingsMetadata = '元数据服务';
+  static const String tmdbApiKey = 'TMDB API Key';
+  static const String tmdbConfigured = '已配置';
+  static const String tmdbNotConfigured = '未配置';
+  static const String tmdbModify = '修改';
+  static const String tmdbSetUp = '去设置';
+  static const String tmdbSave = '保存';
+  static const String tmdbClear = '清除';
+  static const String tmdbCancel = '取消';
+  static const String tmdbEmptyHint = '请填写 TMDB API Key（v3 Key 或 v4 Read Access Token）';
+  static const String tmdbKeyHint = 'v3 API Key 或 v4 Read Access Token';
+  static const String tmdbGuide =
+      '在 TMDB 官网注册账号，进入「设置 → API」申请 v3 API Key 或 v4 Read Access Token。\n'
+      'https://www.themoviedb.org/settings/api';
 
   // Hints
   static const String hintNavigate = '方向键 移动';

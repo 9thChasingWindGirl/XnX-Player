@@ -14,10 +14,64 @@ class LocalSource extends MediaSource {
   static const int _maxEntries = 400;
 
   @override
-  Future<List<MediaItem>> browse() => _scan(config.path);
+  Future<List<MediaItem>> browse() async {
+    final List<MediaItem> scanned = await _scan(config.path);
+    // Series containers replace their loose episode files in the top-level
+    // library; the episodes themselves are reachable through children().
+    final Map<String, MediaItem> series = <String, MediaItem>{};
+    final List<MediaItem> out = <MediaItem>[];
+    for (final MediaItem item in scanned) {
+      final String? show = item.group;
+      if (item.kind == MediaKind.episode && show != null && show.isNotEmpty) {
+        series.putIfAbsent(show, () => _seriesFor(show, item));
+      } else {
+        out.add(item);
+      }
+    }
+    out.addAll(series.values);
+    out.sort((MediaItem a, MediaItem b) => a.title.compareTo(b.title));
+    return out;
+  }
 
   @override
-  Future<List<MediaItem>> children(MediaItem container) => _scan(container.path ?? config.path);
+  Future<List<MediaItem>> children(MediaItem container) async {
+    if (container.kind == MediaKind.series) {
+      // A local series container carries its show name in [group]. Return only
+      // that show's episodes, ordered by season then episode number.
+      final String show = container.group ?? '';
+      final List<MediaItem> episodes = (await _scan(config.path))
+          .where((MediaItem item) =>
+              item.kind == MediaKind.episode && item.group == show)
+          .toList();
+      episodes.sort((MediaItem a, MediaItem b) {
+        final int bySeason = (a.season ?? 0).compareTo(b.season ?? 0);
+        return bySeason != 0 ? bySeason : (a.episode ?? 0).compareTo(b.episode ?? 0);
+      });
+      return episodes;
+    }
+    return _scan(container.path ?? config.path);
+  }
+
+  /// The series container shown in the library for a set of episode files.
+  ///
+  /// Artwork is inherited from the first episode so a TV show gets the same
+  /// poster/backdrop treatment as any other library entry.
+  MediaItem _seriesFor(String show, MediaItem first) {
+    final String id = '${config.id}::series:$show';
+    return MediaItem(
+      id: id,
+      sourceId: config.id,
+      sourceKind: SourceKind.local,
+      kind: MediaKind.series,
+      title: show,
+      group: show,
+      posterUrl: first.posterUrl,
+      backdropUrl: first.backdropUrl,
+      artwork: first.artwork,
+      genres: first.genres,
+      year: first.year,
+    );
+  }
 
   Future<List<MediaItem>> _scan(String path) async {
     if (path.isEmpty) {
@@ -54,17 +108,21 @@ class LocalSource extends MediaSource {
         // to the video under fixed names; read all of them, not just a poster,
         // so a local library gets the same hero treatment as a server one.
         final Artwork art = _artworkFor(parent, name, siblingCache);
+        final EpisodeTag? tag = episodeTagFromFileName(name);
         out.add(
           MediaItem(
             id: '${config.id}::$parent/$name',
             sourceId: config.id,
             sourceKind: SourceKind.local,
-            kind: MediaKind.file,
-            title: prettifyFileName(name),
-            subtitle: parent,
+            kind: tag == null ? MediaKind.file : MediaKind.episode,
+            title: tag == null ? prettifyFileName(name) : (tag.episodeTitle ?? tag.show),
+            subtitle: tag == null ? parent : tag.show,
+            group: tag?.show,
+            season: tag?.season,
+            episode: tag?.episode,
             path: entity.path,
             meta: _sizeLabel(stat.size),
-            badge: _resolutionBadge(name),
+            badge: tag == null ? _resolutionBadge(name) : tag.badge,
             tech: _techFromName(name),
             year: yearFromFileName(name),
             posterUrl: art.best(ArtKind.poster)?.url,

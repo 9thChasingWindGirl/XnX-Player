@@ -82,6 +82,47 @@ class AppStore extends ChangeNotifier {
 
   bool get hasTmdb => tmdbKey.isNotEmpty;
 
+  /// Sets or clears the TMDB metadata key.
+  ///
+  /// Metadata is not a media source: no browse, no refresh, only a persisted
+  /// `SourceConfig` that [tmdbKey] reads back. Older builds could save several
+  /// TMDB chips through the add-source dialog, so a write also collapses them
+  /// into one — otherwise which key is in use would be an accident of order.
+  Future<void> setTmdbKey(String key) async {
+    final String trimmed = key.trim();
+    final int first = sources.indexWhere(
+      (SourceConfig config) => config.kind == SourceKind.tmdb,
+    );
+    if (trimmed.isEmpty) {
+      sources.removeWhere((SourceConfig config) => config.kind == SourceKind.tmdb);
+      if (first >= 0) {
+        await _persist();
+        _notify();
+      }
+      return;
+    }
+    final SourceConfig config = first >= 0
+        ? sources[first].copyWith(name: 'TMDB', token: trimmed, enabled: true)
+        : SourceConfig(
+            id: 'tmdb',
+            kind: SourceKind.tmdb,
+            name: 'TMDB',
+            token: trimmed,
+          );
+    if (first >= 0) {
+      sources[first] = config;
+    } else {
+      sources.add(config);
+    }
+    for (int i = sources.length - 1; i >= 0; i--) {
+      if (sources[i].kind == SourceKind.tmdb && !identical(sources[i], config)) {
+        sources.removeAt(i);
+      }
+    }
+    await _persist();
+    _notify();
+  }
+
   Future<void> load() async {
     AppLog.info('读取配置：$statePath');
     try {
