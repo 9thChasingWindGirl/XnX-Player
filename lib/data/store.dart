@@ -17,6 +17,7 @@ import 'sources/iptv.dart';
 import 'sources/local.dart';
 import 'sources/media_source.dart';
 import 'sources/remote_files.dart';
+import 'sources/resolved_media.dart';
 
 /// Application state: configured backends, the merged library, resume points
 /// and playback preferences.
@@ -404,7 +405,14 @@ class AppStore extends ChangeNotifier {
   }
 
   /// The URL handed to mpv, after any backend round-trip (AList raw URL).
-  Future<String> resolve(MediaItem item) async {
+  Future<String> resolve(MediaItem item) async => (await resolveMedia(item)).uri;
+
+  /// [resolve] with the metadata that belongs to the answer.
+  ///
+  /// Local files, direct URLs and IPTV entries are already playable and skip the
+  /// backend entirely; everything else asks its source, which is the only place
+  /// that knows whether the link is signed and for how long.
+  Future<ResolvedMedia> resolveMedia(MediaItem item) async {
     final String? path = item.path;
     if (path == null || path.isEmpty) {
       throw const SourceException('这一项没有可播放的地址');
@@ -412,13 +420,13 @@ class AppStore extends ChangeNotifier {
     if (item.sourceKind == SourceKind.local ||
         item.sourceKind == SourceKind.directUrl ||
         item.sourceKind == SourceKind.iptv) {
-      return path;
+      return ResolvedMedia(uri: path, headers: item.headers);
     }
     final SourceConfig? config = _configFor(item);
     if (config == null) {
-      return path;
+      return ResolvedMedia(uri: path, headers: item.headers);
     }
-    return _sourceFor(config).resolve(item);
+    return _sourceFor(config).resolveMedia(item);
   }
 
   /// Headers mpv would need. Kept for completeness: credentials are instead

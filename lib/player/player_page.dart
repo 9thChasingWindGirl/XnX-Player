@@ -14,6 +14,7 @@ import '../core/input/input_router.dart';
 import '../design/ps_tokens.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
+import '../data/sources/resolved_media.dart';
 import '../data/sources/subtitle_finder.dart';
 import '../data/sources/subtitle_rules.dart';
 import '../data/store.dart';
@@ -51,6 +52,11 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   static const int _maxQueue = 30;
+
+  /// How many queue entries resolve at once. Each one is a backend round-trip,
+  /// so a couple of them overlap the latency without opening 30 sockets to a
+  /// small home server.
+  static const int _resolveBatch = 4;
 
   MpvPlayer? _player;
   OsdBridge? _bridge;
@@ -286,23 +292,32 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       }
 
       // Backends may need a round-trip for a playable URL (AList raw link).
-      final String url = await AppStore.instance.resolve(widget.item);
+      final ResolvedMedia primary = await AppStore.instance.resolveMedia(widget.item);
 
       // Queue the sibling episodes. A single unresolvable sibling must not take
       // the whole season down, so only the clicked item is strict.
-      final List<String> queue = <String>[url];
+      //
+      // Resolution is a network round-trip per item, so they run a few at a time
+      // rather than one after another: a 30-episode season used to mean 29 serial
+      // backend lookups before the first frame. Order is preserved, because "next
+      // episode" has to mean the next episode.
+      final List<String> queue = <String>[primary.uri];
+      final List<MediaItem> pending = <MediaItem>[];
       for (final MediaItem sibling in widget.queue) {
-        if (queue.length >= _maxQueue) {
+        if (queue.length + pending.length >= _maxQueue) {
           break;
         }
-        if (sibling.id == widget.item.id) {
-          continue;
+        if (sibling.id != widget.item.id) {
+          pending.add(sibling);
         }
-        try {
-          queue.add(await AppStore.instance.resolve(sibling));
-        } catch (_) {
-          // Skip it; the playlist simply loses one entry.
-        }
+      }
+      for (int start = 0; start < pending.length; start += _resolveBatch) {
+        final int end = start + _resolveBatch <= pending.length
+            ? start + _resolveBatch
+            : pending.length;
+        final List<String?> resolved =
+            await Future.wait(pending.sublist(start, end).map(_resolveQuietly));
+        queue.addAll(resolved.whereType<String>());
       }
 
       final MpvPlayer player = MpvPlayer();
@@ -774,6 +789,19 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  /// Resolves one queue entry, returning null when the backend refuses.
+  ///
+  /// A season with one dead episode must still play the other twenty-three, so
+  /// the failure is swallowed here instead of aborting the queue — the playlist
+  /// simply loses that entry.
+  Future<String?> _resolveQuietly(MediaItem item) async {
+    try {
+      return (await AppStore.instance.resolveMedia(item)).uri;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Finds subtitle files beside a locally stored video and mounts them.

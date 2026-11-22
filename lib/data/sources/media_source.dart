@@ -1,4 +1,5 @@
 import '../models/media_item.dart';
+import 'resolved_media.dart';
 
 /// Persisted description of a configured backend.
 class SourceConfig {
@@ -125,6 +126,16 @@ abstract class MediaSource {
       throw const SourceException('这一项没有可播放的地址');
     }
     return path;
+  }
+
+  /// [resolve] plus the context that belongs with the URL.
+  ///
+  /// Callers should prefer this: a signed link knows when it goes stale, and a
+  /// source that authenticates by header rather than by query string knows which
+  /// header to send. Sources that can only produce a URL inherit this default
+  /// and lose nothing.
+  Future<ResolvedMedia> resolveMedia(MediaItem item) async {
+    return ResolvedMedia(uri: await resolve(item), headers: headersFor(item));
   }
 
   Map<String, String> headersFor(MediaItem item) => item.headers;
