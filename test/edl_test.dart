@@ -19,14 +19,24 @@ void main() {
       expect(EdlAction.commercialBreak.shiftsTimeline, isFalse);
       expect(EdlAction.cut.silences, isFalse);
       expect(EdlAction.mute.silences, isTrue);
+      // An ad break leaves the picture too, so it is not a silence.
+      expect(EdlAction.commercialBreak.silences, isFalse);
+      expect(EdlAction.commercialBreak.skips, isTrue);
+      expect(EdlAction.mute.skips, isFalse);
     });
 
     test('codes and mnemonics both resolve', () {
       expect(EdlAction.fromCode(0), EdlAction.cut);
-      expect(EdlAction.fromCode(2), EdlAction.commercialBreak);
+      expect(EdlAction.fromCode(1), EdlAction.mute);
+      expect(EdlAction.fromCode(3), EdlAction.commercialBreak);
+      // 2 is Kodi's scene marker: a point, not an interval, so it is not an
+      // action this model can represent.
+      expect(EdlAction.fromCode(2), isNull);
       expect(EdlAction.fromCode(7), isNull);
       expect(EdlAction.fromKey('COMMBREAK'), EdlAction.commercialBreak);
       expect(EdlAction.fromKey(' commercial_break '), EdlAction.commercialBreak);
+      expect(EdlAction.fromKey('3'), EdlAction.commercialBreak);
+      expect(EdlAction.fromKey('2'), isNull);
       expect(EdlAction.fromKey('nonsense'), isNull);
     });
   });
@@ -70,12 +80,12 @@ void main() {
       expect(edl.edits.map((EdlEdit e) => e.start.inSeconds).toList(), <int>[5, 30]);
     });
 
-    test('accepts commas, a BOM, CRLF and two-column rows', () {
-      final Edl edl = Edl.parse('\uFEFF00:00:01.000,00:00:02.000\r\n'
+    test('accepts commas, a BOM and CRLF; two columns is a scene marker', () {
+      final Edl edl = Edl.parse('\uFEFF00:00:01.000,00:00:02.000,0\r\n'
           '00:00:03.000 00:00:04.000\r\n'
           '\r\n');
-      expect(edl.length, 2);
-      expect(edl.edits.last.action, EdlAction.cut);
+      expect(edl.length, 1);
+      expect(edl.edits.single.action, EdlAction.cut);
     });
 
     test('drops rows it cannot understand, never guesses', () {
@@ -146,8 +156,8 @@ void main() {
     final Edl edl = Edl.parse(_sample);
 
     test('tells cuts and mutes apart at the playhead', () {
-      expect(edl.isCutAt(const Duration(seconds: 15)), isTrue);
-      expect(edl.isCutAt(const Duration(seconds: 20)), isFalse);
+      expect(edl.isSkippedAt(const Duration(seconds: 15)), isTrue);
+      expect(edl.isSkippedAt(const Duration(seconds: 20)), isFalse);
       expect(edl.isSilentAt(const Duration(seconds: 62)), isTrue);
       expect(edl.isSilentAt(const Duration(seconds: 65)), isFalse);
       expect(edl.covering(const Duration(seconds: 62))?.action, EdlAction.mute);
@@ -197,11 +207,13 @@ void main() {
     });
 
     test('commercial breaks survive the round trip without shifting time', () {
-      final Edl edl = Edl.parse('00:00:30.000 00:00:40.000 2');
+      final Edl edl = Edl.parse('00:00:30.000 00:00:40.000 3');
       expect(edl.edits.single.action, EdlAction.commercialBreak);
       expect(edl.timelineDuration(const Duration(seconds: 60)),
           const Duration(seconds: 60));
-      expect(edl.isSilentAt(const Duration(seconds: 35)), isTrue);
+      // An ad break is jumped over, not muted: the picture disappears, so
+      // nothing is left playing silently inside it.
+      expect(edl.isSilentAt(const Duration(seconds: 35)), isFalse);
       expect(Edl.parse(edl.toEdlText()), edl);
     });
   });

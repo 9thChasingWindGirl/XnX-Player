@@ -55,6 +55,14 @@ local HDR_GOLD = '&H3CBEFF&' -- RGB 255,190,60
 local DV_PURPLE = '&HFF78A0&' -- RGB 160,120,255
 local HLG_CYAN = '&HDCDC50&' -- RGB 80,220,220
 local DTS_AMBER = '&H4696FF&' -- RGB 255,150,70
+
+-- Timeline band tints. A cut and a mute are different promises: one removes
+-- picture, the other only sound. Drawing both in the same white — separated by
+-- two steps of alpha — meant the only way to tell them apart was to hover the
+-- bar and read a tooltip. The reference build gives EDL its own red row above
+-- the progress bar for the same reason; here the cut row is red and the mute
+-- row stays a faint white hairline beneath it.
+local CUT_TINT = '&H576BFF&' -- RGB 255,107,87
 local OK_GREEN = '&H72D96E&' -- RGB 110,217,114
 
 local FONT = 'Microsoft YaHei UI'
@@ -639,10 +647,14 @@ end
 --- elsewhere may use Kodi's numeric codes (`0/1/2`) or a longer spelling, and
 --- mistaking a cut for a mute would either leak two minutes of ads or silence
 --- the opening titles.
+---
+--- Note the absence of `2`: in Kodi's EDL numbering that is a scene marker, a
+--- point on the timeline with no interval, not a commercial break. It is
+--- decoded by name in `parse_edl` so a stray `.edl` cannot invent a skip.
 local ACTION_ALIASES = {
   ['0'] = 'cut',
   ['1'] = 'mute',
-  ['2'] = 'commbreak',
+  ['3'] = 'commbreak',
   commercial = 'commbreak',
   commercial_break = 'commbreak',
   ad = 'commbreak',
@@ -811,36 +823,270 @@ local function chapter_edits()
   return out
 end
 
+-- ==== SIDECAR EDITS (`.edl` / comskip `.txt`) ==============================
+--
+-- Two file formats sitting beside the video, both read the way the reference
+-- build reads them:
+--
+--   `Show.mkv.edl`  `start end action`, one edit per line. Times are
+--                   `HH:MM:SS.mmm` — **milliseconds**, not frames — or plain
+--                   seconds, or `#12345` for a frame number. Actions are
+--                   Kodi's codes: 0 cut, 1 mute, 2 scene marker, 3 ad break.
+--                   Fields are whitespace separated; `##` starts a comment.
+--
+--   `Show.txt`      comskip's own output. Line 1 is
+--                   `FILE PROCESSING COMPLETE <frames> FRAMES AT <fps x 100>`
+--                   and every line after the ruler is a pair of *frame*
+--                   numbers. Because the frame rate travels in the file, the
+--                   conversion is exact — no guessing from the container,
+--                   which is wrong for anything film-sourced played at 25 fps.
+--
+-- comskip can also be told to write `.edl`, but it writes `HH:MM:SS.ff` with
+-- frames after the dot and keeps the frame rate to itself. That is
+-- indistinguishable from milliseconds, and reading it as such shifts every
+-- mark by up to a second — so that form is deliberately unsupported. Use
+-- comskip's default `.txt` instead.
+
+local SIDECAR_CACHE = nil
+local SIDECAR_SOURCE = nil
+
+local function local_video_path()
+  local path = mp.get_property('path') or ''
+  if path == '' or path:find('://', 1, true) then
+    return ''
+  end
+  return path
+end
+
+--- Folder and extension-less name of a path.
+local function split_stem(path)
+  local folder, name = utils.split_path(path)
+  local stem = name:match('^(.*)%.[^.]*$') or name
+  return folder or '', stem
+end
+
+--- Reads a whole file, or nil. `io.open` goes through the C library, so a path
+--- outside the active code page throws instead of failing — hence the pcall:
+--- a sidecar that cannot be opened must never take playback with it.
+local function read_text(path)
+  local ok, file = pcall(io.open, path, 'r')
+  if not ok or not file then
+    return nil
+  end
+  local body = file:read('*a')
+  file:close()
+  return body
+end
+
+--- Seeks are relative to the video, so the container's rate is the right
+--- fallback for a comskip file that omitted its header rate.
+local function container_fps()
+  local ok, value = pcall(mp.get_property_number, 'video-params/fps')
+  if ok and type(value) == 'number' and value > 0 then
+    return value
+  end
+  return nil
+end
+
+--- `HH:MM:SS.mmm`, `MM:SS.mmm`, plain seconds, or `#frames`.
+---
+--- The fractional part of a time code is the fraction of the second it names,
+--- so `12.45` and a padded `.450` agree — one conversion covers both.
+local function parse_edl_time(raw, fps)
+  local text = tostring(raw or ''):gsub(',', '.')
+  if text == '' then
+    return nil
+  end
+  if text:sub(1, 1) == '#' then
+    local frames = tonumber(text:sub(2))
+    if not frames or not fps or fps <= 0 then
+      return nil
+    end
+    return frames / fps
+  end
+  local hours, minutes, seconds = text:match('^(%d+):(%d+):(%d+%.?%d*)$')
+  if hours then
+    return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds)
+  end
+  local mins, secs = text:match('^(%d+):(%d+%.?%d*)$')
+  if mins then
+    return tonumber(mins) * 60 + tonumber(secs)
+  end
+  return tonumber(text)
+end
+
+--- Kodi's action codes. 2 is a scene marker and carries no interval, so it is
+--- absent here on purpose — treating it as an ad break would cut a minute out
+--- of the middle of the film wherever the file marked a chapter.
+local EDL_ACTIONS = { ['0'] = 'cut', ['1'] = 'mute', ['3'] = 'commbreak' }
+
+--- Only the three interval-bearing actions are accepted. Anything else — a
+--- scene marker, a misspelling, a column that is not an action at all — is
+--- dropped, because the default for an unknown action would be to cut, and
+--- cutting on a guess is the one failure mode that destroys the film.
+local function known_action(raw)
+  local action = EDL_ACTIONS[raw] or normalize_action(raw)
+  if action == 'cut' or action == 'mute' or action == 'commbreak' then
+    return action
+  end
+  return nil
+end
+
+local function parse_edl(body, fps)
+  local out = {}
+  for line in body:gmatch('[^\r\n]+') do
+    -- A decimal comma inside a time code is not a field separator.
+    local cooked = line:gsub('(%d),(%d)', '%1.%2')
+    local fields = {}
+    for token in cooked:gmatch('[^%s]+') do
+      fields[#fields + 1] = token
+    end
+    local comment = #fields > 0 and fields[1]:sub(1, 2) == '##'
+    if #fields >= 3 and not comment then
+      local start = parse_edl_time(fields[1], fps)
+      local finish = parse_edl_time(fields[2], fps)
+      local action = known_action(fields[3])
+      if start and finish and finish > start and action then
+        out[#out + 1] = {
+          start = start,
+          ['end'] = finish,
+          action = action,
+          from_edl = true,
+        }
+      end
+    end
+    -- Two fields is `time action`: a scene marker, not an interval. Skipped.
+  end
+  return out
+end
+
+--- comskip's `.txt`. Returns nil when the file is something else entirely —
+--- a stray `.txt` beside the video is far more likely to be notes than an
+--- ad list, and a wrong guess would be silent.
+local function parse_comskip(body, fallback_fps)
+  local lines = {}
+  for line in body:gmatch('[^\r\n]+') do
+    lines[#lines + 1] = line
+  end
+  if not (lines[1] or ''):find('FILE PROCESSING COMPLETE', 1, true) then
+    return nil
+  end
+  local rate = tonumber((lines[1]:match('FRAMES AT (%d+)')))
+  local fps = (rate and rate > 0) and (rate / 100) or fallback_fps
+  if not fps or fps <= 0 then
+    -- Frame numbers with no frame rate are not times. Guessing would put the
+    -- ads somewhere else entirely.
+    return {}
+  end
+  local out = {}
+  for index = 3, #lines do
+    local first, second = lines[index]:match('^%s*(%d+%.?%d*)%s+(%d+%.?%d*)')
+    if not first then
+      -- A malformed tail means the rest cannot be trusted, and half a set of
+      -- ad breaks is worse than none.
+      return {}
+    end
+    local start = tonumber(first) / fps
+    local finish = tonumber(second) / fps
+    if finish > start then
+      out[#out + 1] = {
+        start = start,
+        ['end'] = finish,
+        action = 'commbreak',
+        from_edl = true,
+      }
+    end
+  end
+  return out
+end
+
+--- Edits from the sidecar files, read once per file and then cached.
+---
+--- An `.edl` wins over a leftover comskip run: it is the explicit format, and
+--- if someone wrote one they meant it. A `.edl` that parses to nothing is
+--- still honoured as "this file has no edits" rather than falling through.
+local function sidecar_edits()
+  if SIDECAR_CACHE then
+    return SIDECAR_CACHE
+  end
+  SIDECAR_CACHE = {}
+  local path = local_video_path()
+  if path == '' then
+    return SIDECAR_CACHE
+  end
+  local folder, stem = split_stem(path)
+  if stem == '' then
+    return SIDECAR_CACHE
+  end
+
+  local edl = read_text(utils.join_path(folder, stem .. '.edl'))
+  if edl then
+    local edits = parse_edl(edl, container_fps())
+    if #edits > 0 then
+      SIDECAR_CACHE = sort_edits(edits)
+      SIDECAR_SOURCE = '.edl'
+    end
+    return SIDECAR_CACHE
+  end
+
+  local txt = read_text(utils.join_path(folder, stem .. '.txt'))
+  if txt then
+    local edits = parse_comskip(txt, container_fps())
+    if edits and #edits > 0 then
+      SIDECAR_CACHE = sort_edits(edits)
+      SIDECAR_SOURCE = 'comskip'
+    end
+  end
+  return SIDECAR_CACHE
+end
+
+--- Drops the cache so a freshly dropped sidecar is picked up without
+--- reopening the file.
+local function forget_sidecar()
+  SIDECAR_CACHE = nil
+  SIDECAR_SOURCE = nil
+  invalidate_edits()
+end
+
+--- Menu label: how many intervals came from beside the file, and from which
+--- format, so a silent absence is visibly different from an empty answer.
+local function sidecar_label()
+  local count = #sidecar_edits()
+  if count == 0 then
+    return '无'
+  end
+  return count .. ' 段 · ' .. (SIDECAR_SOURCE or 'EDL')
+end
+
 --- What the player should honour right now, sorted by start.
 ---
---- A manual mark wins over a chapter in the same region — the user looked at the
---- picture and decided, the chapter title is only a guess.
+--- Three sources, strongest first: a manual mark (the viewer looked at the
+--- picture and decided), a sidecar file (a detector decided), a chapter title
+--- (a guess). A weaker edit that lands inside a stronger one is dropped rather
+--- than merged — two overlapping skips would fight over the playhead.
 local function effective_edits()
   if EDIT_CACHE then
     return EDIT_CACHE
   end
-  local entry = segment_entry()
-  local stored = {}
-  for _, edit in ipairs(entry_edits(entry)) do
-    if is_complete(edit) then
-      stored[#stored + 1] = edit
-    end
-  end
   local out = {}
-  for _, edit in ipairs(stored) do
-    out[#out + 1] = edit
-  end
-  for _, edit in ipairs(chapter_edits()) do
-    local overlaps = false
-    for _, other in ipairs(stored) do
+  local function add(edit)
+    for _, other in ipairs(out) do
       if edit.start < other['end'] and other.start < edit['end'] then
-        overlaps = true
-        break
+        return
       end
     end
-    if not overlaps then
-      out[#out + 1] = edit
+    out[#out + 1] = edit
+  end
+  for _, edit in ipairs(entry_edits(segment_entry())) do
+    if is_complete(edit) then
+      add(edit)
     end
+  end
+  for _, edit in ipairs(sidecar_edits()) do
+    add(edit)
+  end
+  for _, edit in ipairs(chapter_edits()) do
+    add(edit)
   end
   EDIT_CACHE = sort_edits(out)
   return EDIT_CACHE
@@ -1066,24 +1312,35 @@ local function apply_edits()
     release_edit_mute()
     return
   end
-  if active.action == DEFAULT_ACTION then
-    release_edit_mute()
-    -- Leave the last fraction of a second alone: a seek that lands one keyframe
-    -- short of the cut end would otherwise bounce back and forth forever.
-    if pos < active['end'] - 0.3 then
-      seek_abs(active['end'])
-      if not cut_seen[active.start] then
-        cut_seen[active.start] = true
-        toast('已跳过 ' .. fmt_time(active['end'] - active.start) .. ' 的剪辑段', 3)
-      end
+  if active.action == 'mute' then
+    if not muted_by_edits then
+      mute_was_on = mp.get_property('mute') == 'yes'
+      muted_by_edits = true
+      mp.set_property('mute', 'yes')
+      toast('静音片段 · ' .. fmt_time(active['end'] - active.start), 3)
     end
     return
   end
-  if not muted_by_edits then
-    mute_was_on = mp.get_property('mute') == 'yes'
-    muted_by_edits = true
-    mp.set_property('mute', 'yes')
-    toast('静音片段 · ' .. fmt_time(active['end'] - active.start), 3)
+  -- Everything else is cut: an explicit cut, a commercial break, a chapter of
+  -- the opening. Only `mute` is treated as sound-off, so an ad break read from
+  -- a sidecar plays silently only if the file said so.
+  release_edit_mute()
+  -- Leave the last fraction of a second alone: a seek that lands one keyframe
+  -- short of the cut end would otherwise bounce back and forth forever.
+  if pos < active['end'] - 0.3 then
+    seek_abs(active['end'])
+    if not cut_seen[active.start] then
+      cut_seen[active.start] = true
+      local label = '剪辑段'
+      if active.slot == 'intro' then
+        label = '片头'
+      elseif active.slot == 'outro' then
+        label = '片尾'
+      elseif active.action == 'commbreak' then
+        label = active.from_edl and '广告段（EDL）' or '广告段'
+      end
+      toast('已跳过' .. label .. ' · ' .. fmt_time(active['end'] - active.start), 3)
+    end
   end
 end
 
@@ -1092,6 +1349,8 @@ end
 local function reset_edits()
   cut_seen = {}
   release_edit_mute()
+  -- The next episode has its own sidecar beside it, or none at all.
+  forget_sidecar()
 end
 
 -- ==== MENUS ================================================================
@@ -1441,6 +1700,23 @@ local function build_menu(id)
       end,
     })
     table.insert(rows, {
+      label = '旁挂 EDL',
+      value = sidecar_label(),
+      kind = 'item',
+      act = function()
+        -- Re-read: the point of the row is picking up a file dropped while the
+        -- film was already open.
+        forget_sidecar()
+        local count = #sidecar_edits()
+        mark_dirty()
+        if count > 0 then
+          toast('已载入 ' .. count .. ' 段 · ' .. (SIDECAR_SOURCE or 'EDL'), 3)
+        else
+          toast('同目录没有 .edl，也没有 comskip 的 .txt', 3)
+        end
+      end,
+    })
+    table.insert(rows, {
       label = '退出播放',
       value = 'Esc',
       kind = 'item',
@@ -1716,15 +1992,19 @@ local function draw_progress(parts)
       end
     end
 
-    -- Edits the player honours: cuts and mutes come from marks or chapters.
+    -- Edits the player honours, split by what they cost the viewer: red for
+    -- "this picture goes away", a faint hairline for "this only goes quiet".
     for _, edit in ipairs(effective_edits()) do
       local s = math.max(0, math.min(duration, edit.start))
       local e = math.max(0, math.min(duration, edit['end']))
       if e > s then
         local sx = x + w * (s / duration)
-        local ex = x + w * (e / duration)
-        local alpha = edit.action == DEFAULT_ACTION and 0x55 or 0x2E
-        parts[#parts + 1] = rect(sx, top + thickness + 2, math.max(2, ex - sx), 3, 1.5, WHITE, alpha)
+        local span = math.max(2, x + w * (e / duration) - sx)
+        if edit.action == 'mute' then
+          parts[#parts + 1] = rect(sx, top + thickness + 7, span, 2, 1, WHITE, 0x44)
+        else
+          parts[#parts + 1] = rect(sx, top + thickness + 3, span, 4, 2, CUT_TINT, 0xB4)
+        end
       end
     end
   else

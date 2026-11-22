@@ -16,14 +16,21 @@
 ///
 /// A cut is invisible: source 10–20 s never plays, so timeline 10 s *is* source
 /// 20 s. [sourceToTimeline] and [timelineToSource] convert between the two.
-/// Mutes and commercial breaks keep the timeline intact — they only silence the
-/// audio — so they take no part in that arithmetic.
+/// A mute keeps both the timeline and the picture — only the audio goes — so it
+/// takes no part in that arithmetic. A commercial break is skipped like a cut
+/// but is not *removed* from the container, so it is played past rather than
+/// collapsed: the running time a viewer sees is unchanged.
 ///
 /// This type is immutable and value-comparable: two lists with the same edits
 /// are `==`, which makes round-tripping through text easy to test.
 library;
 
 /// What to do with a marked interval.
+///
+/// The numeric codes are Kodi's, from `Edl.h`. Note that 2 is a *scene marker*
+/// — a point on the timeline, not an interval — and is therefore absent: a
+/// file that used 2 for "commercial break" would cut a minute out of the film
+/// at every chapter mark.
 enum EdlAction {
   /// Remove the interval from playback entirely.
   cut(0, 'cut'),
@@ -31,10 +38,10 @@ enum EdlAction {
   /// Keep the picture, drop the audio.
   mute(1, 'mute'),
 
-  /// An ad break. Kodi mutes these unless configured to cut, and so do we;
-  /// the distinct value is kept so the marker can be labelled and so the policy
-  /// can change without rewriting the file.
-  commercialBreak(2, 'commbreak');
+  /// An ad break. Playback jumps over it exactly as it does over a [cut]; the
+  /// distinct value is kept so the marker can be labelled — a viewer who sees
+  /// "2 分钟广告" understands a jump that "2 分钟剪辑" would not explain.
+  commercialBreak(3, 'commbreak');
 
   const EdlAction(this.code, this.key);
 
@@ -46,13 +53,19 @@ enum EdlAction {
 
   /// Whether this action shortens the timeline.
   ///
-  /// Only [cut] does. Everything else leaves the duration untouched, which is
-  /// why the mapping functions below filter on this instead of switch-casing
-  /// each action.
+  /// Only [cut] does. A commercial break is skipped at playback time but the
+  /// container duration is untouched, so the mapping functions below filter on
+  /// this instead of switch-casing each action.
   bool get shiftsTimeline => this == EdlAction.cut;
 
-  /// Whether playback should be silent inside the interval.
-  bool get silences => this != EdlAction.cut;
+  /// Whether the interval is left in the picture at all.
+  ///
+  /// A cut and an ad break both disappear; only a mute stays visible.
+  bool get skips => this != EdlAction.mute;
+
+  /// Whether playback should be silent inside the interval while the picture
+  /// keeps running.
+  bool get silences => this == EdlAction.mute;
 
   static EdlAction? fromCode(int code) {
     for (final EdlAction action in values) {
@@ -77,14 +90,12 @@ enum EdlAction {
       case 'ad':
         return EdlAction.commercialBreak;
       case 'skip':
-      case '0':
         return EdlAction.cut;
-      case '1':
-        return EdlAction.mute;
-      case '2':
-        return EdlAction.commercialBreak;
     }
-    return null;
+    // Numeric columns, but only the ones that name an interval. `2` is a scene
+    // marker in Kodi's numbering and falls through to null.
+    final int? code = int.tryParse(needle);
+    return code == null ? null : fromCode(code);
   }
 }
 
@@ -214,7 +225,10 @@ class Edl {
           .split(RegExp(r'[\s,]+'))
           .where((String c) => c.isNotEmpty)
           .toList();
-      if (columns.length < 2) {
+      if (columns.length < 3) {
+        // Two columns is `time action` in Kodi's format: a scene marker, not an
+        // interval. Treating it as "start, end" would invent a cut from zero to
+        // the action code — one to three seconds off the front of every film.
         continue;
       }
       final Duration? start = parseTimecode(columns[0]);
@@ -222,13 +236,9 @@ class Edl {
       if (start == null || end == null) {
         continue;
       }
-      EdlAction action = EdlAction.cut;
-      if (columns.length >= 3) {
-        final EdlAction? parsed = EdlAction.fromKey(columns[2]);
-        if (parsed == null) {
-          continue;
-        }
-        action = parsed;
+      final EdlAction? action = EdlAction.fromKey(columns[2]);
+      if (action == null) {
+        continue;
       }
       rows.add(EdlEdit(start: start, end: end, action: action));
     }
@@ -343,11 +353,13 @@ class Edl {
     return edit != null && edit.action.silences;
   }
 
-  /// Whether [source] has been cut away and playback should jump to
-  /// `covering(source).end`.
-  bool isCutAt(Duration source) {
+  /// Whether [source] should be jumped over, landing at `covering(source).end`.
+  ///
+  /// True for both a cut and an ad break — the viewer loses the picture either
+  /// way — which is why this asks [EdlAction.skips] and not `shiftsTimeline`.
+  bool isSkippedAt(Duration source) {
     final EdlEdit? edit = covering(source);
-    return edit != null && edit.action.shiftsTimeline;
+    return edit != null && edit.action.skips;
   }
 
   // ---- serialisation -------------------------------------------------------
@@ -357,7 +369,7 @@ class Edl {
     final StringBuffer buffer = StringBuffer();
     if (withHeader) {
       buffer.writeln('# XnX Player edit decision list');
-      buffer.writeln('# start end action      (0 cut, 1 mute, 2 commercial break)');
+      buffer.writeln('# start end action      (0 cut, 1 mute, 3 commercial break; 2 is a scene marker)');
     }
     for (final EdlEdit edit in edits) {
       buffer
