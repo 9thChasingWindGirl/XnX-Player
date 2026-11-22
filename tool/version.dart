@@ -5,18 +5,29 @@
 /// rewrites only that channel segment — beta and stable never bump the number
 /// themselves; they inherit exactly what dev produced.
 ///
-/// The `YY`/`ZZ` pair is a counter, not a per-build bump: the automatic dev
-/// build adds the number of commits made since `VERSION` last changed to `ZZ`.
-/// So `VERSION = 0.00.00` yields `0.00.00.Dev` on the commit that set it,
-/// `0.00.01.Dev` after the next commit, and so on. Only the dev channel does
-/// this; beta/stable keep the resulting number as-is.
+/// `ZZ` is the hotfix iteration counter, and `beta:VERSION.latest` is where
+/// it lives. Every successful dev build writes its version back there; the
+/// next build reads that record and advances `ZZ` by one iteration
+/// (`0.00.05` → `0.00.06`). A successful build *is* one hotfix iteration —
+/// the number expresses how many times the hotfix version moved forward, not
+/// how many builds ran: failed or cancelled builds write nothing back and
+/// the number stays. This replaced an earlier scheme that counted commits
+/// since `VERSION` changed, which inflated the number a stable release
+/// inherits during heavy development.
+///
+/// Carrying: `YY` and `ZZ` both cap at 99. An iteration past `ZZ = 99` rolls
+/// into the minor (`0.00.99` → `0.01.00`), and a minor at 99 rolls into `X`
+/// (`0.99.99` → `1.00.00`) — the pair behaves like two-digit decimal fields,
+/// not independent counters that error out. CI never rewrites `VERSION`, so
+/// after an automatic carry the record's `base:` line still matches it and
+/// iterations continue from the carried number.
 ///
 /// `X` is a breaking change, `YY` the two-digit minor iteration and `ZZ` the
 /// two-digit hotfix, so versions always sort as strings of equal length.
 ///
 ///   dart run tool/version.dart show
 ///   dart run tool/version.dart bump minor
-///   dart run tool/version.dart resolve --base 0.02.00 --channel dev --commits 3
+///   dart run tool/version.dart resolve --base 0.02.00 --channel dev --prev 0.00.15.Dev --prev-base 0.00.00
 ///   dart run tool/version.dart auto --write
 library;
 
@@ -46,8 +57,14 @@ void main(List<String> argv) {
     case 'resolve':
       final String base = _normalize(flags['base'] ?? _readBase());
       final String channel = (flags['channel'] ?? 'dev').toLowerCase();
-      final int commits = int.tryParse(flags['commits'] ?? '0') ?? 0;
-      stdout.writeln(_resolve(base, channel, commits: commits));
+      stdout.writeln(
+        _resolve(
+          base,
+          channel,
+          previous: flags['prev'],
+          previousBase: flags['prev-base'],
+        ),
+      );
       break;
     case 'bump':
       final String part = (flags['part'] ?? 'patch').toLowerCase();
@@ -67,6 +84,8 @@ void main(List<String> argv) {
       break;
     default:
       stderr.writeln('usage: version.dart <show|resolve|bump|auto> [flags]');
+      stderr.writeln('  resolve: --base X.YY.ZZ --channel dev|beta|stable');
+      stderr.writeln('           [--prev LAST_DEV --prev-base BASE]');
       exitCode = 64;
       break;
   }
@@ -76,29 +95,87 @@ void main(List<String> argv) {
 /// `0.00.03.Beta`, `0.00.03`. Promotion only rewrites this segment; the build
 /// number is not part of the version.
 ///
-/// [commits] is the number of commits since `VERSION` last changed and is added
-/// to `ZZ` for the dev channel only — beta/stable must stay byte-identical to
-/// the dev artifact they were promoted from.
-String _resolve(String base, String channel, {int commits = 0}) {
+/// [previous] is the version the last successful dev build recorded in
+/// `beta:VERSION.latest` (possibly empty on a fresh repository); [previousBase]
+/// is the `base:` line next to it. Dev advances the hotfix iteration by one
+/// from that record; every other channel returns the base untouched, so
+/// beta/stable stay byte-identical to the dev artifact they were promoted
+/// from.
+String _resolve(
+  String base,
+  String channel, {
+  String? previous,
+  String? previousBase,
+}) {
   switch (channel) {
     case 'stable':
       return base;
     case 'beta':
       return '$base.Beta';
     case 'dev':
-      return '${_addHotfix(base, commits)}.Dev';
+      return '${_nextDev(base, previous, previousBase: previousBase)}.Dev';
     default:
       stderr.writeln('unknown channel "$channel", falling back to dev');
-      return '${_addHotfix(base, commits)}.Dev';
+      return '${_nextDev(base, previous, previousBase: previousBase)}.Dev';
   }
 }
 
-String _addHotfix(String base, int commits) {
-  if (commits <= 0) {
+/// The next hotfix iteration: the recorded version advanced by one.
+///
+/// "The base changed" needs the base the record was built from, which is why
+/// `VERSION.latest` carries a `base:` line. Comparing versions alone cannot
+/// work: a normal run of iterations (`VERSION = 0.00.00`, record
+/// `0.00.15.Dev`) differs from the base in every digit, while a manual hotfix
+/// bump (`0.00.05` → `0.00.10`) may differ in none. With the base line, any
+/// change to `VERSION` restarts the counter exactly at the new base. A
+/// legacy single-line record (written before the base line existed) falls
+/// back to comparing `X.YY` only.
+///
+/// `previous` carrying a channel suffix (`0.00.15.Dev`) is fine; [parts]
+/// ignores it.
+String _nextDev(String base, String? previous, {String? previousBase}) {
+  final List<int> current = _parts(base);
+  final String? prev = previous?.trim();
+  if (prev == null || prev.isEmpty) {
+    // Fresh repository, or the record was deleted on purpose: the first
+    // iteration ships exactly the base.
     return base;
   }
-  final List<int> parts = _parts(base);
-  return _format(parts[0], parts[1], parts[2] + commits);
+  final List<int> last = _parts(prev);
+  final String? recorded = previousBase?.trim();
+  final bool sameBase;
+  if (recorded != null && recorded.isNotEmpty) {
+    final List<int> built = _parts(recorded);
+    sameBase = built[0] == current[0] &&
+        built[1] == current[1] &&
+        built[2] == current[2];
+  } else {
+    sameBase = last[0] == current[0] && last[1] == current[1];
+  }
+  if (!sameBase) {
+    // VERSION changed since the last iteration: restart from the new base.
+    return base;
+  }
+  return _carry(last);
+}
+
+/// One iteration forward with two-digit decimal carry: `…99` rolls into the
+/// next minor, `…99.99` into the next major — `0.00.99` → `0.01.00`,
+/// `0.99.99` → `1.00.00`. No error path: the counter cannot overflow, it
+/// moves into the wider field.
+String _carry(List<int> v) {
+  int hotfix = v[2] + 1;
+  int minor = v[1];
+  int major = v[0];
+  if (hotfix > 99) {
+    hotfix = 0;
+    minor += 1;
+    if (minor > 99) {
+      minor = 0;
+      major += 1;
+    }
+  }
+  return _format(major, minor, hotfix);
 }
 
 String _bump(String base, String part) {
