@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/app_log.dart';
 import '../core/app_paths.dart';
+import '../core/notice_center.dart';
 import '../data/net.dart';
 import 'update_channel.dart';
 
@@ -222,6 +224,61 @@ class UpdateService {
     return data.startsWith(prefix);
   }
 
+  /// True when this process is running from a rollback snapshot rather than
+  /// the real install root.
+  ///
+  /// `<install>/updates/<version>/` deliberately holds a *complete* portable
+  /// build so rollback can swap it back. Starting that exe makes every path
+  /// (install root, data dir, next download) relative to the snapshot, so each
+  /// update nests another whole app inside it.
+  bool get isSnapshotLaunch => snapshotRoot() != null;
+
+  /// The real install root when running from a snapshot, else null.
+  ///
+  /// Guarded three ways so a user who simply installed into a folder named
+  /// `updates` is not misidentified: the segment must be followed by a
+  /// version-shaped directory, and the candidate root must contain the main
+  /// exe. Only the first `updates` segment counts, which also handles an
+  /// already-nested launch.
+  static String? snapshotRoot() {
+    final String exeDir = File(Platform.resolvedExecutable).parent.path;
+    final List<String> parts = exeDir.split(Platform.pathSeparator);
+    for (int i = 0; i < parts.length - 1; i++) {
+      if (parts[i].toLowerCase() != 'updates') {
+        continue;
+      }
+      if (!RegExp(
+        r'^\d+\.\d+\.\d+(\.(Dev|Beta))?$',
+        caseSensitive: false,
+      ).hasMatch(parts[i + 1])) {
+        continue;
+      }
+      final String root = parts.sublist(0, i).join(Platform.pathSeparator);
+      if (File('$root${Platform.pathSeparator}xnx_player.exe').existsSync()) {
+        return root;
+      }
+    }
+    return null;
+  }
+
+  /// Call once at startup: a bad launch should be visible, not just logged.
+  static void reportSnapshotLaunch() {
+    final String? root = snapshotRoot();
+    if (root == null) {
+      return;
+    }
+    AppLog.warn('正在从更新备份目录启动：${Platform.resolvedExecutable}；'
+        '正确位置是 $root');
+    NoticeCenter.instance.publish(
+      'snapshot-launch',
+      '正在从更新备份目录启动',
+      body: '请改从 $root${Platform.pathSeparator}xnx_player.exe 启动；'
+          '在备份目录里更新会不断生成嵌套的便携版副本。'
+          '应用内更新已暂时停用。',
+      kind: NoticeKind.warning,
+    );
+  }
+
   /// Whether this copy is managed by the Inno setup program.
   ///
   /// The uninstaller (`unins000.exe`) is written next to the exe by the setup
@@ -388,12 +445,32 @@ Remove-Item -Force \$self
 
   Directory? _payloadDir(String versionDir) {
     final Directory dir = Directory(versionDir);
-    for (final FileSystemEntity entity in dir.listSync(recursive: true)) {
-      if (entity is File && entity.path.endsWith('.exe')) {
-        return dir;
-      }
+    if (!dir.existsSync()) {
+      return null;
     }
-    return null;
+    try {
+      // Return the directory that actually holds the exe, not the extraction
+      // root. An archive that wraps the build in a folder would otherwise copy
+      // that wrapper folder into the install directory — one more whole app.
+      // Take the shallowest match so an already-nested `updates/<version>`
+      // inside a snapshot cannot win.
+      File? best;
+      int bestDepth = 1 << 30;
+      for (final FileSystemEntity entity in dir.listSync(recursive: true)) {
+        if (entity is! File || !entity.path.endsWith('xnx_player.exe')) {
+          continue;
+        }
+        final int depth =
+            entity.path.split(Platform.pathSeparator).length;
+        if (depth < bestDepth) {
+          bestDepth = depth;
+          best = entity;
+        }
+      }
+      return best?.parent;
+    } on Object {
+      return null;
+    }
   }
 
   /// Downloads [url] into [target], retrying a failed transfer.

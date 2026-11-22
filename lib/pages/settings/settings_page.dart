@@ -201,6 +201,16 @@ class _SettingsPageState extends State<SettingsPage> {
   /// what was found (or reports why it can't). Rollback candidates surface
   /// through the row below.
   Future<void> _checkOrInstall() async {
+    // Updating from a snapshot would unzip into `<snapshot>/updates/...` and
+    // create yet another portable build. Refuse, and say which exe to launch.
+    if (_updater.isSnapshotLaunch) {
+      final String root = UpdateService.snapshotRoot() ?? AppPaths.installDir;
+      setState(() {
+        _updateStatus = '当前从更新备份目录启动，已停用应用内更新。'
+            '请改从 $root 里的 xnx_player.exe 启动。';
+      });
+      return;
+    }
     if (_pending != null) {
       final UpdateCandidate candidate = _pending!;
       // An installed copy must not be replaced by loose files: that leaves the
@@ -376,6 +386,12 @@ class _SettingsPageState extends State<SettingsPage> {
       '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 
   Future<void> _rollBackTo(String version) async {
+    if (_updater.isSnapshotLaunch) {
+      setState(() {
+        _updateStatus = '当前从更新备份目录启动，无法回退；请从主目录启动。';
+      });
+      return;
+    }
     final String target = _updater.installedVersions().firstWhere(
           (String v) => v == version,
           orElse: () => '',
@@ -597,7 +613,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       _Row(
                         label: _pending == null ? '检查更新' : '安装 ${_pending!.version}',
-                        hint: _updateStatus,
+                        hint: _updater.isSnapshotLaunch
+                            ? '当前从更新备份目录启动，更新已停用；'
+                                '请改从主目录的 xnx_player.exe 启动'
+                            : _updateStatus,
                         value: _pending == null ? null : '待安装',
                         onSelect: () => unawaited(_checkOrInstall()),
                       ),

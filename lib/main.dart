@@ -9,6 +9,7 @@ import 'app.dart';
 import 'core/app_log.dart';
 import 'core/app_version.dart';
 import 'core/strings.dart';
+import 'update/update_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +22,9 @@ Future<void> main() async {
   AppLog.info('XnX Player ${S.appVersion} 启动 '
       '(${Platform.operatingSystem} ${Platform.operatingSystemVersion})');
   AppLog.info('可执行文件：${Platform.resolvedExecutable}');
+  // A rollback snapshot is a complete portable build; launching it silently
+  // relocates the install root and nests another app on every update.
+  UpdateService.reportSnapshotLaunch();
 
   FlutterError.onError = (FlutterErrorDetails details) {
     AppLog.error('未捕获的界面异常', details.exception, details.stack);
