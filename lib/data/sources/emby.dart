@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../core/app_log.dart';
 import '../models/artwork.dart';
 import '../models/media_item.dart';
 import '../net.dart';
@@ -56,6 +57,7 @@ class EmbySource extends MediaSource {
     if (config.username.isEmpty) {
       throw const SourceException('请先填写 Emby / Jellyfin 的账号');
     }
+    AppLog.info('Emby 认证开始：$_base');
     final HttpResult result = await Http.postJson(
       _uri('/Users/AuthenticateByName'),
       <String, dynamic>{'Username': config.username, 'Pw': config.password},
@@ -73,6 +75,7 @@ class EmbySource extends MediaSource {
     if (_token == null || _userId == null) {
       throw const SourceException('服务器没有返回访问令牌或用户 ID');
     }
+    AppLog.info('Emby 认证完成：用户 $_userId');
   }
 
   @override
@@ -88,6 +91,9 @@ class EmbySource extends MediaSource {
     int start = 0;
     int? total;
     while (true) {
+      if (start == 0) {
+        AppLog.info('Emby 拉取媒体库：$_base/Users/$_userId/Items');
+      }
       late Map<String, dynamic> data;
       try {
         data = await Http.getJson(
@@ -145,6 +151,7 @@ class EmbySource extends MediaSource {
   /// why this is a query and not local bookkeeping.
   Future<List<MediaItem>> resumable() async {
     await _ensureAuth();
+    AppLog.info('Emby 拉取续播列表');
     final Map<String, dynamic> data = await Http.getJson(
       _uri('/Users/$_userId/Items', <String, String>{
         'Recursive': 'true',

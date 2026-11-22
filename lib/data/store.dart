@@ -305,17 +305,20 @@ class AppStore extends ChangeNotifier {
       await Future.wait<void>(
         targets.map((SourceConfig config) async {
           try {
-            // A per-source deadline: one dead host can no longer hold the
-            // whole library hostage for a full minute.
+            // The deadline only bounds a stuck source; it is not what keeps
+            // local files visible any more — commit() publishes each source
+            // as soon as it answers. A media server legitimately needs an
+            // auth round trip plus several pages, so a 20 s window cut Emby
+            // off mid-refresh even when every individual request was fine.
             final MediaSource source = _sourceFor(config);
             final List<MediaItem> listing = await source
                 .browse()
-                .timeout(const Duration(seconds: 20));
+                .timeout(const Duration(seconds: 90));
             commit(listing);
             if (source is EmbySource) {
               commit(await source
                   .resumable()
-                  .timeout(const Duration(seconds: 20)));
+                  .timeout(const Duration(seconds: 45)));
             }
             LibraryLog.write('${config.label}：${listing.length} 项');
           } on Object catch (error, stack) {

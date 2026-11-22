@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../core/app_log.dart';
+
 /// Minimal HTTP client built on `dart:io`.
 ///
 /// Deliberately dependency-free: the whole backend layer (Emby, AList, WebDAV,
@@ -54,12 +56,27 @@ abstract final class Http {
   ///
   /// Dart does not read the Windows "Internet options" proxy, so
   /// `XNX_MEDIA_PROXY=127.0.0.1:7890` is the dependable way to set one.
+  static bool _proxyLogged = false;
+
   static String proxyFor(Uri uri) {
     final String explicit = (Platform.environment['XNX_MEDIA_PROXY'] ?? '').trim();
     if (explicit.isNotEmpty) {
-      return 'PROXY $explicit';
+      final String value = 'PROXY $explicit';
+      if (!_proxyLogged) {
+        _proxyLogged = true;
+        AppLog.info('媒体/TMDB 网络走代理：$value');
+      }
+      return value;
     }
-    return HttpClient.findProxyFromEnvironment(uri);
+    final String fromEnvironment = HttpClient.findProxyFromEnvironment(uri);
+    // A wrong or missing proxy is the usual reason every remote source times
+    // out while local files are fine. Say which one is in effect, once.
+    if (!_proxyLogged) {
+      _proxyLogged = true;
+      AppLog.info('媒体/TMDB 网络代理：${fromEnvironment == 'DIRECT' ? '直连' : fromEnvironment}'
+          '（可用 XNX_MEDIA_PROXY 覆盖）');
+    }
+    return fromEnvironment;
   }
 
   static const Map<String, String> userAgentHeader = <String, String>{
