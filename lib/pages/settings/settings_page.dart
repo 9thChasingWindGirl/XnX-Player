@@ -1156,23 +1156,31 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Dialogs are sized against the real window, not a fixed pixel width: the
+    // minimum window is nominally 960 px, but a user can drag it smaller and
+    // an 820 px sheet plus padding then overflows on both axes.
+    final double winW = MediaQuery.of(context).size.width;
+    final double winH = MediaQuery.of(context).size.height;
+    final double width = (winW - 48).clamp(320.0, 820.0);
     return Center(
       child: Material(
         color: const Color(0xEE141821),
         borderRadius: BorderRadius.circular(PsRadius.sheet),
         child: Container(
-          width: 820,
+          width: width,
+          constraints: BoxConstraints(maxHeight: winH - 48),
           padding: const EdgeInsets.all(40),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(PsRadius.sheet),
             border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('安装更新 ${widget.version}',
-                  style: PsType.page.copyWith(fontSize: 36)),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('安装更新 ${widget.version}',
+                    style: PsType.page.copyWith(fontSize: 36)),
               const SizedBox(height: 12),
               Text(
                 '程序会立即关闭，新版本覆盖安装目录后自动重新启动。',
@@ -1237,6 +1245,7 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -1378,22 +1387,27 @@ class _TmdbKeyDialogState extends State<_TmdbKeyDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final double winW = MediaQuery.of(context).size.width;
+    final double winH = MediaQuery.of(context).size.height;
+    final double width = (winW - 48).clamp(320.0, 900.0);
     return Center(
       child: Material(
         color: const Color(0xEE141821),
         borderRadius: BorderRadius.circular(PsRadius.sheet),
         child: Container(
-          width: 900,
+          width: width,
+          constraints: BoxConstraints(maxHeight: winH - 48),
           padding: const EdgeInsets.all(44),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(PsRadius.sheet),
             border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(S.tmdbApiKey, style: PsType.page.copyWith(fontSize: 40)),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(S.tmdbApiKey, style: PsType.page.copyWith(fontSize: 40)),
               const SizedBox(height: 10),
               Text(
                 S.tmdbGuide,
@@ -1457,6 +1471,7 @@ class _TmdbKeyDialogState extends State<_TmdbKeyDialog> {
           ),
         ),
       ),
+      ),
     );
   }
 }
@@ -1502,80 +1517,86 @@ class _ProxyInputDialogState extends State<_ProxyInputDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final double winW = MediaQuery.of(context).size.width;
+    final double winH = MediaQuery.of(context).size.height;
+    final double width = (winW - 48).clamp(320.0, 720.0);
     return Center(
       child: Material(
         color: const Color(0xEE141821),
         borderRadius: BorderRadius.circular(PsRadius.sheet),
         child: Container(
-          width: 720,
+          width: width,
+          constraints: BoxConstraints(maxHeight: winH - 48),
           padding: const EdgeInsets.all(40),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(PsRadius.sheet),
             border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('自定义代理', style: PsType.page.copyWith(fontSize: 36)),
-              const SizedBox(height: 10),
-              Text(
-                '格式 host:port，例如 127.0.0.1:7890。留空表示直连。',
-                style: PsType.micro.copyWith(
-                  fontSize: 16,
-                  color: PsColor.textFaint,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 24),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                cursorColor: PsColor.text,
-                style: PsType.meta.copyWith(color: PsColor.text, fontSize: 24),
-                decoration: InputDecoration(
-                  isDense: true,
-                  filled: true,
-                  fillColor: PsColor.text.withValues(alpha: 0.06),
-                  hintText: '127.0.0.1:7890',
-                  hintStyle: PsType.meta.copyWith(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('自定义代理', style: PsType.page.copyWith(fontSize: 36)),
+                const SizedBox(height: 10),
+                Text(
+                  '格式 host:port，例如 127.0.0.1:7890。留空表示直连。',
+                  style: PsType.micro.copyWith(
+                    fontSize: 16,
                     color: PsColor.textFaint,
-                    fontSize: 22,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 16,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: PsColor.text, width: 2),
+                    height: 1.5,
                   ),
                 ),
-              ),
-              const SizedBox(height: 28),
-              Row(
-                children: <Widget>[
-                  PsButton(
-                    label: '保存',
-                    icon: Icons.check_rounded,
-                    primary: true,
-                    width: 200,
-                    onSelect: () =>
-                        Navigator.of(context).pop(_controller.text.trim()),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  cursorColor: PsColor.text,
+                  style: PsType.meta.copyWith(color: PsColor.text, fontSize: 24),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    fillColor: PsColor.text.withValues(alpha: 0.06),
+                    hintText: '127.0.0.1:7890',
+                    hintStyle: PsType.meta.copyWith(
+                      color: PsColor.textFaint,
+                      fontSize: 22,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 16,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: PsColor.text, width: 2),
+                    ),
                   ),
-                  const SizedBox(width: 16),
-                  PsButton(
-                    label: '取消',
-                    width: 160,
-                    onSelect: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: 28),
+                Row(
+                  children: <Widget>[
+                    PsButton(
+                      label: '保存',
+                      icon: Icons.check_rounded,
+                      primary: true,
+                      width: 200,
+                      onSelect: () =>
+                          Navigator.of(context).pop(_controller.text.trim()),
+                    ),
+                    const SizedBox(width: 16),
+                    PsButton(
+                      label: '取消',
+                      width: 160,
+                      onSelect: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
