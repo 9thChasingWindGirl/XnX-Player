@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'core/app_log.dart';
 import 'core/app_version.dart';
+import 'core/net_proxy.dart';
 import 'core/strings.dart';
 import 'update/update_service.dart';
 
@@ -54,6 +55,10 @@ Future<void> main() async {
     // unavailable (for example in a headless smoke test).
     AppLog.error('窗口初始化失败', error, stack);
   }
+
+  // Dart does not read the Windows proxy settings; resolve them once before
+  // any HTTP client asks for a route.
+  await NetProxy.detectSystem();
 
   _ensureInstallDirs();
 

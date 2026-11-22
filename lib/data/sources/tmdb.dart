@@ -98,7 +98,7 @@ class Tmdb {
         timeout: const Duration(seconds: 25),
       ).timeout(const Duration(seconds: 28));
     } on Object catch (error) {
-      AppLog.warn('TMDB 请求失败：$path（$error）');
+      AppLog.warn('TMDB 请求失败：$path（${error.runtimeType}: $error）');
       return const <String, dynamic>{};
     }
   }

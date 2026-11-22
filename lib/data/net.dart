@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/app_log.dart';
+import '../core/net_proxy.dart';
 
 /// Minimal HTTP client built on `dart:io`.
 ///
@@ -50,33 +51,29 @@ abstract final class Http {
     // Media sources and TMDB go through this client. Without a proxy hook a
     // machine that needs one to reach them silently waits for every request to
     // time out, while in-app updates (which have their own hook) work fine.
-    ..findProxy = proxyFor;
+    ..findProxy = NetProxy.resolve
+    // A browser falls back from an unreachable AAAA record to IPv4 in
+    // milliseconds; Dart used to sit on the dead address until the whole
+    // request timed out. That is the usual "curl works, app doesn't" case.
+    ..createConnection = connectIpv4First;
 
-  /// Explicit override first, then the process environment.
-  ///
-  /// Dart does not read the Windows "Internet options" proxy, so
-  /// `XNX_MEDIA_PROXY=127.0.0.1:7890` is the dependable way to set one.
-  static bool _proxyLogged = false;
-
-  static String proxyFor(Uri uri) {
-    final String explicit = (Platform.environment['XNX_MEDIA_PROXY'] ?? '').trim();
-    if (explicit.isNotEmpty) {
-      final String value = 'PROXY $explicit';
-      if (!_proxyLogged) {
-        _proxyLogged = true;
-        AppLog.info('媒体/TMDB 网络走代理：$value');
+  static Future<Socket> connectIpv4First(String host, int port) async {
+    try {
+      final List<InternetAddress> addresses = await InternetAddress.lookup(
+        host,
+        type: InternetAddressType.IPv4,
+      );
+      if (addresses.isNotEmpty) {
+        return await Socket.connect(
+          addresses.first,
+          port,
+          timeout: const Duration(seconds: 12),
+        );
       }
-      return value;
+    } on Object catch (error) {
+      AppLog.warn('IPv4 解析失败 $host：$error；回退系统默认连接');
     }
-    final String fromEnvironment = HttpClient.findProxyFromEnvironment(uri);
-    // A wrong or missing proxy is the usual reason every remote source times
-    // out while local files are fine. Say which one is in effect, once.
-    if (!_proxyLogged) {
-      _proxyLogged = true;
-      AppLog.info('媒体/TMDB 网络代理：${fromEnvironment == 'DIRECT' ? '直连' : fromEnvironment}'
-          '（可用 XNX_MEDIA_PROXY 覆盖）');
-    }
-    return fromEnvironment;
+    return Socket.connect(host, port, timeout: const Duration(seconds: 12));
   }
 
   static const Map<String, String> userAgentHeader = <String, String>{

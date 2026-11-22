@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/app_log.dart';
 import '../core/app_paths.dart';
+import '../core/net_proxy.dart';
 import '../core/notice_center.dart';
 import '../data/net.dart';
 import 'update_channel.dart';
@@ -504,7 +505,7 @@ Remove-Item -Force \$self
         // `api.github.com` often answers while `objects.githubusercontent.com`
         // (where release assets live) does not. Honouring a proxy is therefore
         // the difference between "checked fine" and "download impossible".
-        ..findProxy = _proxyFor
+        ..findProxy = NetProxy.resolve
         ..connectionTimeout = const Duration(seconds: 30);
       try {
         final Uri uri = Uri.parse(_mirrored(url));
@@ -541,21 +542,9 @@ Remove-Item -Force \$self
     }
     throw StateError(
       '下载更新包失败（已重试 3 次）：$lastError\n'
-      '若网络无法直连 GitHub，可设置环境变量 XNX_UPDATE_PROXY（如 127.0.0.1:7890）'
-      '或 XNX_UPDATE_MIRROR（镜像前缀）。',
+      '可在设置 → 网络代理中选择系统代理或自定义代理；'
+      'XNX_UPDATE_MIRROR 环境变量可指定镜像前缀。',
     );
-  }
-
-  /// Proxy for a request: the explicit override first, then the environment.
-  ///
-  /// Dart does not read the Windows "Internet options" proxy, so an explicit
-  /// variable is the only dependable hook for a user who set it system-wide.
-  static String _proxyFor(Uri uri) {
-    final String explicit = (Platform.environment['XNX_UPDATE_PROXY'] ?? '').trim();
-    if (explicit.isNotEmpty) {
-      return 'PROXY $explicit';
-    }
-    return HttpClient.findProxyFromEnvironment(uri);
   }
 
   /// Optional prefix for asset downloads (a GitHub mirror).

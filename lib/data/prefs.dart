@@ -34,6 +34,11 @@ class PlaybackPrefs {
     this.soundVolume = 70,
     // Home shelf order (row ids, best first). Empty = the built-in order.
     this.shelfOrder = const <String>[],
+    // Network proxy. A single setting shared by media sources, TMDB and the
+    // update downloader: two independent proxies caused "browser works, app
+    // doesn't" more than once.
+    this.networkProxyMode = 'system',
+    this.networkProxyAddress = '',
   });
 
   final QualityPref quality;
@@ -56,6 +61,12 @@ class PlaybackPrefs {
   /// Home shelf order, persisted so the user's arrangement survives restarts.
   final List<String> shelfOrder;
 
+  /// One of `none`, `system`, `custom` (see [ProxyMode]).
+  final String networkProxyMode;
+
+  /// `host:port` used only when [networkProxyMode] is `custom`.
+  final String networkProxyAddress;
+
   PlaybackPrefs copyWith({
     QualityPref? quality,
     PassthroughPref? passthrough,
@@ -71,6 +82,8 @@ class PlaybackPrefs {
     bool? soundEnabled,
     int? soundVolume,
     List<String>? shelfOrder,
+    String? networkProxyMode,
+    String? networkProxyAddress,
   }) {
     return PlaybackPrefs(
       quality: quality ?? this.quality,
@@ -87,6 +100,8 @@ class PlaybackPrefs {
       soundEnabled: soundEnabled ?? this.soundEnabled,
       soundVolume: soundVolume ?? this.soundVolume,
       shelfOrder: shelfOrder ?? this.shelfOrder,
+      networkProxyMode: networkProxyMode ?? this.networkProxyMode,
+      networkProxyAddress: networkProxyAddress ?? this.networkProxyAddress,
     );
   }
 
@@ -105,6 +120,8 @@ class PlaybackPrefs {
         'soundEnabled': soundEnabled,
         'soundVolume': soundVolume,
         'shelfOrder': shelfOrder,
+        'networkProxyMode': networkProxyMode,
+        'networkProxyAddress': networkProxyAddress,
       };
 
   static PlaybackPrefs fromJson(Map<String, dynamic> json) {
@@ -131,6 +148,8 @@ class PlaybackPrefs {
       shelfOrder: (json['shelfOrder'] as List<dynamic>? ?? <dynamic>[])
           .whereType<String>()
           .toList(growable: false),
+      networkProxyMode: json['networkProxyMode'] as String? ?? 'system',
+      networkProxyAddress: json['networkProxyAddress'] as String? ?? '',
     );
   }
 

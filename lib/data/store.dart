@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/app_log.dart';
 import '../core/app_paths.dart';
+import '../core/net_proxy.dart';
 import '../core/notice_center.dart';
 import '../playback/mpv/hw_profile.dart';
 import 'models/media_item.dart';
@@ -161,6 +162,9 @@ class AppStore extends ChangeNotifier {
       errors.add('读取配置失败：$error');
       AppLog.error('读取配置失败', error, stack);
     }
+    // Apply the saved proxy choice once preferences are on disk. Both the
+    // media client and the update downloader read it from here.
+    NetProxy.configure(prefs.networkProxyMode, prefs.networkProxyAddress);
     ready = true;
     AppLog.info('配置已载入：${sources.length} 个来源，${items.length} 项媒体');
     _notify();
@@ -241,6 +245,7 @@ class AppStore extends ChangeNotifier {
 
   Future<void> updatePrefs(PlaybackPrefs value) async {
     prefs = value;
+    NetProxy.configure(prefs.networkProxyMode, prefs.networkProxyAddress);
     await _persist();
     _notify();
   }
