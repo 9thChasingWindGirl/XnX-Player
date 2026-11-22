@@ -121,6 +121,45 @@ class _HubPageState extends State<HubPage> {
       }
       return false;
     }
+    if (intent.action == InputAction.pagePrev ||
+        intent.action == InputAction.pageNext) {
+      final bool up = intent.action == InputAction.pagePrev;
+      if (_scroll.hasClients) {
+        final ScrollPosition position = _scroll.position;
+        final double page = position.viewportDimension * 0.9;
+        final double target = (position.pixels + (up ? -page : page))
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble();
+        if (target != position.pixels) {
+          _scroll.animateTo(
+            target,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+          );
+          return true;
+        }
+      }
+      return false;
+    }
+    if (intent.action == InputAction.jumpPrev ||
+        intent.action == InputAction.jumpNext) {
+      // Pad triggers: jump straight to the top or the bottom of the page.
+      if (_scroll.hasClients) {
+        final ScrollPosition position = _scroll.position;
+        final double target = intent.action == InputAction.jumpPrev
+            ? position.minScrollExtent
+            : position.maxScrollExtent;
+        if (target != position.pixels) {
+          _scroll.animateTo(
+            target,
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+          );
+          return true;
+        }
+      }
+      return false;
+    }
     return false;
   }
 
@@ -247,49 +286,76 @@ class _HubPageState extends State<HubPage> {
                   child: _KeyArt(item: item),
                 ),
               ),
-              Positioned(
-                left: PsSpace.safeX,
-                right: PsSpace.safeX,
+              Positioned.fill(
                 top: 92 + 18 * (1 - arrive),
-                bottom: 40,
                 child: SingleChildScrollView(
                   controller: _scroll,
+                  padding: const EdgeInsets.only(bottom: 40),
                   child: Opacity(
                     opacity: arrive,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            _Poster(item: item),
-                            const SizedBox(width: 48),
-                            Expanded(
-                              child: Align(
-                                alignment: Alignment.topLeft,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 900),
-                                  child: _Info(
-                                    item: item,
-                                    favorite: _favorite,
-                                    onFavorite: _toggleFavorite,
-                                    onPlay: _play,
-                                    onBack: () => Navigator.of(context).maybePop(),
-                                    sources: _providers
-                                        .map(_sourceLabel)
-                                        .toList(growable: false),
-                                    sourceIndex: _providerIndex,
-                                    onSource: _switchProvider,
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: PsSpace.safeX),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              _Poster(item: item),
+                              const SizedBox(width: 48),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.topLeft,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(maxWidth: 900),
+                                    child: _Info(
+                                      item: item,
+                                      favorite: _favorite,
+                                      onFavorite: _toggleFavorite,
+                                      onPlay: _play,
+                                      onBack: () => Navigator.of(context).maybePop(),
+                                      sources: _providers
+                                          .map(_sourceLabel)
+                                          .toList(growable: false),
+                                      sourceIndex: _providerIndex,
+                                      onSource: _switchProvider,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                         if (local && _local != null) ...<Widget>[
                           const SizedBox(height: 30),
-                          _FileInfoPanel(rows: _local!.rows),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: PsSpace.safeX),
+                            child: _FileInfoPanel(rows: _local!.rows),
+                          ),
                         ],
+                        // The shelf scrolls with the page now. It used to be
+                        // pinned at design-y 742 while the copy above scrolled
+                        // underneath it — at any window shape the two layers
+                        // collided, and everything below the fold was
+                        // unreachable. One column, one scroll, every section
+                        // reachable by the same page keys.
+                        if (shelf && showEpisodes) ...<Widget>[
+                          const SizedBox(height: 24),
+                          Opacity(
+                            opacity: shelfArrive,
+                            child: _EpisodeShelf(
+                              items: _children,
+                              onSelect: (MediaItem episode) =>
+                                  widget.onPlay(episode, _children),
+                            ),
+                          ),
+                        ] else if (shelf && item.cast.isNotEmpty)
+                          Opacity(
+                            opacity: shelfArrive,
+                            child: _CastShelf(people: item.cast),
+                          ),
                       ],
                     ),
                   ),
@@ -307,29 +373,6 @@ class _HubPageState extends State<HubPage> {
                   top: 760,
                   width: 900,
                   child: Text(_error!, style: PsType.body.copyWith(color: PsColor.danger)),
-                ),
-              if (shelf && showEpisodes)
-                Positioned(
-                  left: 0,
-                  top: 742,
-                  width: TvScale.widthOf(context),
-                  child: Opacity(
-                    opacity: shelfArrive,
-                    child: _EpisodeShelf(
-                      items: _children,
-                      onSelect: (MediaItem episode) => widget.onPlay(episode, _children),
-                    ),
-                  ),
-                )
-              else if (shelf && item.cast.isNotEmpty)
-                Positioned(
-                  left: 0,
-                  top: 742,
-                  width: TvScale.widthOf(context),
-                  child: Opacity(
-                    opacity: shelfArrive,
-                    child: _CastShelf(people: item.cast),
-                  ),
                 ),
             ],
           );
