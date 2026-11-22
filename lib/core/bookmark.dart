@@ -1,7 +1,7 @@
-/// Where playback stopped, and what that is worth keeping.
+/// What a stop position is worth keeping.
 ///
-/// The shape and the two thresholds come from the reference build
-/// (`Bookmark.h`, `AdvancedSettings.cpp:266-267`,
+/// The two thresholds, and the order they are applied in, come from the
+/// reference build (`AdvancedSettings.cpp:266-267` and
 /// `ApplicationPlayerCallback.cpp:415-424`), because they answer a question
 /// that is easy to get wrong: a position is not automatically a resume point.
 ///
@@ -9,93 +9,14 @@
 /// and the next "resume" drags the user to the last ten seconds of the credits;
 /// stop it after forty seconds and the shelf claims a progress bar for
 /// something nobody watched.
-library;
-
-import 'dart:math' as math;
-
-/// What a stored position means.
-enum BookmarkKind {
-  /// Automatically maintained: where the user stopped.
-  resume,
-
-  /// Placed by hand: a moment worth returning to.
-  mark,
-}
-
-/// One stored position inside one file.
 ///
-/// Kept deliberately close to `CBookmark`: [at] and [total] together are what
-/// make the difference between "watched three quarters of it" and "watched
-/// three quarters of *something*, we do not know what".
-class Bookmark {
-  const Bookmark({
-    required this.at,
-    required this.total,
-    this.kind = BookmarkKind.resume,
-    this.part = 0,
-  });
-
-  /// Where inside the file. Never negative: a finished file has no bookmark.
-  final Duration at;
-
-  /// How long the file is. Zero when the backend could not tell us.
-  final Duration total;
-
-  final BookmarkKind kind;
-
-  /// Which part of a multi-part item this belongs to (`partNumber` upstream).
-  final int part;
-
-  /// Whether the file length is known, which every other judgement depends on.
-  bool get isSet => total > Duration.zero;
-
-  /// Upstream's `IsPartWay`: a bookmark that is neither absent nor at zero.
-  ///
-  /// This is what makes a "continue watching" button meaningful rather than
-  /// decorative — a row that offers to resume from 0:00 is a row that will
-  /// simply restart the film.
-  bool get isPartWay => isSet && at > Duration.zero && at < total;
-
-  /// 0..1, clamped. Zero for an unset bookmark so callers never divide by zero.
-  double get fraction => isSet ? (at.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0) : 0.0;
-
-  /// Rounded to whole seconds for storage: sub-second resume points are noise,
-  /// and the JSON file stays readable.
-  Map<String, Object?> toJson() => <String, Object?>{
-    'at': at.inSeconds,
-    'total': total.inSeconds,
-    if (kind != BookmarkKind.resume) 'kind': kind.name,
-    if (part != 0) 'part': part,
-  };
-
-  static Bookmark? fromJson(Object? raw) {
-    if (raw is! Map) {
-      return null;
-    }
-    final Object? at = raw['at'];
-    final Object? total = raw['total'];
-    if (at is! num || total is! num) {
-      return null;
-    }
-    final String? kindName = raw['kind'] as String?;
-    return Bookmark(
-      at: Duration(seconds: at.toInt()),
-      total: Duration(seconds: total.toInt()),
-      kind: kindName == BookmarkKind.mark.name ? BookmarkKind.mark : BookmarkKind.resume,
-      part: (raw['part'] as num?)?.toInt() ?? 0,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      other is Bookmark && other.at == at && other.total == total && other.kind == kind && other.part == part;
-
-  @override
-  int get hashCode => Object.hash(at, total, kind, part);
-
-  @override
-  String toString() => 'Bookmark(${kind.name} ${at.inSeconds}s / ${total.inSeconds}s)';
-}
+/// Deliberately *not* a port of `CBookmark`. That class exists because Kodi's
+/// video database stores a type, a part number, a saved player state and a
+/// thumbnail path per bookmark, and needs one type to carry them. Here an item
+/// has a single duration and everything else comes from the item, so mirroring
+/// the shape would produce a class whose fields are always empty — and a type
+/// that promises fields the code never fills is worse than no type at all.
+library;
 
 /// What to do with a position the player just reported.
 enum BookmarkDecision {
@@ -118,17 +39,16 @@ abstract final class BookmarkPolicy {
 
   /// Below this many seconds the item counts as "not really started".
   ///
-  /// Upstream default is three minutes (`m_videoIgnoreSecondsAtStart`). Long
+  /// Upstream default is three minutes (`m_videoIgnoreSecondsAtStart`: long
   /// enough to survive a mis-click and a trailer, short enough that someone who
-  /// watched five minutes keeps their place.
+  /// watched five minutes keeps their place).
   static const Duration minStart = Duration(minutes: 3);
 
   /// Within this fraction of the end the item counts as watched.
   ///
   /// Upstream default is 8 % (`m_videoIgnorePercentAtEnd`): credits are not
   /// part of the film, and asking someone to sit through them to clear a
-  /// progress bar is how a "continue watching" row fills with things that are
-  /// already done.
+  /// progress bar is how a "continue watching" row fills with finished items.
   static const double endFraction = 0.08;
 
   /// Decides what a reported position means.
@@ -145,8 +65,10 @@ abstract final class BookmarkPolicy {
     if (total <= Duration.zero || position <= Duration.zero) {
       return BookmarkDecision.ignore;
     }
-    final int tail = (total.inMilliseconds * endFraction).round();
-    if (total - position <= Duration(milliseconds: math.max(0, tail))) {
+    final Duration tail = Duration(
+      milliseconds: (total.inMilliseconds * endFraction).round(),
+    );
+    if (total - position <= tail) {
       return BookmarkDecision.finished;
     }
     if (position < minStart) {
