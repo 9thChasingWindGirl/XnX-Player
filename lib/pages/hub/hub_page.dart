@@ -316,6 +316,7 @@ class _HubPageState extends State<HubPage> {
                                     onFavorite: _toggleFavorite,
                                     onPlay: _play,
                                     onBack: () => Navigator.of(context).maybePop(),
+                                    onStep: _step,
                                     sources: _providers
                                         .map(_sourceLabel)
                                         .toList(growable: false),
@@ -525,6 +526,7 @@ class _Info extends StatelessWidget {
     required this.onFavorite,
     required this.onPlay,
     required this.onBack,
+    required this.onStep,
     this.sources = const <String>[],
     this.sourceIndex = 0,
     this.onSource,
@@ -535,6 +537,9 @@ class _Info extends StatelessWidget {
   final VoidCallback onFavorite;
   final VoidCallback onPlay;
   final VoidCallback onBack;
+
+  /// Pages to the previous (-1) or next (+1) title in the library.
+  final void Function(int delta) onStep;
 
   /// Every configured file that can play this portal title, by source label.
   final List<String> sources;
@@ -738,12 +743,12 @@ class _Info extends StatelessWidget {
             const SizedBox(width: 14),
             PsIconButton(
               icon: Icons.keyboard_arrow_up_rounded,
-              onSelect: () => _step(-1),
+              onSelect: () => onStep(-1),
             ),
             const SizedBox(width: 8),
             PsIconButton(
               icon: Icons.keyboard_arrow_down_rounded,
-              onSelect: () => _step(1),
+              onSelect: () => onStep(1),
             ),
             const SizedBox(width: 14),
             PsButton(

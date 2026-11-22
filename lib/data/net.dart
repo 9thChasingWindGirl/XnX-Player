@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../core/app_log.dart';
 import '../core/net_proxy.dart';
 
 /// Minimal HTTP client built on `dart:io`.
@@ -51,30 +50,12 @@ abstract final class Http {
     // Media sources and TMDB go through this client. Without a proxy hook a
     // machine that needs one to reach them silently waits for every request to
     // time out, while in-app updates (which have their own hook) work fine.
-    ..findProxy = NetProxy.resolve
-    // A browser falls back from an unreachable AAAA record to IPv4 in
-    // milliseconds; Dart used to sit on the dead address until the whole
-    // request timed out. That is the usual "curl works, app doesn't" case.
-    ..createConnection = connectIpv4First;
-
-  static Future<Socket> connectIpv4First(String host, int port) async {
-    try {
-      final List<InternetAddress> addresses = await InternetAddress.lookup(
-        host,
-        type: InternetAddressType.IPv4,
-      );
-      if (addresses.isNotEmpty) {
-        return await Socket.connect(
-          addresses.first,
-          port,
-          timeout: const Duration(seconds: 12),
-        );
-      }
-    } on Object catch (error) {
-      AppLog.warn('IPv4 解析失败 $host：$error；回退系统默认连接');
-    }
-    return Socket.connect(host, port, timeout: const Duration(seconds: 12));
-  }
+    ..findProxy = NetProxy.resolve;
+  // No manual IPv4 preference here: `HttpClient.createConnection` does not
+  // exist in this Dart SDK, and dart:io already does Happy Eyeballs
+  // (RFC 8305) — it races IPv4/IPv6 and keeps the addr that connects. The
+  // proxy + typed error logging below are the parts that actually fixed
+  // "browser works, app times out".
 
   static const Map<String, String> userAgentHeader = <String, String>{
     'User-Agent': 'XnX Player/0.1 (Windows)',

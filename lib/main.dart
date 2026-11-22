@@ -44,11 +44,11 @@ Future<void> main() async {
     // drag any shape they like, which collapses the 16:9 OSD bottom band.
     Size startSize = WindowSizing.minimum;
     try {
-      final Display display = await windowManager.getDisplay();
-      startSize = WindowSizing.fit(Size(
-        display.size.width.toDouble(),
-        display.size.height.toDouble(),
-      ));
+      // Read the primary view from Dart UI rather than window_manager's
+      // display helpers: those vary across 0.4.x and had no getDisplay().
+      final ui.FlutterView view = ui.PlatformDispatcher.instance.views.first;
+      final ui.Size screen = view.physicalSize / view.devicePixelRatio;
+      startSize = WindowSizing.fit(Size(screen.width, screen.height));
     } on Object catch (error) {
       AppLog.warn('读取显示器尺寸失败，使用默认窗口：$error');
     }
