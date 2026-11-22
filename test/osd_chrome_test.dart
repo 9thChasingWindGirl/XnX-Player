@@ -54,7 +54,7 @@ void main() {
       const ui.Size stage = ui.Size(1920, 1080);
       final ui.Rect track = OsdChrome.seekTrack(stage);
       expect(OsdChrome.fractionAt(stage, track.left), closeTo(0, 0.0001));
-      expect(OsdChrome.fractionAt(stage, track.center.dy), closeTo(0, 0.0001));
+      expect(OsdChrome.fractionAt(stage, track.center.dx), closeTo(0.5, 0.0001));
       expect(OsdChrome.fractionAt(stage, track.right), closeTo(1, 0.0001));
       expect(OsdChrome.hotZones(stage).first.left, closeTo(track.left, 0.0001));
       expect(OsdChrome.hotZones(stage).first.right, closeTo(track.right, 0.0001));
