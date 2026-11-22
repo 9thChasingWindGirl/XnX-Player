@@ -17,10 +17,15 @@ class NfoFile {
     this.originalTitle,
     this.showTitle,
     this.plot,
+    this.outline,
     this.tagline,
     this.year,
     this.rating,
     this.genres = const <String>[],
+    this.countries = const <String>[],
+    this.credits = const <String>[],
+    this.thumbUrls = const <String>[],
+    this.namedSeasons = const <int, String>{},
     this.people = const <MediaPerson>[],
     this.studio,
     this.mpaa,
@@ -39,11 +44,22 @@ class NfoFile {
   /// `<showtitle>`: present on an episode file, redundant on `tvshow`.
   final String? showTitle;
 
+  /// Kodi keeps `<outline>` and `<plot>` as separate fields; a short outline
+  /// is not a truncated plot, so callers choose which one to show.
   final String? plot;
+  final String? outline;
   final String? tagline;
   final int? year;
   final double? rating;
   final List<String> genres;
+  final List<String> countries;
+  final List<String> credits;
+
+  /// `<thumb>` elements: scraper-provided art URLs that belong to the show.
+  final List<String> thumbUrls;
+
+  /// `<namedseason number="N">` — localized season titles.
+  final Map<int, String> namedSeasons;
   final List<MediaPerson> people;
   final String? studio;
 
@@ -61,9 +77,14 @@ class NfoFile {
   bool get isEmpty =>
       title == null &&
       plot == null &&
+      outline == null &&
       year == null &&
       rating == null &&
       genres.isEmpty &&
+      countries.isEmpty &&
+      credits.isEmpty &&
+      thumbUrls.isEmpty &&
+      namedSeasons.isEmpty &&
       people.isEmpty &&
       studio == null &&
       mpaa == null;
@@ -83,6 +104,40 @@ class NfoFile {
       return '$videoPath.nfo';
     }
     return '${videoPath.substring(0, dot)}.nfo';
+  }
+
+  /// All sidecar names Kodi/TMM may write for one video, in priority order.
+  ///
+  /// `VideoTagLoaderNFO.cpp:161-294`: a movie folder's `movie.nfo` can sit
+  /// beside an episode file, and a stack may use an `SxxEyy`-suffixed nfo.
+  /// [pathFor] stays the first candidate for callers that want one file.
+  static List<String> candidatePaths(String videoPath) {
+    final String primary = pathFor(videoPath);
+    final int slash = videoPath.lastIndexOf(RegExp(r'[\\/]'));
+    final String folder = slash >= 0 ? videoPath.substring(0, slash) : '';
+    final Set<String> out = <String>{primary};
+
+    final String movieNfo = folder.isEmpty ? 'movie.nfo' : '$folder${Platform.pathSeparator}movie.nfo';
+    out.add(movieNfo);
+    // `Show.S01E02.mkv` -> `Show.S01E02.nfo` already covered; scrapers that
+    // name by tag alone produce `S01E02.nfo` in the same folder.
+    final RegExpMatch? tag = RegExp(r'[Ss](\d{1,2})[._ -]?[Ee](\d{1,3})').firstMatch(videoPath);
+    if (tag != null) {
+      final String label = 'S${tag.group(1)}E${tag.group(2)}.nfo';
+      out.add(folder.isEmpty ? label : '$folder${Platform.pathSeparator}$label');
+    }
+    return out.toList(growable: false);
+  }
+
+  /// Reads the first existing sidecar from [candidatePaths].
+  static Future<NfoFile?> readFor(String videoPath) async {
+    for (final String path in candidatePaths(videoPath)) {
+      final NfoFile? nfo = await read(path);
+      if (nfo != null) {
+        return nfo;
+      }
+    }
+    return null;
   }
 
   /// Reads and parses [path]; null when the file does not exist or is unusable.
@@ -156,14 +211,45 @@ class NfoFile {
     }
 
     final int? minutes = int.tryParse(node.textOf('runtime') ?? '');
-    final String aired = node.textOf('aired') ?? node.textOf('premiered') ?? '';
+    // Kodi's ParseNative gives premiered precedence over aired (both may be
+    // present and disagree after a re-scrape).
+    final String aired = node.textOf('premiered') ??
+        node.textOf('aired') ??
+        '';
+
+    final Map<int, String> namedSeasons = <int, String>{};
+    for (final XmlNode season in node.descendants('namedseason')) {
+      final int? number = int.tryParse(season.attr('number'));
+      final String? label = _emptyToNull(season.trimmed);
+      if (number != null && label != null) {
+        namedSeasons[number] = label;
+      }
+    }
+    final List<String> thumbUrls = node
+        .descendants('thumb')
+        .map((XmlNode thumb) => _emptyToNull(thumb.trimmed))
+        .whereType<String>()
+        .toList(growable: false);
 
     final NfoFile nfo = NfoFile(
       title: _emptyToNull(node.textOf('title')),
       originalTitle: _emptyToNull(node.textOf('originaltitle')),
       showTitle: _emptyToNull(node.textOf('showtitle')),
-      plot: _emptyToNull(node.textOf('plot')) ?? _emptyToNull(node.textOf('outline')),
+      plot: _emptyToNull(node.textOf('plot')),
+      outline: _emptyToNull(node.textOf('outline')),
       tagline: _emptyToNull(node.textOf('tagline')),
+      countries: node
+          .named('country')
+          .map((XmlNode n) => n.trimmed)
+          .where((String value) => value.isNotEmpty)
+          .toList(growable: false),
+      credits: node
+          .named('credits')
+          .map((XmlNode n) => n.trimmed)
+          .where((String value) => value.isNotEmpty)
+          .toList(growable: false),
+      thumbUrls: thumbUrls,
+      namedSeasons: namedSeasons,
       year: _year(node, aired),
       rating: _rating(node),
       genres: genres,
@@ -197,15 +283,35 @@ class NfoFile {
     return null;
   }
 
-  /// Kodi writes `<ratings><rating><value>7.4</value></rating></ratings>`, while
-  /// older scrapers wrote a bare `<rating>7.4</rating>`. Both are read here,
-  /// and a zero/unparseable value is treated as "no rating".
+  /// Kodi writes `<ratings><rating max="10" default="true"><value>7.4</value>
+  /// </rating></ratings>`; older scrapers wrote a bare `<rating>7.4</rating>`.
+  /// Scales are normalised to 10 (`VideoInfoTag.cpp:1281-1318`): a `max="5"`
+  /// site's 4.5 becomes 9, otherwise the facts row would claim a 4.5/10 film.
   static double? _rating(XmlNode node) {
-    for (final XmlNode rating in node.descendants('rating')) {
+    final List<XmlNode> ratings = node.descendants('rating');
+    // A `default="true"` rating wins over the first one in document order.
+    final XmlNode? preferred = ratings.cast<XmlNode?>().firstWhere(
+          (XmlNode? rating) =>
+              rating!.attr('default').toLowerCase() == 'true',
+          orElse: () => null,
+        );
+    final Iterable<XmlNode> ordered = preferred == null
+        ? ratings
+        : <XmlNode>[preferred, ...ratings.where((XmlNode r) => r != preferred)];
+
+    for (final XmlNode rating in ordered) {
       final String raw = rating.child('value')?.trimmed ?? rating.trimmed;
       final double? value = double.tryParse(raw.replaceAll(',', '.'));
-      if (value != null && value > 0) {
-        return value;
+      if (value == null || value <= 0) {
+        continue;
+      }
+      final double max = double.tryParse(rating.attr('max')) ?? 10;
+      if (max <= 0) {
+        continue;
+      }
+      final double normalized = value * 10 / max;
+      if (normalized >= 0 && normalized <= 10) {
+        return normalized;
       }
     }
     return null;

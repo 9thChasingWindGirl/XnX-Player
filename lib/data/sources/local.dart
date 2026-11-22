@@ -144,14 +144,16 @@ class LocalSource extends MediaSource {
     if (path == null || path.isEmpty) {
       return item;
     }
-    final NfoFile? nfo = await NfoFile.read(NfoFile.pathFor(path));
+    final NfoFile? nfo = await NfoFile.readFor(path);
     if (nfo == null) {
       return item;
     }
+    // Kodi keeps outline and plot apart: a short outline is a better shelf
+    // blurb than the first line of a long plot.
     return item.copyWith(
       title: nfo.title,
       subtitle: nfo.showTitle,
-      overview: nfo.plot,
+      overview: nfo.plot ?? nfo.outline,
       year: nfo.year,
       rating: nfo.rating,
       duration: nfo.duration,
@@ -331,6 +333,27 @@ class LocalSource extends MediaSource {
     art.add(ArtKind.banner, pick(<String>['$stem-banner', 'banner']), source: 'local');
     art.add(ArtKind.disc, pick(<String>['$stem-disc', '$stem-cdart', 'disc', 'cdart']), source: 'local');
     art.add(ArtKind.clearart, pick(<String>['$stem-clearart', 'clearart']), source: 'local');
+
+    // Kodi's convention (`ArtUtils.cpp:463-534`) is open-ended: any
+    // `<video-stem>-<role>` is art, and a file-name-specific image outranks a
+    // generic one. Cover the roles the seven ArtKind values do not name
+    // explicitly by mapping them onto the closest slot.
+    const Map<String, ArtKind> extraRoles = <String, ArtKind>{
+      'keyart': ArtKind.backdrop,
+      'landscape': ArtKind.thumb,
+      'icon': ArtKind.poster,
+      'cover': ArtKind.poster,
+      'cdart': ArtKind.disc,
+      'clearlogo': ArtKind.logo,
+    };
+    for (final MapEntry<String, ArtKind> role in extraRoles.entries) {
+      if (art.best(role.value)?.source == 'local') {
+        continue;
+      }
+      final String? owned = byStem['$stem-${role.key}'];
+      final String? generic = byStem[role.key];
+      art.add(role.value, owned ?? generic, source: 'local');
+    }
 
     // Backdrops: one unnumbered file, then the numbered variants.
     final String? first = pick(<String>['backdrop', 'fanart', 'background', 'art']);

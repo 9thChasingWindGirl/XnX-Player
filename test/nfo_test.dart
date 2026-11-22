@@ -125,5 +125,51 @@ void main() {
     test('a dot in a folder name is not an extension', () {
       expect(NfoFile.pathFor(r'C:\a.b\video'), r'C:\a.b\video.nfo');
     });
+
+    test('candidate paths include the Kodi/TMM sidecar fallbacks', () {
+      final List<String> paths =
+          NfoFile.candidatePaths(r'C:\剧集\Show.S01E02.mkv');
+      expect(paths.first, r'C:\剧集\Show.S01E02.nfo');
+      expect(paths, contains(r'C:\剧集\movie.nfo'));
+      expect(paths, contains(r'C:\剧集\S01E02.nfo'));
+    });
+  });
+
+  group('NfoFile.parse Kodi rules', () {
+    test('premiered wins over aired, and a 5-point rating is normalised', () {
+      final NfoFile? nfo = NfoFile.parse('''
+<episodedetails>
+  <title>第五集</title>
+  <year>2020</year>
+  <premiered>2024-03-15</premiered>
+  <aired>2020-01-01</aired>
+  <outline>短简介</outline>
+  <plot>完整剧情</plot>
+  <ratings><rating max="5"><value>4.5</value></rating></ratings>
+  <country>日本</country>
+  <thumb>https://example.com/poster.jpg</thumb>
+  <namedseason number="2">第二季特别篇</namedseason>
+</episodedetails>''');
+      expect(nfo, isNotNull);
+      expect(nfo!.year, 2024);
+      expect(nfo.outline, '短简介');
+      expect(nfo.plot, '完整剧情');
+      expect(nfo.rating, closeTo(9, 0.0001));
+      expect(nfo.countries, contains('日本'));
+      expect(nfo.thumbUrls, isNotEmpty);
+      expect(nfo.namedSeasons[2], '第二季特别篇');
+    });
+
+    test('default=true rating outranks an earlier one', () {
+      final NfoFile? nfo = NfoFile.parse('''
+<movie>
+  <title>Movie</title>
+  <ratings>
+    <rating max="10"><value>5</value></rating>
+    <rating max="10" default="true"><value>8</value></rating>
+  </ratings>
+</movie>''');
+      expect(nfo?.rating, closeTo(8, 0.0001));
+    });
   });
 }
