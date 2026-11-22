@@ -44,8 +44,9 @@ class NfoFile {
   /// `<showtitle>`: present on an episode file, redundant on `tvshow`.
   final String? showTitle;
 
-  /// Kodi keeps `<outline>` and `<plot>` as separate fields; a short outline
-  /// is not a truncated plot, so callers choose which one to show.
+  /// Kodi keeps `<outline>` and `<plot>` as separate fields, but displays the
+  /// outline when a record has no plot of its own — so [plot] falls back to
+  /// the outline at parse time, and callers choose which one to show.
   final String? plot;
   final String? outline;
   final String? tagline;
@@ -213,9 +214,8 @@ class NfoFile {
     final int? minutes = int.tryParse(node.textOf('runtime') ?? '');
     // Kodi's ParseNative gives premiered precedence over aired (both may be
     // present and disagree after a re-scrape).
-    final String aired = node.textOf('premiered') ??
-        node.textOf('aired') ??
-        '';
+    final String? premiered = node.textOf('premiered');
+    final String aired = premiered ?? node.textOf('aired') ?? '';
 
     final Map<int, String> namedSeasons = <int, String>{};
     for (final XmlNode season in node.descendants('namedseason')) {
@@ -235,7 +235,9 @@ class NfoFile {
       title: _emptyToNull(node.textOf('title')),
       originalTitle: _emptyToNull(node.textOf('originaltitle')),
       showTitle: _emptyToNull(node.textOf('showtitle')),
-      plot: _emptyToNull(node.textOf('plot')),
+      plot: _emptyToNull(node.textOf('plot')) ??
+          // Kodi displays the outline when the record has no plot of its own.
+          _emptyToNull(node.textOf('outline')),
       outline: _emptyToNull(node.textOf('outline')),
       tagline: _emptyToNull(node.textOf('tagline')),
       countries: node
@@ -250,7 +252,7 @@ class NfoFile {
           .toList(growable: false),
       thumbUrls: thumbUrls,
       namedSeasons: namedSeasons,
-      year: _year(node, aired),
+      year: _year(node, premiered, aired),
       rating: _rating(node),
       genres: genres,
       people: people,
@@ -268,19 +270,28 @@ class NfoFile {
     return nfo.isEmpty ? null : nfo;
   }
 
-  static int? _year(XmlNode node, String aired) {
+  /// Year priority: the premiere date is what actually screened and wins over
+  /// a stale `<year>` left behind by a movie-style template; the plain element
+  /// is next, and the aired date is the last resort.
+  static int? _year(XmlNode node, String? premiered, String aired) {
+    final int? fromPremiered = _yearOfDate(premiered);
+    if (fromPremiered != null) {
+      return fromPremiered;
+    }
     final int? plain = int.tryParse(node.textOf('year') ?? '');
     if (plain != null && plain > 1800) {
       return plain;
     }
-    // `premiered` is `2024-01-17`; the leading four digits are the year.
-    if (aired.length >= 4) {
-      final int? parsed = int.tryParse(aired.substring(0, 4));
-      if (parsed != null && parsed > 1800) {
-        return parsed;
-      }
+    return _yearOfDate(aired);
+  }
+
+  /// `premiered`/`aired` are `2024-01-17`; the leading four digits are the year.
+  static int? _yearOfDate(String? date) {
+    if (date == null || date.length < 4) {
+      return null;
     }
-    return null;
+    final int? parsed = int.tryParse(date.substring(0, 4));
+    return parsed != null && parsed > 1800 ? parsed : null;
   }
 
   /// Kodi writes `<ratings><rating max="10" default="true"><value>7.4</value>
