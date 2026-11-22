@@ -196,7 +196,12 @@ class LocalSource extends MediaSource {
         // to the video under fixed names; read all of them, not just a poster,
         // so a local library gets the same hero treatment as a server one.
         final Artwork art = _artworkFor(parent, name, siblingCache);
-        final EpisodeTag? tag = episodeTagFromFileName(name);
+        // A bare "E09" has no season in the file name; the containing
+        // "Season 2" folder does (Kodi's defaultSeason convention).
+        final EpisodeTag? tag = episodeTagFromFileName(
+          name,
+          folderHint: entity.parent.uri.pathSegments.last,
+        );
         out.add(
           MediaItem(
             id: '${config.id}::$parent/$name',

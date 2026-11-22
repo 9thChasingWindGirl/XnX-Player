@@ -6,8 +6,8 @@ import 'package:xnx_player/data/sources/media_source.dart';
 /// `expect(tag, isNotNull)` does not promote the type — Dart's flow analysis
 /// only understands `assert`/`if`, not matcher calls. Binding the result to a
 /// non-nullable local keeps every following access clean.
-EpisodeTag _require(String name) {
-  final EpisodeTag? tag = episodeTagFromFileName(name);
+EpisodeTag _require(String name, {String? folder}) {
+  final EpisodeTag? tag = episodeTagFromFileName(name, folderHint: folder);
   expect(tag, isNotNull, reason: 'expected an episode tag in "$name"');
   return tag!;
 }
@@ -48,6 +48,33 @@ void main() {
     test('keeps a plausible show name out of the release tags', () {
       final EpisodeTag tag = _require('The.Show.S10E02.720p.HDR.mkv');
       expect(tag.show, 'The Show');
+    });
+
+    test('accepts the conventions Kodi recognises beyond SxxEyy', () {
+      final EpisodeTag scene = _require('Friends.1x09.mkv');
+      expect(scene.show, 'Friends');
+      expect(scene.season, 1);
+      expect(scene.episode, 9);
+
+      // A bare E09 takes its season from the containing folder.
+      final EpisodeTag bare = _require('Show.E09.720p.mkv', folder: 'Season 2');
+      expect(bare.season, 2);
+      expect(bare.episode, 9);
+
+      final EpisodeTag roman = _require('Show.Part II.mkv', folder: 'Season 1');
+      expect(roman.episode, 2);
+
+      final EpisodeTag dated = _require('Show.2024.03.15.mkv');
+      expect(dated.season, 2024);
+      expect(dated.episode, 15);
+
+      final EpisodeTag absolute = _require('Show.103.mkv');
+      expect(absolute.season, 1);
+      expect(absolute.episode, 3);
+
+      final EpisodeTag chinese = _require('剧集.第2季第05集.mkv');
+      expect(chinese.season, 2);
+      expect(chinese.episode, 5);
     });
 
     test('drops the separator before the tag without eating a hyphen in the name', () {
