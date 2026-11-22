@@ -1128,25 +1128,42 @@ end
 local SEEK_NUDGE = { 5, 10, 30, 60, 180, 300, 600, 1800 }
 local SEEK_JUMP = { 15, 60, 300, 1800 }
 local SEEK_LADDER_RESET = 0.9
+--- Two presses closer together than this are the OS repeating the key, not a
+--- person pressing it again.
+local SEEK_LADDER_REPEAT = 0.12
+--- How often a held key is allowed to actually move the picture.
+local SEEK_LADDER_FIRE = 0.2
 
-local seek_ladder = { key = '', direction = 0, step = 0, total = 0, from = 0, at = 0 }
+local seek_ladder = { key = '', direction = 0, step = 0, total = 0, from = 0, at = 0, fired = 0 }
 
 local function seek_step(direction, steps, key)
   local stamp = now()
+  local gap = stamp - seek_ladder.at
   local same = seek_ladder.key == key and seek_ladder.direction == direction
-  if not same or stamp - seek_ladder.at > SEEK_LADDER_RESET then
+  local held = same and gap < SEEK_LADDER_REPEAT
+
+  if not same or gap > SEEK_LADDER_RESET then
     seek_ladder.step = 0
     seek_ladder.total = 0
     -- The destination is measured from where the burst started, not from the
     -- last `time-pos`: the observer lags a seek by a frame or two, so adding up
     -- positions would drift over a long hold.
     seek_ladder.from = state.position or 0
-  else
+  elseif not held then
     seek_ladder.step = math.min(seek_ladder.step + 1, #steps)
   end
   seek_ladder.key = key
   seek_ladder.direction = direction
   seek_ladder.at = stamp
+
+  -- A held key stays on the rung it started on: climbing while the OS repeats
+  -- the key reaches the thirty-minute rung within a second or two of holding,
+  -- which lands a long way past anywhere the viewer meant to go. Holding keeps
+  -- nudging instead, at a rate the eye can follow.
+  if held and stamp - seek_ladder.fired < SEEK_LADDER_FIRE then
+    return
+  end
+  seek_ladder.fired = stamp
 
   local size = steps[seek_ladder.step] or steps[#steps]
   seek_ladder.total = seek_ladder.total + size * direction
