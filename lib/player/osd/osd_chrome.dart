@@ -279,7 +279,8 @@ abstract final class OsdChrome {
     // Positions scale with the video, text does not below 12 px: in a 1088×613
     // window the 16-unit badges land on 9 px, which reads as noise rather than
     // a label. A floor keeps the chrome legible without moving anything.
-    double font(double v) => math.max(v * sy, 12);
+    double font(double v) =>
+        math.max(v * sy, math.min(v * sx, 20));
 
     // Scrim: the chrome must read over a bright frame.
     final ui.Paint scrim = ui.Paint()
@@ -483,7 +484,8 @@ abstract final class OsdChrome {
     }
     double x(double v) => v * sx;
     double y(double v) => v * sy;
-    double font(double v) => math.max(v * sy, 12);
+    double font(double v) =>
+        math.max(v * sy, math.min(v * sx, 20));
 
     final ui.Rect panel = menuPanel(size, menu);
     canvas.drawRRect(
