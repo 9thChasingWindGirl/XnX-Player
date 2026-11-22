@@ -58,6 +58,7 @@ class LocalSource extends MediaSource {
   /// poster/backdrop treatment as any other library entry.
   MediaItem _seriesFor(String show, MediaItem first) {
     final String id = '${config.id}::series:$show';
+    final String root = _seriesRoot(first.path);
     return MediaItem(
       id: id,
       sourceId: config.id,
@@ -65,12 +66,35 @@ class LocalSource extends MediaSource {
       kind: MediaKind.series,
       title: show,
       group: show,
+      // The detail page decides "can this be opened" from a non-empty path,
+      // and children() uses it to scan one show instead of the whole library.
+      path: root.isEmpty ? null : root,
       posterUrl: first.posterUrl,
       backdropUrl: first.backdropUrl,
       artwork: first.artwork,
       genres: first.genres,
       year: first.year,
     );
+  }
+
+  /// The show folder an episode lives in.
+  ///
+  /// Kodi/TMM layouts put episodes under `season01/`, so the folder one level
+  /// up is the show; a flat folder of episodes is its own show folder.
+  static String _seriesRoot(String? episodePath) {
+    if (episodePath == null || episodePath.isEmpty) {
+      return '';
+    }
+    final Directory parent = File(episodePath).parent;
+    final List<String> segments = parent.uri.pathSegments
+        .where((String s) => s.isNotEmpty)
+        .toList(growable: false);
+    final String name = segments.isEmpty ? '' : segments.last;
+    final bool isSeasonFolder = RegExp(
+      r'^(?:(?:season|s)\s*\d{1,2}|第\s*[一二三四五六七八九十\d]+\s*季)$',
+      caseSensitive: false,
+    ).hasMatch(name);
+    return isSeasonFolder ? parent.parent.path : parent.path;
   }
 
   Future<List<MediaItem>> _scan(String path) async {
