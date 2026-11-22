@@ -3,6 +3,7 @@ import 'dart:io';
 import '../models/artwork.dart';
 import '../models/media_item.dart';
 import 'media_source.dart';
+import 'nfo.dart';
 
 /// Local folders.
 ///
@@ -23,7 +24,9 @@ class LocalSource extends MediaSource {
     for (final MediaItem item in scanned) {
       final String? show = item.group;
       if (item.kind == MediaKind.episode && show != null && show.isNotEmpty) {
-        series.putIfAbsent(show, () => _seriesFor(show, item));
+        if (!series.containsKey(show)) {
+          series[show] = await _seriesFor(show, item);
+        }
       } else {
         out.add(item);
       }
@@ -39,10 +42,20 @@ class LocalSource extends MediaSource {
       // A local series container carries its show name in [group]. Return only
       // that show's episodes, ordered by season then episode number.
       final String show = container.group ?? '';
-      final List<MediaItem> episodes = (await _scan(config.path))
+      // The container's path is the show folder, so this scans one show
+      // instead of the whole library. The group filter stays as a guard
+      // against a nested folder that happens to decode to the same name.
+      final String root = (container.path ?? '').isNotEmpty
+          ? container.path!
+          : config.path;
+      final List<MediaItem> found = (await _scan(root))
           .where((MediaItem item) =>
               item.kind == MediaKind.episode && item.group == show)
           .toList();
+      final List<MediaItem> episodes = <MediaItem>[];
+      for (final MediaItem episode in found) {
+        episodes.add(await _withNfo(episode));
+      }
       episodes.sort((MediaItem a, MediaItem b) {
         final int bySeason = (a.season ?? 0).compareTo(b.season ?? 0);
         return bySeason != 0 ? bySeason : (a.episode ?? 0).compareTo(b.episode ?? 0);
@@ -54,26 +67,51 @@ class LocalSource extends MediaSource {
 
   /// The series container shown in the library for a set of episode files.
   ///
-  /// Artwork is inherited from the first episode so a TV show gets the same
-  /// poster/backdrop treatment as any other library entry.
-  MediaItem _seriesFor(String show, MediaItem first) {
-    final String id = '${config.id}::series:$show';
+  /// Artwork and text come from the show folder's `tvshow.nfo` plus the fixed
+  /// file names a scraper leaves beside it, falling back to the first episode
+  /// so a show still gets a poster when nobody scraped it.
+  ///
+  /// [path] is the show folder: the detail page keys "can this be opened"
+  /// off a non-empty path, and the folder is also what `children()` scans.
+  Future<MediaItem> _seriesFor(String show, MediaItem first) async {
     final String root = _seriesRoot(first.path);
+    final NfoFile? nfo = root.isEmpty
+        ? null
+        : await NfoFile.read(
+            '$root${Platform.pathSeparator}tvshow.nfo',
+          );
+    Artwork art = first.artwork;
+    if (root.isNotEmpty) {
+      try {
+        art = _artworkFor(root, 'tvshow', <String, List<String>>{});
+      } on Object {
+        // A share that dropped between the scan and here must not take the
+        // whole library with it; the episode's own art is still a fair poster.
+        art = first.artwork;
+      }
+    }
     return MediaItem(
-      id: id,
+      id: '${config.id}::series:$show',
       sourceId: config.id,
       sourceKind: SourceKind.local,
       kind: MediaKind.series,
-      title: show,
+      title: nfo?.title ?? show,
+      subtitle: nfo?.showTitle,
       group: show,
-      // The detail page decides "can this be opened" from a non-empty path,
-      // and children() uses it to scan one show instead of the whole library.
       path: root.isEmpty ? null : root,
-      posterUrl: first.posterUrl,
-      backdropUrl: first.backdropUrl,
-      artwork: first.artwork,
-      genres: first.genres,
-      year: first.year,
+      overview: nfo?.plot,
+      posterUrl: art.best(ArtKind.poster)?.url ?? first.posterUrl,
+      backdropUrl: art.best(ArtKind.backdrop)?.url ?? first.backdropUrl,
+      artwork: art,
+      genres: nfo?.genres.isNotEmpty == true ? nfo!.genres : first.genres,
+      people: nfo?.people ?? const <MediaPerson>[],
+      year: nfo?.year ?? first.year,
+      rating: nfo?.rating,
+      studio: nfo?.studio,
+      officialRating: nfo?.mpaa,
+      seriesStatus: nfo?.status,
+      tmdbId: nfo?.tmdbId,
+      duration: nfo?.duration,
     );
   }
 
@@ -95,6 +133,32 @@ class LocalSource extends MediaSource {
       caseSensitive: false,
     ).hasMatch(name);
     return isSeasonFolder ? parent.parent.path : parent.path;
+  }
+
+  /// Fills an episode from its sidecar `<name>.nfo` when one exists.
+  ///
+  /// A scrape usually knows the episode title, plot and air date; the file
+  /// name knows none of it. Fields the nfo lacks keep the file-name values.
+  Future<MediaItem> _withNfo(MediaItem item) async {
+    final String? path = item.path;
+    if (path == null || path.isEmpty) {
+      return item;
+    }
+    final NfoFile? nfo = await NfoFile.read(NfoFile.pathFor(path));
+    if (nfo == null) {
+      return item;
+    }
+    return item.copyWith(
+      title: nfo.title,
+      subtitle: nfo.showTitle,
+      overview: nfo.plot,
+      year: nfo.year,
+      rating: nfo.rating,
+      duration: nfo.duration,
+      genres: nfo.genres.isEmpty ? null : nfo.genres,
+      people: nfo.people.isEmpty ? null : nfo.people,
+      officialRating: nfo.mpaa,
+    );
   }
 
   Future<List<MediaItem>> _scan(String path) async {
@@ -149,7 +213,11 @@ class LocalSource extends MediaSource {
             badge: tag == null ? _resolutionBadge(name) : tag.badge,
             tech: _techFromName(name),
             year: yearFromFileName(name),
-            posterUrl: art.best(ArtKind.poster)?.url,
+            // A scraper writes `<name>-thumb.jpg` for an episode rather than a
+            // 2:3 poster; falling back to it keeps a shelf card from dropping
+            // to a colour block when there is real art on disk.
+            posterUrl:
+                art.best(ArtKind.poster)?.url ?? art.best(ArtKind.thumb)?.url,
             backdropUrl: art.best(ArtKind.backdrop)?.url,
             artwork: art,
           ),
@@ -161,6 +229,17 @@ class LocalSource extends MediaSource {
 
     out.sort((MediaItem a, MediaItem b) => a.title.compareTo(b.title));
     return out;
+  }
+
+  @override
+  Future<MediaItem> details(MediaItem item) async {
+    // A film's sidecar is `<name>.nfo`; an episode's is the same thing. The
+    // library scan does not read them, because that would be one file read per
+    // title on every browse — the detail page is where the cost is worth it.
+    if (item.kind == MediaKind.file || item.kind == MediaKind.episode) {
+      return _withNfo(item);
+    }
+    return item;
   }
 
   @override
@@ -234,7 +313,11 @@ class LocalSource extends MediaSource {
       ]),
       source: 'local',
     );
-    art.add(ArtKind.logo, pick(<String>['$stem-logo', 'logo']), source: 'local');
+    art.add(
+      ArtKind.logo,
+      pick(<String>['$stem-logo', 'logo', 'clearlogo']),
+      source: 'local',
+    );
     art.add(
       ArtKind.thumb,
       pick(<String>['$stem-thumb', '$stem-landscape', 'thumb', 'landscape']),
