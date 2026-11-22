@@ -151,6 +151,21 @@ jobs:
           "userdata" | Out-File -FilePath "$rel/data-dir.txt" -Encoding utf8
           # 预留目录随包发布：运行时在 Program Files 下创建目录会撞权限。
           New-Item -ItemType Directory -Force -Path "$rel/log", "$rel/updates" | Out-Null
+          # 这个 zip 也是公开可下载的 prerelease，所以分发义务与正式包相同：
+          # 随 libmpv-2.dll 一起给出第三方声明和 LGPL/GPL 许可全文。
+          Copy-Item -LiteralPath 'LICENSE' -Destination "$rel/LICENSE.txt" -Force
+          Copy-Item -LiteralPath 'INSTALL.txt' -Destination "$rel/INSTALL.txt" -Force
+          Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination "$rel/THIRD_PARTY_NOTICES.md" -Force
+          New-Item -ItemType Directory -Force -Path "$rel/licenses" | Out-Null
+          Copy-Item -Path 'licenses/*.txt' -Destination "$rel/licenses" -Force
+          if (-not (Test-Path "$rel/licenses/LGPL-2.1.txt")) { throw "licence texts missing from bundle" }
+          # 记录这次实际用了哪个 libmpv 资产，声明里的许可才可核对。
+          # 同时放进包里：用户手上没有任何构建日志，只有这份文件能回答
+          # 「我这个包里装的是 LGPL 还是 GPL 版 mpv」。
+          if (Test-Path 'third_party/mpv/SOURCE.txt') {
+            Copy-Item -LiteralPath 'third_party/mpv/SOURCE.txt' -Destination "$rel/libmpv-SOURCE.txt" -Force
+            Get-Content 'third_party/mpv/SOURCE.txt' | Write-Host
+          }
           "REL_DIR=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload dev artifact

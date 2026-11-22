@@ -23,6 +23,8 @@
 
 数据目录保存 `state.json`、日志（`log/`）、截图（`screenshots/`）与片头片尾标记（`segments.json`）；更新和卸载都不会删除它。安装版写入的 `data-dir.txt` 与便携包中的同名文件决定数据位置：写 `default` 用 `%APPDATA%\XnX Player`，写相对路径相对程序目录，写绝对路径则原样使用。
 
+程序目录另带许可文件：`LICENSE.txt`（本程序）、`THIRD_PARTY_NOTICES.md`（播放内核与界面素材的第三方说明）、`licenses/`（GPL-2.0 / LGPL-2.1 / LGPL-3.0 全文）与 `libmpv-SOURCE.txt`（这个安装包实际使用的 mpv 构建版本与许可）。
+
 发布通道与产物：
 
 | 通道 | 来源 | 产物 |

@@ -21,10 +21,14 @@ class MpvAssets {
 
   static const String osdScript = 'player_osd.lua';
   static const String logoScript = 'startup_format_logos.lua';
-  static const String logoBounds = 'startup-logo-bounds.lua';
 
-  /// Scripts this app loads, in load order.
-  static const List<String> scripts = <String>[osdScript, logoScript, logoBounds];
+  /// A Lua *module*, not a script: [logoScript] pulls it in with `dofile`.
+  ///
+  /// It still has to be unpacked next to the badge script — `dofile` reads it
+  /// off disk at load time — but it must never be handed to mpv as a script of
+  /// its own. Loading a module that only returns a table runs it twice and
+  /// starts a second Lua state for something with no top-level effect.
+  static const String logoBounds = 'startup-logo-bounds.lua';
 
   /// Logos actually shipped in the bundle. The upstream manifest describes a
   /// much larger wall; anything missing here is simply absent from

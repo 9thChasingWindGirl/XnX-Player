@@ -19,4 +19,6 @@ XnX Player 安装说明
 
 5. 许可
    本程序按 GNU General Public License v3.0 or later 分发，详见安装向导中的许可页面与随包的 LICENSE 文件。
-   TMDB、mpv 与界面音效的第三方说明见 THIRD_PARTY_NOTICES.md。
+   播放内核 libmpv 与界面素材的第三方说明见程序目录下的 THIRD_PARTY_NOTICES.md；
+   其中 GPL-2.0、LGPL-2.1、LGPL-3.0 的许可全文在 licenses 目录，另有一份
+   libmpv-SOURCE.txt 记录本安装包实际使用的 mpv 构建版本与许可。

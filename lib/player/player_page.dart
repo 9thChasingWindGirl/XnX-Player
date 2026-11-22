@@ -275,8 +275,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       final String? scriptPath = await MpvAssets.osdScriptPath();
       // The badge script is optional: when its assets are missing it simply
       // finds no manifest and draws nothing, so a failure here must never stop
-      // playback. Both Lua files are unpacked together because the badge script
-      // locates its companion through `mp.get_script_directory()`.
+      // playback.
+      //
+      // `startup-logo-bounds.lua` is unpacked but not loaded: the badge script
+      // reaches it with `dofile` from its own folder, so all it needs is a copy
+      // on disk next to the badge script.
       final String? logoScriptPath = await MpvAssets.scriptPath(MpvAssets.logoScript);
       await MpvAssets.scriptPath(MpvAssets.logoBounds);
       final String? logoDir = await MpvAssets.formatLogoDir();
