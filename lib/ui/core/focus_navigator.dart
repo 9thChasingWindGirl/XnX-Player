@@ -135,13 +135,44 @@ class FocusNavigator {
   }
 
   /// Same for the secondary "more" action.
+  ///
+  /// A held press resolves first, because it is the form both a pointer and a
+  /// pad use; [FocusEntry.menu] stays for the keyboard's own ContextMenu key,
+  /// which means "menu" specifically and must not turn into "play" on a card
+  /// that has no menu.
   static bool menu() {
     final FocusEntry? entry = _focusedEntry();
-    final VoidCallback? action = entry?.menu;
+    final VoidCallback? action = entry?.longPress ?? entry?.menu;
     if (action == null) {
       return false;
     }
     action();
+    return true;
+  }
+
+  /// Whether the focused item has a second meaning for a held press.
+  ///
+  /// The pad asks this before deciding how a held confirm should behave: with
+  /// nothing to disambiguate it fires on the way down, and only an item that
+  /// actually has a long-press action pays the release delay.
+  static bool canLongPress() {
+    final FocusEntry? entry = _focusedEntry();
+    return entry != null && (entry.longPress != null || entry.menu != null);
+  }
+
+  /// Pushes the press animation into the focused item.
+  ///
+  /// The keyboard has `KeyDownEvent` and the pointer has `onTapDown`; the pad
+  /// has neither, so it reports the press through here. Returns false when the
+  /// item does not animate a press, which is not an error — it just means the
+  /// pad's feedback is the highlight alone.
+  static bool pressFocused(bool down) {
+    final FocusEntry? entry = _focusedEntry();
+    final ValueChanged<bool>? sink = entry?.setPressed;
+    if (sink == null) {
+      return false;
+    }
+    sink(down);
     return true;
   }
 

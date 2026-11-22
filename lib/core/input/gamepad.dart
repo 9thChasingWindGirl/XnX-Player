@@ -92,6 +92,14 @@ class GamepadPoller {
   bool _connected = false;
   int _buttons = 0;
 
+  /// When the confirm button went down, in milliseconds, and whether it has
+  /// already done something for this press.
+  ///
+  /// -1 means "not held". The flag is what stops a hold that already opened a
+  /// menu from also firing a select when the button finally comes up.
+  int _confirmDownMs = -1;
+  bool _confirmFired = false;
+
   final HeldRepeat _nav = HeldRepeat();
   final HeldRepeat _jump = HeldRepeat();
 
@@ -151,6 +159,20 @@ class GamepadPoller {
     _buttons = 0;
     _nav.reset();
     _jump.reset();
+    _forgetConfirm();
+  }
+
+  /// Drops any in-flight press without acting on it.
+  ///
+  /// Called when the pad disconnects or the app closes: a card that never gets
+  /// its release would stay visibly pressed, and a held confirm must not fire a
+  /// select for a button nobody is holding any more.
+  void _forgetConfirm() {
+    if (_confirmDownMs >= 0) {
+      _pressSink(false);
+    }
+    _confirmDownMs = -1;
+    _confirmFired = false;
   }
 
   void _tick() {
@@ -190,6 +212,7 @@ class GamepadPoller {
         _buttons = 0;
         _nav.reset();
         _jump.reset();
+        _forgetConfirm();
       }
       _slot = (_slot + 1) % 4;
       return;
@@ -200,6 +223,7 @@ class GamepadPoller {
       _buttons = 0;
       _nav.reset();
       _jump.reset();
+      _forgetConfirm();
       _lastMicros = 0;
       _idleTicks = 0;
     }
@@ -209,13 +233,15 @@ class GamepadPoller {
   void _read(_XInputGamepad pad, double dt) {
     final int buttons = pad.buttons;
     final int pressed = buttons & ~_buttons;
+    final int released = _buttons & ~buttons;
     _buttons = buttons;
 
-    // Edge-triggered actions: one press, one effect. These never repeat, which
-    // is why they do not go through HeldRepeat.
     final bool swap = swapConfirm;
-    _edge(pressed, _Pad.a, swap ? InputAction.back : InputAction.confirm);
-    _edge(pressed, _Pad.b, swap ? InputAction.confirm : InputAction.back);
+
+    // Confirm is the one button with two meanings, so it does not go through
+    // the edge path: a tap selects, a hold opens the item's menu. See [_confirm].
+    _confirm(pressed, released, swap ? _Pad.b : _Pad.a);
+    _edge(pressed, swap ? _Pad.a : _Pad.b, InputAction.back);
     _edge(pressed, _Pad.y, InputAction.contextMenu);
     _edge(pressed, _Pad.x, InputAction.toggleDock);
     _edge(pressed, _Pad.start, InputAction.playPause);
@@ -246,6 +272,61 @@ class GamepadPoller {
       _emit(jumpStep, repeat: _jump.isRepeating);
     }
   }
+
+  /// A button that means two things, told apart by how long it stays down.
+  ///
+  /// The reference build spells this as two entries for one button —
+  /// `<a>Select</a>` plus `<a holdtime="500">ContextMenu</a>` — and resolves
+  /// them by holding time. Same rule here, with one economy: an item that has
+  /// no menu has nothing to disambiguate, so it fires on the way **down**. Only
+  /// the items that actually offer a menu pay for the release that tells a tap
+  /// from a hold, which keeps the pad as snappy as a click everywhere else.
+  void _confirm(int pressed, int released, int mask) {
+    final int now = _clock.elapsedMilliseconds;
+
+    if ((pressed & mask) != 0) {
+      _confirmDownMs = now;
+      _confirmFired = false;
+      _pressSink(true);
+      if (!_hasLongPress()) {
+        _confirmFired = true;
+        _emit(InputAction.confirm);
+      }
+      return;
+    }
+
+    if (_confirmDownMs < 0) {
+      return;
+    }
+
+    // Threshold crossed while still held: open the menu at that moment instead
+    // of waiting for a release the user may not perform for another second.
+    if (!_confirmFired && now - _confirmDownMs >= kHoldMenuAfter.inMilliseconds) {
+      _confirmFired = true;
+      _pressSink(false);
+      _emit(InputAction.contextMenu);
+      return;
+    }
+
+    if ((released & mask) != 0) {
+      final int held = now - _confirmDownMs;
+      _confirmDownMs = -1;
+      _pressSink(false);
+      if (_confirmFired) {
+        // Already acted on the way down, or the hold opened the menu.
+        return;
+      }
+      _emit(
+        held >= kHoldMenuAfter.inMilliseconds
+            ? InputAction.contextMenu
+            : InputAction.confirm,
+      );
+    }
+  }
+
+  bool _hasLongPress() => InputRouter.instance.focusedHasLongPress?.call() ?? false;
+
+  void _pressSink(bool down) => InputRouter.instance.pressFocused?.call(down);
 
   /// D-pad wins over the stick; the stick is only read past a radial deadzone and
   /// then reduced to its dominant axis, so a diagonal push cannot produce two

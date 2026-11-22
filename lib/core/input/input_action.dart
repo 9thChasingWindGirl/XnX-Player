@@ -100,6 +100,16 @@ extension InputDeviceNature on InputDevice {
   bool get steps => this == InputDevice.keyboard || this == InputDevice.gamepad;
 }
 
+/// How long a button must stay down before it means something other than a tap.
+///
+/// This is the one number every device shares, the way a keymap's `holdtime`
+/// attribute does in the reference build: the source button keeps its plain
+/// action, and the same button held past this threshold raises the *secondary*
+/// action instead. It is deliberately per-button rather than global — only the
+/// buttons that actually have a second meaning pay the release delay that
+/// disambiguation costs.
+const Duration kHoldMenuAfter = Duration(milliseconds: 550);
+
 /// One request from one device.
 ///
 /// [action] is null for keyboard events that have no logical meaning in our
@@ -112,10 +122,11 @@ class InputIntent {
     this.action, {
     required this.device,
     this.repeat = false,
+    this.held = Duration.zero,
     this.key,
   });
 
-  const InputIntent.rawKey(KeyEvent this.key, {this.repeat = false})
+  const InputIntent.rawKey(KeyEvent this.key, {this.repeat = false, this.held = Duration.zero})
     : action = null,
       device = InputDevice.keyboard;
 
@@ -125,6 +136,17 @@ class InputIntent {
   /// True when the device is repeating a hold: OS auto-repeat for a keyboard,
   /// a synthesized cadence for a gamepad. A tap is never a repeat.
   final bool repeat;
+
+  /// Time since the source went down.
+  ///
+  /// Zero for a pointer and for the first press of anything. A device that can
+  /// measure it (a keyboard's KeyDown timestamp, a pad's poll timer) reports
+  /// the real elapsed time, which is what lets one hold rule serve every
+  /// device: the cadence comes from the device, the threshold from here.
+  final Duration held;
+
+  /// Whether this press has been down long enough to mean its secondary action.
+  bool get isHold => held >= kHoldMenuAfter;
 
   /// The original key event, when a keyboard produced this. Never set by a pad
   /// or a pointer: those have no key identity to preserve.

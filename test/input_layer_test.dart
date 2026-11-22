@@ -27,11 +27,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('HeldRepeat', () {
-    test('a tap fires exactly once', () {
+    test('a tap fires at once and nothing follows inside the first fifth', () {
       final HeldRepeat repeat = HeldRepeat();
       expect(repeat.step(InputAction.navigateRight, 0.016), InputAction.navigateRight);
       expect(repeat.isRepeating, isFalse);
-      expect(_run(repeat, InputAction.navigateRight, 0.3), 0);
+      // The first press is free; the sweep starts at 100 ms and needs a full
+      // step of credit before it moves again.
+      expect(_run(repeat, InputAction.navigateRight, 0.19), 0);
+      expect(_run(repeat, InputAction.navigateRight, 0.1), greaterThan(0));
     });
 
     test('nothing is emitted once the direction is released', () {
@@ -50,18 +53,43 @@ void main() {
       expect(repeat.step(InputAction.navigateUp, 0.016), InputAction.navigateUp);
     });
 
-    test('the cadence is 350ms, then 110ms, then 50ms', () {
-      final HeldRepeat repeat = HeldRepeat();
-      expect(repeat.step(InputAction.navigateRight, 0.016), InputAction.navigateRight);
-      // Nothing during the initial pause; the first repeat lands just after it.
-      expect(_run(repeat, InputAction.navigateRight, 0.34), 0);
-      expect(_run(repeat, InputAction.navigateRight, 0.05), 1);
+    test('the sweep starts at ten a second and climbs to thirty', () {
+      // Upstream's list scrolling: a floor of 10 items/s from 100 ms, linear to
+      // 30 items/s at 3 s. Checked as cumulative counts on fresh instances,
+      // which is the only way to see the ramp rather than one instant.
+      int steps(double seconds) {
+        final HeldRepeat repeat = HeldRepeat();
+        repeat.step(InputAction.navigateRight, 0.016);
+        return _run(repeat, InputAction.navigateRight, seconds);
+      }
 
-      // Over three seconds the accelerating cadence has to beat a fixed 110ms
-      // one by a wide margin (~47 steps against ~25). That gap is the reason
-      // this class exists instead of a single interval.
-      final int steps = _run(repeat, InputAction.navigateRight, 3.0);
-      expect(steps, greaterThan(35));
+      final int firstSecond = steps(1);
+      final int twoSeconds = steps(2);
+      final int threeSeconds = steps(3);
+
+      // 10/s floor, minus the 100 ms the ramp spends getting started.
+      expect(firstSecond, inInclusiveRange(7, 11));
+      // Each second covers more ground than the one before: that is the ramp.
+      expect(twoSeconds - firstSecond, greaterThan(firstSecond));
+      expect(threeSeconds, greaterThan(twoSeconds + firstSecond));
+    });
+
+    test('fractional steps are carried, not rounded away', () {
+      // At 16 ms frames the 10/s floor is 0.16 steps per frame; rounding that
+      // down every frame would produce nothing at all, and rounding it up would
+      // produce sixty a second. The carry is what makes the rate true.
+      final HeldRepeat repeat = HeldRepeat();
+      repeat.step(InputAction.navigateRight, 0.016);
+      int steps = 0;
+      for (int i = 0; i < 125; i++) {
+        if (repeat.step(InputAction.navigateRight, 0.016) != null) {
+          steps += 1;
+        }
+      }
+      // Two seconds of 16 ms frames lands in the low twenties: below the 30/s
+      // ceiling because the ramp is still climbing, and far above what a
+      // per-frame floor of 0.16 steps would give if it were rounded down.
+      expect(steps, inInclusiveRange(18, 28));
     });
 
     test('reset drops the hold and the repeat count', () {
@@ -73,6 +101,24 @@ void main() {
       expect(repeat.isRepeating, isFalse);
       expect(repeat.held, isNull);
       expect(repeat.step(InputAction.navigateUp, 0.016), InputAction.navigateUp);
+    });
+  });
+
+  group('hold rules', () {
+    test('a press becomes a hold past the shared threshold', () {
+      const InputIntent tap = InputIntent.action(
+        InputAction.confirm,
+        device: InputDevice.gamepad,
+      );
+      expect(tap.isHold, isFalse);
+
+      const InputIntent held = InputIntent.action(
+        InputAction.confirm,
+        device: InputDevice.gamepad,
+        held: Duration(milliseconds: 600),
+      );
+      expect(held.isHold, isTrue);
+      expect(kHoldMenuAfter, const Duration(milliseconds: 550));
     });
   });
 

@@ -36,6 +36,8 @@ class FocusEntry {
     this.id,
     this.activate,
     this.menu,
+    this.longPress,
+    this.setPressed,
   });
 
   final FocusNode node;
@@ -63,6 +65,26 @@ class FocusEntry {
 
   /// The secondary "more" action, if the item has one.
   final VoidCallback? menu;
+
+  /// The item's held-press action, already resolved.
+  ///
+  /// Distinct from [menu] because the two are reached by different things: a
+  /// keyboard's ContextMenu key means "open the menu", while a pointer's long
+  /// press and a pad's held A mean "that thing you get by holding". Items that
+  /// use the second for something other than a menu — a cover that plays on
+  /// hold — set this and leave [menu] null, and both devices still land in the
+  /// right place.
+  final VoidCallback? longPress;
+
+  /// Drives the item's own press animation from a device that raises no widget
+  /// event.
+  ///
+  /// A keyboard paints `_pressed` from its KeyDown and a pointer from
+  /// `onTapDown`; a pad produces neither, so a held A would otherwise look
+  /// exactly like no input at all until it fires — which is the one thing a
+  /// ten-foot UI cannot afford while it is also waiting out a hold threshold.
+  /// Null on items that do not animate a press.
+  final ValueChanged<bool>? setPressed;
 
   bool get isMounted => context.mounted && node.context != null;
 

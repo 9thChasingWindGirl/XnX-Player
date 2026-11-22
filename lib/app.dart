@@ -10,6 +10,7 @@ import 'data/store.dart';
 import 'design/ps_theme.dart';
 import 'shell/shell_page.dart';
 import 'ui/core/focus_memory.dart';
+import 'ui/core/focus_navigator.dart';
 import 'ui/core/motion_clock.dart';
 import 'ui/core/text_entry.dart';
 
@@ -32,6 +33,12 @@ class _XnXAppState extends State<XnXApp> {
     // made the dispatch order an accident of widget lifetime.
     final InputRouter router = InputRouter.instance;
     router.textEntryActive = () => TextEntry.active.value;
+    // A pad has no widget-level press event, so it asks the focus tree two
+    // questions the router cannot answer itself: can the highlighted item open
+    // a menu (which decides whether a held confirm waits for the release), and
+    // how does it look pressed.
+    router.focusedHasLongPress = FocusNavigator.canLongPress;
+    router.pressFocused = FocusNavigator.pressFocused;
     router.install();
     // XInput is polled on its own timer: it is a device that reports state, not
     // events, and nothing else in the app can see it.

@@ -59,10 +59,31 @@ class InputRouter {
   final List<InputSubscription> _layers = <InputSubscription>[];
   bool _installed = false;
 
+  /// When each held key went down, in microseconds on a monotonic clock.
+  ///
+  /// The OS tells us *that* a key repeated, never *how long* it has been down,
+  /// and the two are not the same question: Windows lets the user stretch the
+  /// repeat delay to a second, and a hold rule measured on repeat count would
+  /// then fire at a different moment on every machine.
+  final Map<int, int> _downAt = <int, int>{};
+  final Stopwatch _clock = Stopwatch()..start();
+
   /// Set by the app to `TextEntry.active.value`. A text field owns the alphabet,
   /// so nothing but Back is routed while one is open. Indirection keeps this
   /// file free of any dependency on the UI layer.
   bool Function()? textEntryActive;
+
+  /// Whether the focused item has a secondary action a held press could reach.
+  ///
+  /// The pad asks before deciding how a held confirm behaves: with nothing to
+  /// disambiguate it fires on the way down instead of waiting for the release.
+  /// Wired to [FocusNavigator.canLongPress] by the app, because a router must
+  /// not import the focus tree.
+  bool Function()? focusedHasLongPress;
+
+  /// Pushes a press animation into the focused item, for devices that raise no
+  /// widget-level down event. Wired to [FocusNavigator.pressFocused].
+  void Function(bool down)? pressFocused;
 
   List<InputSubscription> get layers => List<InputSubscription>.unmodifiable(_layers);
 
@@ -120,13 +141,20 @@ class InputRouter {
   bool _textEntryOwnsKeys() => textEntryActive?.call() ?? false;
 
   bool _onKey(KeyEvent event) {
+    final int keyId = event.logicalKey.keyId;
+
     // Key-up is not routed: activation happens on release inside the focus
-    // tree, and a layer that acted on down would otherwise act twice.
+    // tree, and a layer that acted on down would otherwise act twice. The
+    // timestamp still has to be dropped, or the next press would report a hold
+    // that started before the previous release.
     if (event is KeyUpEvent) {
+      _downAt.remove(keyId);
       return false;
     }
+
     final bool repeat = event is KeyRepeatEvent;
     final InputAction? action = Keymap.actionFor(event);
+    final Duration held = _heldFor(keyId, repeat: repeat);
 
     if (_textEntryOwnsKeys() && action != InputAction.back) {
       // A caret is on screen. Back is the only thing it cannot use itself; the
@@ -142,7 +170,7 @@ class InputRouter {
       if (repeat) {
         return false;
       }
-      return dispatch(InputIntent.rawKey(event));
+      return dispatch(InputIntent.rawKey(event, held: held));
     }
 
     if (repeat && !action.repeats) {
@@ -157,8 +185,30 @@ class InputRouter {
         action,
         device: InputDevice.keyboard,
         repeat: repeat,
+        held: held,
         key: event,
       ),
     );
+  }
+
+  /// Time since [keyId] went down, and the bookkeeping that measurement needs.
+  ///
+  /// A repeat must not reset the clock — that would make a hold of any length
+  /// look like a first press forever, and every hold rule would be dead.
+  Duration _heldFor(int keyId, {required bool repeat}) {
+    final int now = _clock.elapsedMicroseconds;
+    final int? since = _downAt[keyId];
+    if (since == null) {
+      _downAt[keyId] = now;
+      return Duration.zero;
+    }
+    if (!repeat) {
+      // A fresh down for a key we still think is held: the matching key-up went
+      // somewhere we did not see it (a focus change, a window switch). Trust
+      // the new press over the stale record.
+      _downAt[keyId] = now;
+      return Duration.zero;
+    }
+    return Duration(microseconds: now - since);
   }
 }

@@ -113,6 +113,9 @@ class _TvFocusableState extends State<TvFocusable> {
   bool _focused = false;
   bool _pressed = false;
 
+  /// When the current Enter/Space press started, for the hold rule.
+  DateTime? _downAt;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -144,6 +147,17 @@ class _TvFocusableState extends State<TvFocusable> {
           widget.onMenu?.call();
         }
       },
+      longPress: widget.enabled && _hasLongPress ? _longPress : null,
+      // A pad never reaches `onTapDown`, so the press has to be pushed from
+      // outside. Guarded on [mounted]: a route can close between the press and
+      // the release that follows it.
+      setPressed: widget.pressScale == 1.0
+          ? null
+          : (bool down) {
+              if (mounted && widget.enabled) {
+                setState(() => _pressed = down);
+              }
+            },
     );
     FocusRegistry.instance.register(_entry!);
   }
@@ -185,6 +199,25 @@ class _TvFocusableState extends State<TvFocusable> {
     widget.onSelect?.call();
   }
 
+  /// The secondary meaning of a held press.
+  ///
+  /// Every device lands here — the pointer through `onLongPress`, the keyboard
+  /// through a late key-up, the pad through the router — so "what does holding
+  /// this item do" has exactly one answer. The menu wins when the item has one;
+  /// otherwise the item's own long-press action, which is how a card says
+  /// "hold me to play" while a source row says "hold me to remove".
+  void _longPress() {
+    final VoidCallback? menu = widget.onMenu;
+    if (menu != null) {
+      SoundManager.instance.play(SoundCue.select);
+      menu();
+      return;
+    }
+    widget.onLongSelect?.call();
+  }
+
+  bool get _hasLongPress => widget.onMenu != null || widget.onLongSelect != null;
+
   void _publish() {
     final FocusHighlightScope? scope = _highlight;
     if (scope == null || !widget.reportHighlight || !mounted) {
@@ -214,14 +247,27 @@ class _TvFocusableState extends State<TvFocusable> {
 
     if (activate) {
       if (event is KeyDownEvent) {
+        _downAt = DateTime.now();
         setState(() => _pressed = true);
         return KeyEventResult.handled;
       }
       if (event is KeyUpEvent) {
         final bool fire = _pressed;
+        final DateTime? since = _downAt;
+        _downAt = null;
         setState(() => _pressed = false);
         if (fire) {
-          _select();
+          // Enter and Space already activate on release, so the length of the
+          // press is free information: no timer, no extra event, just the two
+          // timestamps the focus tree hands us anyway. Same threshold as the
+          // pad, which keeps "hold to open the menu" identical across devices.
+          final bool held =
+              since != null && DateTime.now().difference(since) >= kHoldMenuAfter;
+          if (held && _hasLongPress) {
+            _longPress();
+          } else {
+            _select();
+          }
         }
         return KeyEventResult.handled;
       }
@@ -371,7 +417,12 @@ class _TvFocusableState extends State<TvFocusable> {
           onTapCancel: widget.pressScale != 1.0
               ? () => setState(() => _pressed = false)
               : null,
-          onLongPress: widget.enabled ? widget.onLongSelect : null,
+          onLongPress: widget.enabled && _hasLongPress ? _longPress : null,
+          // The right button is the pointer's own "hold": the reference build
+          // binds both `<longclick id="0">` and `<rightclick>` to the context
+          // menu, and a ten-foot UI that only answers the first leaves half the
+          // mice users have with a button that does nothing.
+          onSecondaryTap: widget.enabled && _hasLongPress ? _longPress : null,
           child: Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
