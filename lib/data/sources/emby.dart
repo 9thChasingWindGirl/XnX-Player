@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import '../core/app_log.dart';
+import '../../core/app_log.dart';
 import '../models/artwork.dart';
 import '../models/media_item.dart';
 import '../net.dart';
