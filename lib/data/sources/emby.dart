@@ -78,73 +78,132 @@ class EmbySource extends MediaSource {
     AppLog.info('Emby 认证完成：用户 $_userId');
   }
 
+  /// Items per page for the library pull. Matches the field set the item
+  /// mapper expects; larger pages only stress the server.
+  static const int _pageSize = 200;
+
   @override
   Future<List<MediaItem>> browse() async {
     await _ensureAuth();
     // Pull the whole Movie/Series library. The old 600-item window is why a
-    // large server looked incomplete: everything past page three never reached
-    // the store, and the genre chips could only count that window. Each page
-    // still has its own 12 s deadline, and a stall on page N keeps 1..N-1
-    // rather than throwing the whole library away.
-    const int pageSize = 200;
-    final List<MediaItem> out = <MediaItem>[];
-    int start = 0;
-    int? total;
-    while (true) {
-      if (start == 0) {
-        AppLog.info('Emby 拉取媒体库：$_base/Users/$_userId/Items');
+    // large server looked incomplete; the serial rewrite fixed that but paged
+    // one request at a time, and a ~19k-item library needs 90+ round trips —
+    // the 90 s refresh timeout fired around page 90 while the pagination kept
+    // running in the background. The first page still decides the shape and
+    // the ordering; the rest are fetched in small parallel waves so the whole
+    // library lands inside one refresh deadline. A page that fails twice is
+    // skipped, not fatal: one dropped page beats losing everything after it.
+    const int pageSize = _pageSize;
+    const int waveSize = 6;
+    // Safety valve for servers that report a huge count: 500 pages * 200
+    // items is 100k entries, far past anything the shelves can render.
+    const int maxPages = 500;
+
+    AppLog.info('Emby 拉取媒体库：$_base/Users/$_userId/Items');
+    final Map<String, dynamic> first = await _itemsPage(0, pageSize);
+    final List<MediaItem> out = _items(first);
+    final int firstRecords = (first['Items'] as List?)?.length ?? 0;
+    final int? reported = (first['TotalRecordCount'] as num?)?.toInt();
+    if (firstRecords == 0) {
+      return out;
+    }
+    if (firstRecords < pageSize && (reported == null || reported <= firstRecords)) {
+      // Small server: the whole library fit on page one.
+      return out;
+    }
+
+    int skipped = 0;
+    if (reported != null) {
+      final int pageCap =
+          reported > pageSize * maxPages ? pageSize * maxPages : reported;
+      if (pageCap < reported) {
+        AppLog.warn('Emby 媒体库超过分页上限，仅拉取前 $pageCap 项');
       }
-      late Map<String, dynamic> data;
-      try {
-        data = await Http.getJson(
-          _uri('/Users/$_userId/Items', <String, String>{
-            'Recursive': 'true',
-            'IncludeItemTypes': 'Movie,Series',
-            'Fields': _fields,
-            'SortBy': 'DateCreated',
-            'SortOrder': 'Descending',
-            'Limit': '$pageSize',
-            'StartIndex': '$start',
-            'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
-          }),
-          headers: _headers,
-        ).timeout(const Duration(seconds: 12));
-      } on Object {
-        if (out.isEmpty) {
-          rethrow;
+      final List<int> starts = <int>[
+        for (int s = pageSize; s < pageCap; s += pageSize) s,
+      ];
+      for (int i = 0; i < starts.length; i += waveSize) {
+        final int end =
+            i + waveSize < starts.length ? i + waveSize : starts.length;
+        final List<Map<String, dynamic>?> pages =
+            await Future.wait<Map<String, dynamic>?>(
+          starts.sublist(i, end).map(_fetchPage),
+        );
+        for (final Map<String, dynamic>? page in pages) {
+          if (page == null) {
+            skipped++;
+            continue;
+          }
+          out.addAll(_items(page));
         }
-        break;
       }
-
-      final Object? raw = data['Items'];
-      final List<dynamic> records = raw is List ? raw : const <dynamic>[];
-      out.addAll(_items(data));
-
-      // The server's count is authoritative, but only when it was actually
-      // returned. Falling back to `out.length` used to end pagination early on
-      // servers that omit TotalRecordCount.
-      final int? reported = (data['TotalRecordCount'] as num?)?.toInt();
-      if (reported != null) {
-        total = reported;
-      }
-
-      if (records.isEmpty) {
-        break;
-      }
-      // Advance by the requested page size, never by how many entries we
-      // managed to parse: a malformed record must not pull the next page back
-      // over titles that were already fetched.
-      start += pageSize;
-      if (total != null) {
-        if (start >= total) {
+    } else {
+      // No authoritative count: keep fetching waves until a page comes back
+      // short, which is the only end signal such servers give.
+      final int ceiling = pageSize * waveSize * maxPages;
+      int start = pageSize;
+      while (start < ceiling) {
+        final List<int> wave = <int>[
+          for (int k = 0; k < waveSize; k++) start + k * pageSize,
+        ];
+        final List<Map<String, dynamic>?> pages =
+            await Future.wait<Map<String, dynamic>?>(wave.map(_fetchPage));
+        bool ended = false;
+        for (int k = 0; k < pages.length; k++) {
+          final Map<String, dynamic>? page = pages[k];
+          if (page == null) {
+            skipped++;
+            continue;
+          }
+          out.addAll(_items(page));
+          final int records = (page['Items'] as List?)?.length ?? 0;
+          if (records < pageSize) {
+            ended = true;
+            break;
+          }
+        }
+        if (ended) {
           break;
         }
-      } else if (records.length < pageSize) {
-        // Without an authoritative count a short page is the only end signal.
-        break;
+        start += waveSize * pageSize;
       }
     }
+    if (skipped > 0) {
+      AppLog.warn('Emby 媒体库分页跳过 $skipped 页（服务器中途断开），已保留其余 ${out.length} 项');
+    }
     return out;
+  }
+
+  /// One page with its own deadline and a single retry: a transient
+  /// "connection closed" deep into the offsets must not cost the whole page.
+  /// Returns null when both attempts fail — the caller skips and continues.
+  Future<Map<String, dynamic>?> _fetchPage(int start) async {
+    for (int attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await _itemsPage(start, _pageSize);
+      } on Object {
+        if (attempt == 1) {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> _itemsPage(int start, int limit) {
+    return Http.getJson(
+      _uri('/Users/$_userId/Items', <String, String>{
+        'Recursive': 'true',
+        'IncludeItemTypes': 'Movie,Series',
+        'Fields': _fields,
+        'SortBy': 'DateCreated',
+        'SortOrder': 'Descending',
+        'Limit': '$limit',
+        'StartIndex': '$start',
+        'EnableImageTypes': 'Primary,Logo,Thumb,Backdrop,Banner,Disc,Art',
+      }),
+      headers: _headers,
+    ).timeout(const Duration(seconds: 12));
   }
 
   /// "Continue watching": the server already knows where you stopped, which is
