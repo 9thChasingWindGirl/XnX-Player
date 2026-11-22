@@ -465,6 +465,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       // The OSD reads these before the first frame so the title and the
       // opening-skip preference are already in place at file-loaded.
       player.setProperty('user-data/player/title', widget.item.title);
+      // The OSD keys its intro/outro marks by media identity. A local file is
+      // identified by its full path, but a resolved stream's path is a URL that
+      // can rotate, so the stable item id is the fallback.
+      player.setProperty('user-data/player/media-id', widget.item.id);
       // The Lua stage persists intro/outro marks; point it at the same data
       // directory the rest of the app uses instead of %APPDATA%.
       player.setProperty('user-data/player/data-dir', AppPaths.dataDir);

@@ -320,7 +320,6 @@ local state = {
 
 local seq = 0
 local hide_timer = nil
-local outro_skipped = false
 
 -- Forward declarations. Lua locals are not hoisted: the menu section above the
 -- render section calls back into it, so these names must exist first.
@@ -368,10 +367,32 @@ local function path_name()
   return name or path
 end
 
-local function file_key()
+--- Normalises a path into a storage key.
+---
+--- Windows paths are case-insensitive, so `C:\Films\A.mkv` and `c:\films\a.mkv`
+--- are one file and must share one record. URLs are *not* case-insensitive — an
+--- Emby item id is a case-sensitive path segment — so a scheme is left alone.
+local function normalize_key(raw)
+  local text = tostring(raw or ''):gsub('\\', '/')
+  if text:find('://', 1, true) then
+    return text
+  end
+  local collapsed = text:gsub('/+', '/')
+  return collapsed:lower()
+end
+
+--- The identity of the file mpv currently has open.
+---
+--- The whole path, never the basename: two copies of `S01E01.mkv` in different
+--- folders are different episodes.
+local function path_key()
   local path = mp.get_property('path') or ''
-  local _, name = utils.split_path(path)
-  return name or path or ''
+  if path ~= '' then
+    return normalize_key(path)
+  end
+  -- Streams resolved through the host may have no useful path; the app hands us
+  -- a stable item id for exactly this case.
+  return normalize_key(mp.get_property('user-data/player/media-id') or '')
 end
 
 -- ==== FORMAT / BADGES ======================================================
@@ -530,9 +551,23 @@ local function badge_items()
 end
 
 -- ==== SEGMENTS =============================================================
+--
+-- Every mark is one EDL edit — `start, end, action` — which is the shape Kodi
+-- defined in `xbmc/video/Edl.cpp` and the shape of a `<video>.edl` sidecar, so
+-- the same record can be exported for other players instead of being a private
+-- blob. Actions: `cut` removes the span from playback, `mute` only silences it,
+-- `commbreak` is an ad break (muted, but labelled differently).
+--
+-- Records are keyed by the **full path**. Version 1 keyed them by bare file
+-- name, which meant `C:\A\S01E01.mkv` and `D:\B\S01E01.mkv` shared one mark —
+-- mark the opening of one episode and every copy of it on every drive skipped
+-- the wrong two minutes. `adopt_legacy` migrates those records once.
 
 local SEG_CACHE = nil
 local SEG_PATH = nil
+
+--- Action used when a record predates the action column.
+local DEFAULT_ACTION = 'cut'
 
 local function segments_path()
   if SEG_PATH then
@@ -586,38 +621,6 @@ local function save_segments()
   file:close()
 end
 
-local function current_segment()
-  local key = file_key()
-  if key == '' then
-    return nil
-  end
-  local all = load_segments()
-  return all[key]
-end
-
-local function set_segment(slot, s, e)
-  local key = file_key()
-  if key == '' then
-    return
-  end
-  local all = load_segments()
-  local entry = all[key] or {}
-  entry[slot] = { start = s, ['end'] = e }
-  all[key] = entry
-  SEG_CACHE = all
-  save_segments()
-end
-
-local function clear_segment(slot)
-  local key = file_key()
-  local all = load_segments()
-  local entry = all[key]
-  if entry then
-    entry[slot] = nil
-    save_segments()
-  end
-end
-
 --- Chapter names that the reference build treats as skippable.
 local function classify_chapter(name)
   local s = (name or ''):lower()
@@ -630,24 +633,164 @@ local function classify_chapter(name)
   return nil
 end
 
---- Segments to honour: manual marks win, then chapter names.
-local function effective_segments()
+--- Normalises the action column.
+---
+--- Records written by this app use the words, but a `.edl` imported from
+--- elsewhere may use Kodi's numeric codes (`0/1/2`) or a longer spelling, and
+--- mistaking a cut for a mute would either leak two minutes of ads or silence
+--- the opening titles.
+local ACTION_ALIASES = {
+  ['0'] = 'cut',
+  ['1'] = 'mute',
+  ['2'] = 'commbreak',
+  commercial = 'commbreak',
+  commercial_break = 'commbreak',
+  ad = 'commbreak',
+  skip = 'cut',
+}
+
+local function normalize_action(raw)
+  local text = tostring(raw or DEFAULT_ACTION):lower()
+  return ACTION_ALIASES[text] or text
+end
+
+--- Reads one stored record into a normalised edit list.
+---
+--- Two shapes are accepted, and both survive a round trip through the file:
+---
+---   v2  { edits = { { start=, end=, action=, slot= }, … } }
+---   v1  { intro = { start=, end= }, outro = { … } }
+---
+--- A half-marked edit (start but no end) is *kept* — otherwise pressing Alt+N
+--- once, closing the player and pressing it again would start over instead of
+--- closing the mark.
+local function entry_edits(entry)
   local out = {}
-  local stored = current_segment()
-  if stored then
-    for slot, pair in pairs(stored) do
-      if type(pair) == 'table' and tonumber(pair['start']) and tonumber(pair['end']) then
-        out[slot] = { start = tonumber(pair['start']), ['end'] = tonumber(pair['end']) }
+  if type(entry) ~= 'table' then
+    return out
+  end
+  local edits = entry.edits
+  if type(edits) == 'table' then
+    for _, edit in ipairs(edits) do
+      if type(edit) == 'table' then
+        local finish = tonumber(edit['end'])
+        local start = tonumber(edit.start)
+        if start and (not finish or finish > start) then
+          out[#out + 1] = {
+            start = start,
+            ['end'] = finish,
+            action = normalize_action(edit.action),
+            slot = edit.slot,
+          }
+        end
+      end
+    end
+    return out
+  end
+  for _, slot in ipairs({ 'intro', 'outro' }) do
+    local pair = entry[slot]
+    if type(pair) == 'table' then
+      local start = tonumber(pair['start'])
+      local finish = tonumber(pair['end'])
+      if start and (not finish or finish > start) then
+        out[#out + 1] = {
+          start = start,
+          ['end'] = finish,
+          action = DEFAULT_ACTION,
+          slot = slot,
+        }
       end
     end
   end
-  for _, chapter in ipairs(state.chapters) do
+  return out
+end
+
+local function sort_edits(list)
+  table.sort(list, function(a, b)
+    return a.start < b.start
+  end)
+  return list
+end
+
+--- Effective edits are recomputed whenever a mark, a chapter or the file
+--- changes, not on every tick: the playhead observer runs dozens of times a
+--- second and the answer only depends on state that rarely moves.
+local EDIT_CACHE = nil
+
+local function invalidate_edits()
+  EDIT_CACHE = nil
+end
+
+local function is_complete(edit)
+  return type(edit) == 'table' and tonumber(edit['end']) ~= nil and edit['end'] > edit.start
+end
+
+--- The stored record for the current file, migrating a v1 key if it exists.
+local function segment_entry()
+  local key = path_key()
+  if key == '' then
+    return nil, nil, nil
+  end
+  local all = load_segments()
+  local entry = all[key]
+  if type(entry) == 'table' then
+    return entry, key, all
+  end
+  -- v1 stored marks under the bare file name. Adopt the record once, then every
+  -- later read finds it under the full path.
+  local name = path_name()
+  for _, legacy in ipairs({ name, (name or ''):lower() }) do
+    if legacy ~= '' and legacy ~= key and type(all[legacy]) == 'table' then
+      local adopted = all[legacy]
+      all[legacy] = nil
+      all[key] = adopted
+      SEG_CACHE = all
+      save_segments()
+      return adopted, key, all
+    end
+  end
+  return nil, key, all
+end
+
+--- Edit list of the current file plus a writer that persists it.
+---
+--- Returning `(edits, commit)` keeps every mutation on one path: callers push to
+--- `edits` and call `commit()`, which normalises the record to the v2 shape so a
+--- migrated file never keeps the old layout around.
+local function editable_segments()
+  local entry, key, all = segment_entry()
+  if not key then
+    return nil, nil
+  end
+  local edits = entry_edits(entry)
+  local function commit()
+    local packed = {}
+    for _, edit in ipairs(edits) do
+      packed[#packed + 1] = {
+        start = edit.start,
+        ['end'] = edit['end'],
+        action = edit.action or DEFAULT_ACTION,
+        slot = edit.slot,
+      }
+    end
+    all[key] = { edits = packed }
+    SEG_CACHE = all
+    save_segments()
+    invalidate_edits()
+  end
+  return edits, commit
+end
+
+--- Edits a chapter list implies: a chapter says where a segment starts and the
+--- following chapter says where it ends.
+local function chapter_edits()
+  local out = {}
+  local chapters = state.chapters
+  for _, chapter in ipairs(chapters) do
     local slot = classify_chapter(chapter.title)
-    if slot and not out[slot] and chapter.time then
-      -- A chapter marker says where the segment starts; it ends where the
-      -- following chapter starts.
+    if slot and chapter.time then
       local next_time = nil
-      for _, other in ipairs(state.chapters) do
+      for _, other in ipairs(chapters) do
         if other.time and other.time > chapter.time + 1 then
           if not next_time or other.time < next_time then
             next_time = other.time
@@ -655,11 +798,52 @@ local function effective_segments()
         end
       end
       if next_time then
-        out[slot] = { start = chapter.time, ['end'] = next_time }
+        out[#out + 1] = {
+          start = chapter.time,
+          ['end'] = next_time,
+          action = DEFAULT_ACTION,
+          slot = slot,
+          from_chapter = true,
+        }
       end
     end
   end
   return out
+end
+
+--- What the player should honour right now, sorted by start.
+---
+--- A manual mark wins over a chapter in the same region — the user looked at the
+--- picture and decided, the chapter title is only a guess.
+local function effective_edits()
+  if EDIT_CACHE then
+    return EDIT_CACHE
+  end
+  local entry = segment_entry()
+  local stored = {}
+  for _, edit in ipairs(entry_edits(entry)) do
+    if is_complete(edit) then
+      stored[#stored + 1] = edit
+    end
+  end
+  local out = {}
+  for _, edit in ipairs(stored) do
+    out[#out + 1] = edit
+  end
+  for _, edit in ipairs(chapter_edits()) do
+    local overlaps = false
+    for _, other in ipairs(stored) do
+      if edit.start < other['end'] and other.start < edit['end'] then
+        overlaps = true
+        break
+      end
+    end
+    if not overlaps then
+      out[#out + 1] = edit
+    end
+  end
+  EDIT_CACHE = sort_edits(out)
+  return EDIT_CACHE
 end
 
 -- ==== ACTIONS ==============================================================
@@ -779,44 +963,135 @@ local function cycle_loop()
   end
 end
 
-local function mark_segment()
-  local stored = current_segment() or {}
-  local intro = stored['intro']
+--- Marks a boundary in the current file: start → end → cleared.
+---
+--- Three presses walk one slot, which is why a half mark is persisted instead of
+--- being thrown away. Two slots exist because the two ends of an episode are
+--- separate decisions; `intro` keeps the Alt+N it has always had.
+local function mark_segment(slot)
+  slot = slot or 'intro'
+  local label = (slot == 'outro') and '片尾' or '片头'
+  local shortcut = (slot == 'outro') and 'Alt+E' or 'Alt+N'
+  local edits, commit = editable_segments()
+  if not edits then
+    toast('当前文件没有可保存的路径，标记未保存', 3)
+    return
+  end
+  local index, existing = nil, nil
+  for i, edit in ipairs(edits) do
+    if edit.slot == slot then
+      index, existing = i, edit
+      break
+    end
+  end
   local pos = state.position
-  if not intro or not tonumber(intro['start']) then
-    set_segment('intro', pos, nil)
-    toast('片头起点已标记 ' .. fmt_time(pos) .. '，再按 Alt+N 标记终点')
-  elseif not tonumber(intro['end']) then
-    if pos <= tonumber(intro['start']) then
+  if not existing then
+    edits[#edits + 1] = {
+      start = pos,
+      ['end'] = nil,
+      action = DEFAULT_ACTION,
+      slot = slot,
+    }
+    commit()
+    toast(string.format('%s起点 %s，再按 %s 标记终点', label, fmt_time(pos), shortcut))
+  elseif not is_complete(existing) then
+    if pos <= existing.start + 0.5 then
       toast('终点必须在起点之后')
       return
     end
-    set_segment('intro', tonumber(intro['start']), pos)
-    toast(string.format('片头 %s – %s 已保存', fmt_time(intro['start']), fmt_time(pos)))
+    existing['end'] = pos
+    commit()
+    toast(string.format('%s %s – %s 已保存', label, fmt_time(existing.start), fmt_time(pos)))
   else
-    clear_segment('intro')
-    toast('片头标记已清除')
+    table.remove(edits, index)
+    commit()
+    toast(label .. '标记已清除')
   end
 end
 
-local function maybe_skip(opening)
-  local enabled = mp.get_property('user-data/player/skip-intro') == 'yes'
-  if not enabled then
+--- How a slot reads in the menu: empty, half-marked, or a saved span.
+local function mark_label(slot)
+  local entry = segment_entry()
+  for _, edit in ipairs(entry_edits(entry)) do
+    if edit.slot == slot then
+      if is_complete(edit) then
+        return fmt_time(edit.start) .. ' – ' .. fmt_time(edit['end'])
+      end
+      return '起点 ' .. fmt_time(edit.start)
+    end
+  end
+  return '无'
+end
+
+-- Playback-time consequences of the edits. `cut_seen` exists so the toast for a
+-- skip is emitted once per region instead of on every rewind through it.
+local cut_seen = {}
+local muted_by_edits = false
+local mute_was_on = false
+
+local function release_edit_mute()
+  if not muted_by_edits then
     return
   end
-  local seg = effective_segments()['intro']
-  if not seg then
+  muted_by_edits = false
+  -- Never un-mute a file the viewer had already silenced themselves.
+  if not mute_was_on then
+    mp.set_property('mute', 'no')
+  end
+  mute_was_on = false
+end
+
+--- Applies cuts and mutes to the playhead.
+---
+--- Runs from the time-pos observer, so it covers both playback drifting into a
+--- region and a seek landing inside one — those are the same event as far as a
+--- cut is concerned. Gated on the preference the UI exposes: turning skipping
+--- off must leave the file untouched, mutes included.
+local function apply_edits()
+  if mp.get_property('user-data/player/skip-intro') ~= 'yes' then
+    release_edit_mute()
     return
   end
   local pos = state.position
-  if pos > seg['end'] - 1.5 then
+  local active = nil
+  for _, edit in ipairs(effective_edits()) do
+    if edit.start > pos then
+      break
+    end
+    if pos < edit['end'] then
+      active = edit
+    end
+  end
+  if not active then
+    release_edit_mute()
     return
   end
-  if pos < seg['start'] - 1 then
+  if active.action == DEFAULT_ACTION then
+    release_edit_mute()
+    -- Leave the last fraction of a second alone: a seek that lands one keyframe
+    -- short of the cut end would otherwise bounce back and forth forever.
+    if pos < active['end'] - 0.3 then
+      seek_abs(active['end'])
+      if not cut_seen[active.start] then
+        cut_seen[active.start] = true
+        toast('已跳过 ' .. fmt_time(active['end'] - active.start) .. ' 的剪辑段', 3)
+      end
+    end
     return
   end
-  seek_abs(seg['end'])
-  toast('已跳过片头 · ' .. fmt_time(seg['end']), 3)
+  if not muted_by_edits then
+    mute_was_on = mp.get_property('mute') == 'yes'
+    muted_by_edits = true
+    mp.set_property('mute', 'yes')
+    toast('静音片段 · ' .. fmt_time(active['end'] - active.start), 3)
+  end
+end
+
+--- Forgets per-file runtime state. Called when a new file is loaded, because
+--- the same timestamps on the next episode mean something else entirely.
+local function reset_edits()
+  cut_seen = {}
+  release_edit_mute()
 end
 
 -- ==== MENUS ================================================================
@@ -1150,11 +1425,19 @@ local function build_menu(id)
       end,
     })
     table.insert(rows, {
-      label = '片段标记（Alt+N）',
-      value = current_segment() and '已有标记' or '无',
+      label = '片头标记（Alt+N）',
+      value = mark_label('intro'),
       kind = 'item',
       act = function()
-        mark_segment()
+        mark_segment('intro')
+      end,
+    })
+    table.insert(rows, {
+      label = '片尾标记（Alt+E）',
+      value = mark_label('outro'),
+      kind = 'item',
+      act = function()
+        mark_segment('outro')
       end,
     })
     table.insert(rows, {
@@ -1433,15 +1716,15 @@ local function draw_progress(parts)
       end
     end
 
-    -- Intro / outro markers from chapters or manual marks.
-    local segments = effective_segments()
-    for _, seg in pairs(segments) do
-      local s = math.max(0, math.min(duration, seg['start']))
-      local e = math.max(0, math.min(duration, seg['end']))
+    -- Edits the player honours: cuts and mutes come from marks or chapters.
+    for _, edit in ipairs(effective_edits()) do
+      local s = math.max(0, math.min(duration, edit.start))
+      local e = math.max(0, math.min(duration, edit['end']))
       if e > s then
         local sx = x + w * (s / duration)
         local ex = x + w * (e / duration)
-        parts[#parts + 1] = rect(sx, top + thickness + 2, math.max(2, ex - sx), 3, 1.5, WHITE, 0x40)
+        local alpha = edit.action == DEFAULT_ACTION and 0x55 or 0x2E
+        parts[#parts + 1] = rect(sx, top + thickness + 2, math.max(2, ex - sx), 3, 1.5, WHITE, alpha)
       end
     end
   else
@@ -2130,10 +2413,12 @@ local function handle_key(raw)
     cycle_loop()
   elseif name == 'n' then
     if alt then
-      mark_segment()
+      mark_segment('intro')
     else
       command('playlist-next', 'force')
     end
+  elseif name == 'e' and alt then
+    mark_segment('outro')
   elseif name == 'o' and alt then
     -- Flutter owns the file dialog; the OSD cannot open one.
     seq = seq + 1
@@ -2194,6 +2479,7 @@ local BINDINGS = {
   { 'F7', 'f7' }, { 'F8', 'f8' }, { 'F9', 'f9' },
   { 'F6', 'f6' }, { 'F10', 'f10' }, { 'F11', 'f11' },
   { 'Alt+n', 'alt+n' },
+  { 'Alt+e', 'alt+e' },
   { 'Alt+o', 'alt+o' },
   { '1', '1' }, { '2', '2' }, { '3', '3' }, { '4', '4' }, { '5', '5' },
   { '6', '6' }, { '7', '7' }, { '8', '8' }, { '9', '9' },
@@ -2637,16 +2923,10 @@ end
 mp.observe_property('time-pos', 'number', function(_, value)
   state.position = tonumber(value) or 0
   mark_dirty()
-  -- Auto-skip the ending once we drift into it. Guarded so it fires at most
-  -- once per file and never fights a deliberate rewind.
-  if not outro_skipped and mp.get_property('user-data/player/skip-intro') == 'yes' then
-    local seg = effective_segments()['outro']
-    if seg and state.position > seg['start'] - 1.5 and state.position < seg['end'] - 1 then
-      outro_skipped = true
-      seek_abs(seg['end'])
-      toast('已跳过片尾', 3)
-    end
-  end
+  -- Cuts and mutes are evaluated here rather than on a timer: this fires for
+  -- playback progress *and* for seeks, which are the only two ways the playhead
+  -- can arrive inside a marked region.
+  apply_edits()
 end)
 
 mp.observe_property('duration', 'number', function(_, value)
@@ -2685,6 +2965,7 @@ end)
 
 mp.observe_property('chapter-list', 'native', function(_, value)
   state.chapters = type(value) == 'table' and value or {}
+  invalidate_edits()
   mark_dirty()
   refresh_menu()
 end)
@@ -2809,12 +3090,16 @@ mp.register_event('file-loaded', function()
   state.stats = false
   state.menu = nil
   state.help = false
-  outro_skipped = false
+  invalidate_edits()
+  reset_edits()
   mark_dirty()
   render()
   schedule_hide()
+  -- The path is only authoritative once mpv has resolved it; a mark made before
+  -- the first frame would otherwise be filed under the previous episode's key.
   mp.add_timeout(0.8, function()
-    maybe_skip(true)
+    invalidate_edits()
+    apply_edits()
   end)
 end)
 
