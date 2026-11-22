@@ -68,6 +68,10 @@ class _ShellPageState extends State<ShellPage> {
   /// the dock stays up while a panel is open — that is the whole point.
   CcPanelId? _ccPanel;
 
+  /// 铃铛下拉的简要通知浮层。瞥一眼用的，不打已读；完整列表仍在
+  /// 控制中心-通知面板，浮层里的「查看全部」负责跳过去。
+  bool _noticePopup = false;
+
   /// Mirrors the window state so the power panel can label its toggle.
   bool _fullscreen = false;
 
@@ -197,6 +201,7 @@ class _ShellPageState extends State<ShellPage> {
     if (_ccOpen) 'dock',
     if (_ccPanel != null) 'panel',
     if (_searchOpen) 'search',
+    if (_noticePopup) 'notice-popup',
   ];
 
   bool _onBack() {
@@ -208,6 +213,8 @@ class _ShellPageState extends State<ShellPage> {
     final String top = stack.last;
     setState(() {
       switch (top) {
+        case 'notice-popup':
+          _noticePopup = false;
         case 'search':
           _searchOpen = false;
         case 'panel':
@@ -680,15 +687,49 @@ class _ShellPageState extends State<ShellPage> {
                           onToggleMaximize: () => unawaited(_toggleMaximize()),
                           onClose: () => unawaited(_quitApp()),
                           maximized: _maximized,
-                          // The bell is the shortcut into the panel the dock
-                          // already has; it does not need its own surface.
-                          onNotifications: () =>
-                              _togglePanel(CcPanelId.notifications),
+                          // 铃铛：下拉简要通知浮层，不打已读；完整列表走
+                          // 控制中心-通知面板，浮层里有跳转入口。
+                          onNotifications: () => setState(() {
+                            _noticePopup = !_noticePopup;
+                            if (_noticePopup && _ccPanel != null) {
+                              _ccPanel = null;
+                            }
+                          }),
                           notificationPanelOpen:
-                              _ccPanel == CcPanelId.notifications,
+                              _ccPanel == CcPanelId.notifications ||
+                                  _noticePopup,
                         ),
                       ),
                     ),
+                    if (_noticePopup)
+                      Positioned.fill(
+                        child: Stack(
+                          children: <Widget>[
+                            // 点击浮层外任意处关闭；挡住下面内容是刻意的，
+                            // 浮层是一次交互内的临时面。
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => setState(() => _noticePopup = false),
+                              child: const SizedBox.expand(),
+                            ),
+                            Positioned(
+                              right: 236,
+                              top: 132,
+                              child: AnimatedBuilder(
+                                animation: NoticeCenter.instance,
+                                builder: (BuildContext context, Widget? _) =>
+                                    NoticeBriefPopup(
+                                  notices: NoticeCenter.instance.notices,
+                                  onViewAll: () => setState(() {
+                                    _noticePopup = false;
+                                    _togglePanel(CcPanelId.notifications);
+                                  }),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (_searchOpen)
                       Positioned.fill(
                         child: SearchOverlay(

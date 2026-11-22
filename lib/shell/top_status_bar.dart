@@ -495,3 +495,184 @@ class _SourceOptionRow extends StatelessWidget {
     );
   }
 }
+
+/// 铃铛下的简要通知浮层：最近几条的标题与相对时间，外加「查看全部」
+/// 跳进控制中心-通知面板。只瞥一眼，不标已读——已读仍由完整面板处理。
+class NoticeBriefPopup extends StatelessWidget {
+  const NoticeBriefPopup({
+    super.key,
+    required this.notices,
+    required this.onViewAll,
+  });
+
+  final List<Notice> notices;
+  final VoidCallback onViewAll;
+
+  static const int _maxRows = 5;
+
+  String _timeOf(Notice notice) {
+    final Duration age = DateTime.now().difference(notice.createdAt);
+    if (age.inMinutes < 1) {
+      return '刚刚';
+    }
+    if (age.inMinutes < 60) {
+      return '${age.inMinutes} 分钟前';
+    }
+    if (age.inHours < 24) {
+      return '${age.inHours} 小时前';
+    }
+    return '${notice.createdAt.month} 月 ${notice.createdAt.day} 日';
+  }
+
+  Color _kindColor(NoticeKind kind) {
+    switch (kind) {
+      case NoticeKind.success:
+        return const Color(0xFF67C23A);
+      case NoticeKind.warning:
+        return PlexColor.amber;
+      case NoticeKind.error:
+        return const Color(0xFFF56C6C);
+      case NoticeKind.info:
+        return PlexColor.textDim;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Notice> rows = notices.take(_maxRows).toList(growable: false);
+    return Container(
+      width: 480,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xF21C1C1F),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: PlexColor.line),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x99000000),
+            blurRadius: 24,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          if (rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18, vertical: 22),
+              child: Text(
+                '暂无通知',
+                style: TextStyle(fontSize: 15, color: PlexColor.textDim),
+              ),
+            )
+          else
+            for (final Notice notice in rows)
+              TvFocusable(
+                key: ValueKey<String>('${notice.id}-${notice.createdAt.millisecondsSinceEpoch}'),
+                radius: 6,
+                showRing: false,
+                // 任何一条的落点都是完整面板：浮层是预览，不是操作面。
+                onSelect: onViewAll,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      Container(
+                        width: 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: notice.active
+                              ? PlexColor.amber
+                              : _kindColor(notice.kind),
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              notice.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                                color: notice.read
+                                    ? PlexColor.textDim
+                                    : PlexColor.text,
+                              ),
+                            ),
+                            if (notice.body.isNotEmpty)
+                              Text(
+                                notice.body,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: PlexColor.textDim,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _timeOf(notice),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: PlexColor.textDim,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          if (notices.length > _maxRows)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+              child: Text(
+                '还有 ${notices.length - _maxRows} 条…',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: PlexColor.textDim,
+                ),
+              ),
+            ),
+          TvFocusable(
+            radius: 6,
+            showRing: false,
+            onSelect: onViewAll,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              child: Row(
+                children: <Widget>[
+                  Text(
+                    '查看全部',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: PlexColor.text,
+                    ),
+                  ),
+                  Spacer(),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: PlexColor.textDim,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
