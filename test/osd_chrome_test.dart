@@ -120,6 +120,75 @@ void main() {
       expect(scrubbing.scrubbing, 0.7);
     });
   });
+  group('OsdMenu mirroring', () {
+    // The wire format Lua pushes on `player-event`: 1-based index, rows as
+    // plain maps. These cases pin the shift in both directions, because an
+    // off-by-one here clicks the row next to the one the user aimed at.
+    Map<String, Object?> event({int index = 3}) => <String, Object?>{
+          'type': 'menu',
+          'open': true,
+          'title': '音轨',
+          'index': index,
+          'rows': <Object?>[
+            <Object?, Object?>{'kind': 'header', 'label': '音轨'},
+            <Object?, Object?>{'kind': 'item', 'label': 'Track 1', 'value': 'chi', 'active': true},
+            <Object?, Object?>{'kind': 'adjust', 'label': '同步', 'value': '0.0s'},
+            <Object?, Object?>{'kind': 'item', 'label': 'Track 2'},
+          ],
+        };
+
+    test('fromEvent shifts the 1-based Lua index to 0-based', () {
+      final OsdMenu? menu = OsdMenu.fromEvent(event());
+      expect(menu, isNotNull);
+      expect(menu!.title, '音轨');
+      expect(menu.index, 2); // Lua's row 3 → row 2 here.
+      expect(menu.rows, hasLength(4));
+      expect(menu.rows[0].isHeader, isTrue);
+      expect(menu.rows[1].active, isTrue);
+      expect(menu.rows[2].value, '0.0s');
+    });
+
+    test('a closed or malformed event does not fabricate a panel', () {
+      // Closed arrives as open:false with no rows — that is null, not an
+      // empty menu that would paint a bare frame forever.
+      expect(OsdMenu.fromEvent(<Object?, Object?>{'open': false}), isNull);
+      // Missing rows: not a well-formed open menu.
+      expect(OsdMenu.fromEvent(<Object?, Object?>{'open': true}), isNull);
+      // A row that is not a map is skipped, not a crash.
+      final OsdMenu? menu = OsdMenu.fromEvent(<Object?, Object?>{
+        'open': true,
+        'index': 1,
+        'rows': <Object?>['garbage'],
+      });
+      expect(menu, isNotNull);
+      expect(menu!.rows, isEmpty);
+    });
+
+    test('menuZones keep real row indices and skip headers', () {
+      final OsdMenu menu = OsdMenu.fromEvent(event())!;
+      final List<OsdZone> rows = OsdChrome.menuZones(zonelessStage(), menu);
+      // Headers are drawn but not clickable; the three non-header rows are.
+      expect(rows, hasLength(3));
+      expect(
+        rows.map((OsdZone zone) => zone.id),
+        <String>['menurow:1', 'menurow:2', 'menurow:3'],
+      );
+      // Clicking the second zone must name Lua's row 3 after the +1 shift —
+      // the same row the event said was selected.
+      final int clicked = int.parse(rows[1].id.substring(OsdChrome.menuRowZone.length)) + 1;
+      expect(clicked, 3);
+    });
+
+    test('the selected row lands inside its own clickable rect', () {
+      final OsdMenu menu = OsdMenu.fromEvent(event())!;
+      final List<OsdZone> rows = OsdChrome.menuZones(zonelessStage(), menu);
+      final OsdZone selected = rows.firstWhere(
+        (OsdZone zone) => zone.id == 'menurow:${menu.index}',
+      );
+      expect(selected.rect.top, greaterThan(0));
+      expect(selected.rect.bottom, lessThan(zonelessStage().height));
+    });
+  });
 }
 
 ui.Size zonelessStage() => const ui.Size(1920, 1080);

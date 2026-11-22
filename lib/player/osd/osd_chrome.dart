@@ -76,6 +76,48 @@ class OsdMenu {
   final List<OsdMenuRow> rows;
 
   int get selected => rows.isEmpty ? 0 : index.clamp(0, rows.length - 1).toInt();
+
+  /// Reads the `menu` event the Lua OSD pushes over `player-event`.
+  ///
+  /// Two things differ from the wire format and are easy to get wrong:
+  ///
+  /// * `index` is **1-based** on the Lua side (`ipairs` order) and 0-based
+  ///   here, so it is shifted on the way in and shifted back when a click is
+  ///   forwarded.
+  /// * a closed panel arrives as `open: false` with no rows at all, which is
+  ///   this method's null. Treating that as an empty menu would leave an empty
+  ///   panel frame on screen forever.
+  ///
+  /// Returns null for anything that is not a well-formed open menu, so a
+  /// half-written event leaves the previous panel alone instead of clearing it.
+  static OsdMenu? fromEvent(Map<Object?, Object?> event) {
+    if (event['open'] != true) {
+      return null;
+    }
+    final Object? rawRows = event['rows'];
+    if (rawRows is! List) {
+      return null;
+    }
+    final List<OsdMenuRow> parsed = <OsdMenuRow>[];
+    for (final Object? raw in rawRows) {
+      if (raw is! Map) {
+        continue;
+      }
+      parsed.add(OsdMenuRow(
+        kind: '${raw['kind'] ?? 'item'}',
+        label: '${raw['label'] ?? ''}',
+        value: '${raw['value'] ?? ''}',
+        active: raw['active'] == true,
+      ));
+    }
+    final Object? rawIndex = event['index'];
+    final int index = rawIndex is num ? rawIndex.toInt() : 1;
+    return OsdMenu(
+      title: '${event['title'] ?? ''}',
+      index: index - 1,
+      rows: parsed,
+    );
+  }
 }
 
 /// One chapter mark: a start time and the name mpv reports for it.
@@ -267,6 +309,10 @@ abstract final class OsdChrome {
     );
   }
 
+  /// Zone id prefix for a visible popup row. The suffix is a 0-based row
+  /// index into [OsdMenu.rows]; callers translating it back to Lua add one.
+  static const String menuRowZone = 'menurow:';
+
   /// Clickable row rectangles, keyed `menurow:<index>` with a 0-based index.
   static List<OsdZone> menuZones(ui.Size size, OsdMenu menu) {
     if (menu.rows.isEmpty) {
@@ -283,7 +329,7 @@ abstract final class OsdChrome {
       final double h = (row.isHeader ? menuHeaderH : menuRowH) * sy;
       if (!row.isHeader) {
         out.add(OsdZone(
-          'menurow:$i',
+          '$menuRowZone$i',
           ui.Rect.fromLTWH(panel.left + 12 * sx, y, panel.width - 24 * sx, h),
         ));
       }

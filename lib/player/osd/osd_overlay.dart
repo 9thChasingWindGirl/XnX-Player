@@ -17,13 +17,16 @@ import '../../playback/mpv/osd_layer.dart';
 /// * paint  — [OsdChrome] rasterizes a frame into the layered window. The
 ///   window is composited by DWM as 8-bit SDR, so HDR passthrough cannot
 ///   reach it; that is the entire reason this layer exists.
-/// * input  — the window's hit-test hands Dart only the seek strip and
+/// * input  — the window's hit-test hands Dart only the chrome band and
 ///   forwards every other pointer position to the video window below, where
-///   the Lua side keeps handling its menus and pointer forwarding unchanged.
+///   the Lua side keeps handling its own pointer forwarding.
 ///
-/// The Lua OSD stays alive for menus and toasts (switched by the
-/// `osd-engine` user-data flag); it no longer paints the bottom chrome, so
-/// the two engines never draw the same rectangle.
+/// The Lua OSD stays alive as the *model* — key bindings, menus, toasts — and
+/// is switched by the `osd-engine` user-data flag. While this layer owns the
+/// band it paints the popup menu too, because Lua deliberately stops drawing
+/// it (two panels, two hit maps, one screen). Lua pushes the rows as data
+/// (`type: 'menu'` on `player-event`) and still decides what a row does: the
+/// action behind a row is a Lua closure and cannot cross the boundary.
 class OsdOverlay {
   OsdOverlay._(this._layer, this._player);
 
@@ -41,6 +44,19 @@ class OsdOverlay {
 
   String? _toast;
   DateTime? _toastUntil;
+
+  /// The popup menu Lua last pushed, or null when none is open.
+  ///
+  /// Without this the menu is not merely unpolished but unreachable: Lua's
+  /// `dart_chrome` branch skips `draw_menu`, so a dropped `menu` event leaves
+  /// the user pressing the menu key at a panel nobody draws. That was the
+  /// state of things before this field existed.
+  OsdMenu? _menu;
+
+  /// Row under the pointer, 0-based. Local hover only — moving the mouse must
+  /// not move Lua's selection, or a drifting pointer would re-run the arrow-key
+  /// logic and walk the list by itself.
+  int? _menuHover;
 
   bool _paintScheduled = false;
   bool _visible = false;
@@ -294,6 +310,8 @@ class OsdOverlay {
       scrubbing: _scrubbing,
       hoverSeek: _hoverSeek,
       toast: toast,
+      menu: _menu,
+      menuHover: _menuHover,
     );
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();
@@ -366,23 +384,21 @@ class OsdOverlay {
 
   /// The chrome control under a normalized pointer position, or null.
   ///
-  /// `seek`, `play`, `back10`, `fwd10` or `menu:<id>`. The rectangles come from
-  /// the same list the paint pass uses, so a drawn button is a working button.
+  /// `seek`, `play`, `back10`, `fwd10`, `menu:<id>` or `menurow:<index>`. The
+  /// rectangles come from the same list the paint pass uses, so a drawn button
+  /// is a working button — the menu rows included.
   String? actionAt(double nx, double ny) {
     if (!_visible || !ownsChrome || _size.isEmpty) {
       return null;
     }
     final ui.Offset point = ui.Offset(nx * _size.width, ny * _size.height);
-    for (final OsdZone zone in OsdChrome.zones(_size)) {
+    for (final OsdZone zone in OsdChrome.zones(_size, menu: _menu)) {
       if (zone.rect.contains(point)) {
         return zone.id;
       }
     }
     return null;
   }
-
-  /// Whether a normalized pointer position lands on the seek strip.
-  bool inSeekZone(double nx, double ny) => actionAt(nx, ny) == 'seek';
 
   /// A window-normalized x mapped onto 0..1 along the painted seek line.
   ///
@@ -406,6 +422,62 @@ class OsdOverlay {
       _hoverSeek = hover;
       _schedulePaint();
     }
+  }
+
+  /// Whether a Lua popup panel is currently mirrored here. While true, the
+  /// wheel over the panel must scroll rows, not change volume.
+  bool get hasMenu => _menu != null;
+
+  /// Whether a normalized pointer position lands on the drawn menu panel.
+  bool inMenuZone(double nx, double ny) {
+    final OsdMenu? menu = _menu;
+    if (menu == null || _size.isEmpty) {
+      return false;
+    }
+    return OsdChrome.menuPanel(
+      _size,
+      menu,
+    ).contains(ui.Offset(nx * _size.width, ny * _size.height));
+  }
+
+  /// Local hover highlight for a menu row (0-based), or null for none.
+  ///
+  /// Deliberately *not* forwarded as `menu-op move`: the Lua selection must
+  /// stay where the keyboard left it. A pointer drifting across the panel on
+  /// its way elsewhere would otherwise rewrite Lua's selection index behind
+  /// the user's back, and the next arrow press would jump to wherever the
+  /// cursor last hovered. Clicks carry their own index, so hover only picks
+  /// the row that gets painted bright.
+  void setMenuHover(int? index) {
+    if (_menuHover != index) {
+      _menuHover = index;
+      _schedulePaint();
+    }
+  }
+
+  /// Consumes one `type: 'menu'` event pushed by the Lua OSD.
+  ///
+  /// Lua stays the model — it owns the row actions — and mirrors its panel
+  /// here as data whenever the Dart chrome owns the bottom band, because in
+  /// that mode Lua's own `draw_menu` is skipped and without this no panel
+  /// would be drawn at all. `open: false` closes; a malformed packet is
+  /// ignored so a half-written event cannot blank a panel that is fine.
+  void handleMenuEvent(Map<Object?, Object?> payload) {
+    if (payload['open'] == false) {
+      if (_menu != null) {
+        _menu = null;
+        _menuHover = null;
+        _schedulePaint();
+      }
+      return;
+    }
+    final OsdMenu? menu = OsdMenu.fromEvent(payload);
+    if (menu == null) {
+      return;
+    }
+    _menu = menu;
+    _menuHover = null;
+    _schedulePaint();
   }
 
   /// Starts or continues a seek drag at normalized fraction [t] (0..1). The

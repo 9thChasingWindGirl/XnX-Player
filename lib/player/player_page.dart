@@ -24,6 +24,7 @@ import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
 import '../playback/mpv/mpv_window.dart';
+import 'osd/osd_chrome.dart';
 import 'osd/osd_overlay.dart';
 import '../playback/mpv/video_surface.dart';
 import '../ui/core/tv_scale.dart';
@@ -402,6 +403,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           _escFallback?.cancel();
           if (payload['type'] == 'chrome') {
             _chromeReply?.call(payload['mode'] == 'window');
+          } else if (payload['type'] == 'menu') {
+            // Lua mirrors its popup here as data; in chrome-window mode it
+            // does not draw the panel itself, so dropping this event would
+            // leave menus openable but invisible.
+            _osd?.handleMenuEvent(payload);
           }
         }
         ..attach();
@@ -1101,6 +1107,18 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _mouseTimer = Timer(_mouseInterval, _flushMove);
   }
 
+  /// Parses a `menurow:<index>` zone id into its 0-based row, or null.
+  ///
+  /// Also false-matches `menu:<id>` correctly: the two prefixes share no
+  /// characters beyond `menu`, and only the row prefix carries the colon
+  /// digits this helper is after.
+  int? _menuRowIndex(String? action) {
+    if (action == null || !action.startsWith(OsdChrome.menuRowZone)) {
+      return null;
+    }
+    return int.tryParse(action.substring(OsdChrome.menuRowZone.length));
+  }
+
   void _flushMove() {
     final Offset? unit = _pendingMouse;
     _pendingMouse = null;
@@ -1118,7 +1136,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         osd.scrub(osd.seekFraction(unit.dx));
         return;
       }
-      osd.setSeekHover(osd.inSeekZone(unit.dx, unit.dy));
+      final String? action = osd.actionAt(unit.dx, unit.dy);
+      osd.setSeekHover(action == 'seek');
+      osd.setMenuHover(_menuRowIndex(action));
     }
     _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
   }
@@ -1162,6 +1182,18 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 'cmd': 'menu',
                 'id': action.substring(5),
               });
+            } else if (action != null && action.startsWith(OsdChrome.menuRowZone)) {
+              // The row's meaning is a Lua closure and cannot cross the IPC
+              // boundary, so a click is a `choose` — Lua sets its selection to
+              // the row and runs it. Index is 1-based on the Lua side.
+              final int? row = _menuRowIndex(action);
+              if (row != null) {
+                player.sendScriptMessage(<String, Object?>{
+                  'cmd': 'menu-op',
+                  'op': 'choose',
+                  'index': row + 1,
+                });
+              }
             }
             break;
         }
@@ -1196,6 +1228,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       osd
         ..poke()
         ..adjustVolume(dy < 0 ? 5 : -5);
+      return;
+    }
+    if (osd != null && osd.hasMenu && osd.inMenuZone(unit.dx, unit.dy)) {
+      // A notch scrolls the mirrored popup. The panel is not a chrome band
+      // zone, so without this branch the wheel would change volume while the
+      // menu is visibly open; Lua still owns the selection and re-pushes the
+      // panel with the new index.
+      osd.poke();
+      _player?.sendMouse(ev: 'wheel', nx: unit.dx, ny: unit.dy, delta: dy < 0 ? 1 : -1);
       return;
     }
     // One notch per message regardless of the platform's scroll step; the Lua
