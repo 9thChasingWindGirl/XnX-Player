@@ -43,36 +43,6 @@ class _SettingsPageState extends State<SettingsPage> {
   UpdateCandidate? _pending;
   final UpdateService _updater = UpdateService();
 
-  /// Rollback targets, read once. `installedVersions()` walks a directory on
-  /// disk and this page rebuilds every frame (MotionBuilder), so calling it
-  /// from `build` was both slow and — because the row ignored left/right — a
-  /// control that showed a version you could not actually pick.
-  List<String> _rollbackVersions = const <String>[];
-  int _rollbackIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _refreshRollbackVersions();
-  }
-
-  void _refreshRollbackVersions() {
-    final List<String> versions = _updater.installedVersions();
-    _rollbackVersions = versions;
-    if (_rollbackIndex >= versions.length) {
-      _rollbackIndex = 0;
-    }
-  }
-
-  void _cycleRollback(int direction) {
-    if (_rollbackVersions.isEmpty) {
-      return;
-    }
-    final int next =
-        (_rollbackIndex + direction + _rollbackVersions.length) % _rollbackVersions.length;
-    setState(() => _rollbackIndex = next);
-  }
-
   void _cycleProxy() {
     const List<String> modes = <String>['none', 'system', 'custom'];
     final int index = modes.indexOf(_store.prefs.networkProxyMode);
@@ -407,47 +377,55 @@ class _SettingsPageState extends State<SettingsPage> {
   static String _megabytes(int bytes) =>
       '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 
-  Future<void> _rollBackTo(String version) async {
+  /// 版本回退：从当前渠道的发布服务器列出历史版本，选中的走与更新完全
+  /// 相同的确认、下载与覆盖安装路径。旧实现读本机保留的目录，实际几乎
+  /// 永远为空——服务器上的 Release 列表才是可靠的版本来源。
+  Future<void> _pickRollback() async {
     if (_updater.isSnapshotLaunch) {
       setState(() {
         _updateStatus = '当前从更新备份目录启动，无法回退；请从主目录启动。';
       });
       return;
     }
-    final String target = _updater.installedVersions().firstWhere(
-          (String v) => v == version,
-          orElse: () => '',
-        );
-    if (target.isEmpty) {
-      return;
-    }
-    // A rollback exits and restarts too, so it deserves the same confirmation.
-    final _UpdateOptions? options = await showDialog<_UpdateOptions>(
-      context: context,
-      builder: (BuildContext context) => _UpdateConfirmDialog(
-        version: target,
-        portable: _updater.isPortable,
-        installed: false,
-        hasInstaller: false,
-        dataDir: AppPaths.dataDir,
-        rollback: true,
-      ),
-    );
-    if (options == null || !mounted) {
-      return;
-    }
     setState(() {
-      _updateStatus = '正在回退到 $version…程序即将重启';
+      _updateStatus = '正在获取 ${_channelLabel(_channel)} 历史版本…';
     });
     try {
-      final String payload = await _updater.prepareInstalled(target);
-      await _updater.apply(payload, keepUserData: options.keepData);
+      final List<UpdateCandidate> versions =
+          await _updater.fetchHistory(_channel);
+      if (!mounted) {
+        return;
+      }
+      if (versions.isEmpty) {
+        setState(() {
+          _updateStatus = '${_channelLabel(_channel)}：服务器上没有历史版本';
+        });
+        return;
+      }
+      final UpdateCandidate? picked = await showDialog<UpdateCandidate>(
+        context: context,
+        builder: (BuildContext context) => _RollbackPickerDialog(
+          versions: versions,
+          channel: _channelLabel(_channel),
+          current: S.appVersion,
+        ),
+      );
+      if (picked == null || !mounted) {
+        return;
+      }
+      setState(() {
+        _pending = picked;
+        _updateStatus = '已选择 ${picked.version}';
+      });
+      // Reuse the update row's install stage wholesale: same confirm dialog,
+      // same download progress, same apply-and-restart.
+      await _checkOrInstall();
     } on Object catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _updateStatus = '回退失败：$error';
+        _updateStatus = '获取历史版本失败：$error';
       });
     }
   }
@@ -670,16 +648,12 @@ class _SettingsPageState extends State<SettingsPage> {
                         value: _pending == null ? null : '待安装',
                         onSelect: () => unawaited(_checkOrInstall()),
                       ),
-                      if (_rollbackVersions.isNotEmpty)
-                        _Row(
-                          label: '版本回退',
-                          hint: '回退到本机已保留的旧版本，用户配置不受影响',
-                          value: _rollbackVersions[_rollbackIndex],
-                          onAdjust: _cycleRollback,
-                          onSelect: () => unawaited(
-                            _rollBackTo(_rollbackVersions[_rollbackIndex]),
-                          ),
-                        ),
+                      _Row(
+                        label: '版本回退',
+                        hint: '从 ${_channelLabel(_channel)} 渠道的发布服务器'
+                            '选择历史版本，下载后覆盖安装，用户配置不受影响',
+                        onSelect: () => unawaited(_pickRollback()),
+                      ),
                     ],
                   ),
                 ),
@@ -1594,6 +1568,163 @@ class _ProxyInputDialogState extends State<_ProxyInputDialog> {
                       onSelect: () => Navigator.of(context).pop(),
                     ),
                   ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 历史版本选择：列出当前渠道在发布服务器上的全部版本，新版本在前。
+/// 选中即返回该候选，走与更新相同的安装路径；当前运行中的版本标出来，
+/// 选它等于原地重装。
+class _RollbackPickerDialog extends StatefulWidget {
+  const _RollbackPickerDialog({
+    required this.versions,
+    required this.channel,
+    required this.current,
+  });
+
+  final List<UpdateCandidate> versions;
+  final String channel;
+  final String current;
+
+  @override
+  State<_RollbackPickerDialog> createState() => _RollbackPickerDialogState();
+}
+
+class _RollbackPickerDialogState extends State<_RollbackPickerDialog> {
+  InputSubscription? _inputSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _inputSub =
+        InputRouter.instance.subscribe(_onIntent, name: 'rollback-picker');
+  }
+
+  @override
+  void dispose() {
+    _inputSub?.cancel();
+    super.dispose();
+  }
+
+  bool _onIntent(InputIntent intent) {
+    if (intent.action != InputAction.back) {
+      return false;
+    }
+    Navigator.of(context).pop();
+    return true;
+  }
+
+  /// `2026-11-22T17:40:53Z` → `2026-11-22`。发布日期比完整时间戳可读。
+  String _dateOf(UpdateCandidate candidate) {
+    if (candidate.publishedAt.length >= 10) {
+      return candidate.publishedAt.substring(0, 10);
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double winW = MediaQuery.of(context).size.width;
+    final double winH = MediaQuery.of(context).size.height;
+    final double width = (winW - 48).clamp(320.0, 720.0);
+    return Center(
+      child: Material(
+        color: const Color(0xEE141821),
+        borderRadius: BorderRadius.circular(PsRadius.sheet),
+        child: Container(
+          width: width,
+          constraints: BoxConstraints(maxHeight: winH - 48),
+          padding: const EdgeInsets.all(40),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(PsRadius.sheet),
+            border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('版本回退', style: PsType.page.copyWith(fontSize: 36)),
+                const SizedBox(height: 8),
+                Text(
+                  '${widget.channel} 渠道 · 下载服务器上的历史版本，'
+                  '选中后下载并覆盖安装',
+                  style: PsType.micro.copyWith(
+                    fontSize: 16,
+                    color: PsColor.textFaint,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                for (final UpdateCandidate candidate in widget.versions)
+                  TvFocusable(
+                    key: ValueKey<String>(candidate.version),
+                    onSelect: () =>
+                        Navigator.of(context).pop(candidate),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 14,
+                      ),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        color: PsColor.text.withValues(alpha: 0.05),
+                        border: Border.all(
+                          color: candidate.version.trim() ==
+                                  widget.current.trim()
+                              ? PsColor.accent
+                              : PsColor.text.withValues(alpha: 0.14),
+                        ),
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  candidate.version,
+                                  style: PsType.meta.copyWith(
+                                    fontSize: 22,
+                                    color: PsColor.text,
+                                  ),
+                                ),
+                                if (_dateOf(candidate).isNotEmpty)
+                                  Text(
+                                    _dateOf(candidate),
+                                    style: PsType.micro.copyWith(
+                                      fontSize: 14,
+                                      color: PsColor.textFaint,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (candidate.version.trim() == widget.current.trim())
+                            Text(
+                              '当前版本',
+                              style: PsType.micro.copyWith(
+                                fontSize: 14,
+                                color: PsColor.accent,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                PsButton(
+                  label: '取消',
+                  width: 160,
+                  onSelect: () => Navigator.of(context).pop(),
                 ),
               ],
             ),

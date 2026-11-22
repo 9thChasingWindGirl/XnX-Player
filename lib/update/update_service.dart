@@ -98,6 +98,36 @@ class UpdateService {
     return pickRelease(parsed, channel);
   }
 
+  /// Every release that belongs to [channel], newest first — the list behind
+  /// the rollback picker. Same listing [fetchLatest] reads; only the filter
+  /// and the ordering differ. Versions without a portable zip are dropped:
+  /// an entry the app cannot download is noise in a picker.
+  Future<List<UpdateCandidate>> fetchHistory(UpdateChannel channel) async {
+    final List<dynamic> releases = await Http.getJsonList(
+      releasesUri,
+      headers: _apiHeaders,
+    );
+    final List<UpdateCandidate> parsed = <UpdateCandidate>[];
+    for (final Object? entry in releases) {
+      if (entry is! Map<String, dynamic>) {
+        continue;
+      }
+      final UpdateCandidate candidate = _releaseCandidate(entry);
+      if (candidate.assetUrl.isEmpty) {
+        continue;
+      }
+      if (!belongsToChannel(candidate.version, candidate.isPrerelease, channel)) {
+        continue;
+      }
+      parsed.add(candidate);
+    }
+    parsed.sort(
+      (UpdateCandidate a, UpdateCandidate b) =>
+          compareVersions(b.version, a.version),
+    );
+    return parsed;
+  }
+
   UpdateCandidate _releaseCandidate(Map<String, dynamic> release) {
     final String tag = release['tag_name'] as String? ?? '';
     String? zipUrl;
@@ -194,19 +224,6 @@ class UpdateService {
     final Directory? payload = _payloadDir(versionDir);
     if (payload == null) {
       throw StateError('更新包里没有可执行文件');
-    }
-    return payload.path;
-  }
-
-  /// Returns the payload directory of a previously prepared version, for
-  /// rollback. Same contract as [prepareInstall]; the version must already
-  /// exist under `updates/`.
-  Future<String> prepareInstalled(String version) async {
-    final String versionDir = '${_updateRoot()}'
-        '${Platform.pathSeparator}${_safeName(version)}';
-    final Directory? payload = _payloadDir(versionDir);
-    if (payload == null) {
-      throw StateError('该版本没有已解压的本地副本：$version');
     }
     return payload.path;
   }
@@ -421,22 +438,6 @@ Remove-Item -Force \$self
 
   /// Escapes a path for a single-quoted PowerShell literal.
   static String _ps(String value) => value.replaceAll("'", "''");
-
-  /// Versions that already have an extracted build on disk, newest first —
-  /// the rollback menu.
-  List<String> installedVersions() {
-    final Directory root = Directory(_updateRoot());
-    if (!root.existsSync()) {
-      return <String>[];
-    }
-    return root
-        .listSync()
-        .whereType<Directory>()
-        .where((Directory dir) => _payloadDir(dir.path) != null)
-        .map((Directory dir) => dir.uri.pathSegments.last)
-        .toList()
-      ..sort((String a, String b) => compareVersions(b, a));
-  }
 
   String _updateRoot() {
     final String install = File(Platform.resolvedExecutable).parent.path;
