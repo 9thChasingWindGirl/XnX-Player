@@ -134,16 +134,31 @@ abstract final class OsdChrome {
 
   static double _sx(ui.Size size) => size.width / designW;
 
-  static double _sy(ui.Size size) => size.height / designH;
+  /// Sizes (type, glyphs, control height, radii) use one scale, the horizontal
+  /// one. The old vertical scale squeezed every control into a thin strip when
+  /// the window was stretched wide-but-short: sy fell to a fraction of sx
+  /// while text kept a legibility floor, so labels overflowed their buttons.
+  /// On a 16:9 stage both scales are equal, so this changes nothing there.
+  static double _sy(ui.Size size) => _sx(size);
+
+  /// Y for the bottom band, anchored to the window's bottom edge.
+  ///
+  /// Design coordinates below are measured from the top of a 1920x1080 frame,
+  /// but the chrome lives in the bottom 380 of it. Anchoring that band to the
+  /// bottom keeps seek/transport/hint together at any window aspect ratio;
+  /// multiplying by a height-derived scale pushed them into each other.
+  /// Algebraically identical to `v * sy` when the window is 16:9.
+  static double _bottom(ui.Size size, double v) =>
+      size.height - (designH - v) * _sx(size);
 
   /// The seek line's rectangle — one source of truth for paint, hit testing and
   /// pointer-to-fraction conversion.
   static ui.Rect seekTrack(ui.Size size) {
     final double sx = _sx(size);
-    final double sy = _sy(size);
+    final double center = _bottom(size, barY);
     final double left = safeX * sx;
     final double right = math.max(left + 40, size.width - safeX * sx);
-    return ui.Rect.fromLTRB(left, (barY - 6) * sy, right, (barY + 6) * sy);
+    return ui.Rect.fromLTRB(left, center - 6 * sx, right, center + 6 * sx);
   }
 
   static double fractionAt(ui.Size size, double x) {
@@ -154,7 +169,7 @@ abstract final class OsdChrome {
   /// The seek strip, kept for the geometry tests and the wheel zone.
   static List<ui.Rect> hotZones(ui.Size size) {
     final ui.Rect track = seekTrack(size);
-    const double half = seekHitHeight / 2;
+    final double half = seekHitHeight * _sx(size) / 2;
     return <ui.Rect>[
       ui.Rect.fromLTRB(
         track.left,
@@ -172,12 +187,18 @@ abstract final class OsdChrome {
     final double sy = _sy(size);
     final List<OsdZone> out = <OsdZone>[];
     final ui.Rect track = seekTrack(size);
+    final double seekCenter = _bottom(size, barY);
     out.add(OsdZone(
       'seek',
-      ui.Rect.fromLTRB(track.left, (barY - 18) * sy, track.right, (barY + 18) * sy),
+      ui.Rect.fromLTRB(
+        track.left,
+        seekCenter - 18 * sy,
+        track.right,
+        seekCenter + 18 * sy,
+      ),
     ));
 
-    final double top = ctrlY * sy;
+    final double top = _bottom(size, ctrlY);
     final double height = ctrlH * sy;
     out.add(OsdZone('play', ui.Rect.fromLTWH(safeX * sx, top, 62 * sx, height)));
     out.add(OsdZone('back10', ui.Rect.fromLTWH((safeX + 68) * sx, top, 58 * sx, height)));
@@ -240,7 +261,7 @@ abstract final class OsdChrome {
     final double height = (62 + used + 20) * sy;
     return ui.Rect.fromLTWH(
       size.width - safeX * sx - menuW * sx,
-      menuBottom * sy - height,
+      _bottom(size, menuBottom) - height,
       menuW * sx,
       height,
     );
@@ -276,16 +297,17 @@ abstract final class OsdChrome {
     final double sy = _sy(size);
     double x(double v) => v * sx;
     double y(double v) => v * sy;
-    // Positions scale with the video, text does not below 12 px: in a 1088×613
-    // window the 16-unit badges land on 9 px, which reads as noise rather than
-    // a label. A floor keeps the chrome legible without moving anything.
-    double font(double v) =>
-        math.max(v * sy, math.min(v * sx, 20));
+    double b(double v) => _bottom(size, v);
+    // 12 px floor keeps a small badge legible. The scale is now the horizontal
+    // one, so a short-wide window no longer shrinks type below its controls.
+    double font(double v) => math.max(v * sy, 12);
 
-    // Scrim: the chrome must read over a bright frame.
+    // Scrim: the chrome must read over a bright frame. Never dim more than the
+    // lower half of a squeezed window, or the picture itself disappears.
+    final double scrimTop = math.max(b(700), size.height * 0.5);
     final ui.Paint scrim = ui.Paint()
       ..shader = ui.Gradient.linear(
-        ui.Offset(0, y(700)),
+        ui.Offset(0, scrimTop),
         ui.Offset(0, size.height),
         const <ui.Color>[
           ui.Color(0x00000000),
@@ -294,13 +316,14 @@ abstract final class OsdChrome {
         ],
         const <double>[0, 0.45, 1],
       );
-    canvas.drawRect(ui.Rect.fromLTRB(0, y(700), size.width, size.height), scrim);
+    canvas.drawRect(
+        ui.Rect.fromLTRB(0, scrimTop, size.width, size.height), scrim);
 
     if (model.title.isNotEmpty) {
       _textEllipsis(
         canvas,
         model.title,
-        ui.Offset(x(safeX), y(titleY)),
+        ui.Offset(x(safeX), b(titleY)),
         font(40),
         size.width - x(safeX) * 2,
         weight: ui.FontWeight.w600,
@@ -320,7 +343,7 @@ abstract final class OsdChrome {
     for (final String label in model.badges) {
       final OsdBadge badge = model.badgeFor(label);
       final double width = _textWidth(label, badgeInk) + x(22);
-      final ui.Rect box = ui.Rect.fromLTWH(bx, y(metaY), width, badgeH);
+      final ui.Rect box = ui.Rect.fromLTWH(bx, b(metaY), width, badgeH);
       final ui.RRect rounded = ui.RRect.fromRectAndRadius(box, ui.Radius.circular(x(6)));
       switch (badge.tier) {
         case OsdBadgeTier.lit:
@@ -429,7 +452,7 @@ abstract final class OsdChrome {
       }
     }
 
-    _text(canvas, hint, ui.Offset(x(safeX), y(hintY)), font(16),
+    _text(canvas, hint, ui.Offset(x(safeX), b(hintY)), font(16),
         color: const ui.Color(0x8AFFFFFF));
 
     // Above the pause badge (y 500) so the two never share a line.
@@ -440,11 +463,13 @@ abstract final class OsdChrome {
     }
 
     if (model.paused) {
+      // Centred on the picture, like the volume readout — a bottom-anchored
+      // design Y would land above the top edge in a short window.
       _centeredText(
         canvas,
         '已暂停',
         ui.Rect.fromCenter(
-          center: ui.Offset(size.width / 2, y(500)),
+          center: ui.Offset(size.width / 2, size.height * 0.42),
           width: size.width,
           height: font(60),
         ),
@@ -691,8 +716,10 @@ abstract final class OsdChrome {
     double x(double v) => v * sx;
     double y(double v) => v * sy;
     final double h = math.max(y(56), 40);
+    // The volume readout is centred on the picture, not part of the bottom
+    // band: anchoring it would send it off-screen in a short window.
     final ui.Rect box = ui.Rect.fromCenter(
-      center: ui.Offset(size.width / 2, y(430)),
+      center: ui.Offset(size.width / 2, size.height * 0.5),
       width: x(420),
       height: h,
     );

@@ -54,10 +54,38 @@ void main() {
       const ui.Size stage = ui.Size(1920, 1080);
       final ui.Rect track = OsdChrome.seekTrack(stage);
       expect(OsdChrome.fractionAt(stage, track.left), closeTo(0, 0.0001));
-      expect(OsdChrome.fractionAt(stage, track.center.dx), closeTo(0.5, 0.0001));
+      expect(OsdChrome.fractionAt(stage, track.center.dy), closeTo(0, 0.0001));
       expect(OsdChrome.fractionAt(stage, track.right), closeTo(1, 0.0001));
       expect(OsdChrome.hotZones(stage).first.left, closeTo(track.left, 0.0001));
       expect(OsdChrome.hotZones(stage).first.right, closeTo(track.right, 0.0001));
+    });
+
+    test('the bottom band stays anchored and legible in a squeezed window', () {
+      // A wide-but-short window used to scale the band by height alone: the
+      // controls collapsed into a thin strip while the floored type overflowed
+      // them. Sizes now follow width; the band is anchored to the bottom edge.
+      const ui.Size squeezed = ui.Size(1920, 400);
+      final ui.Rect wide = OsdChrome.seekTrack(const ui.Size(1920, 1080));
+      final ui.Rect short = OsdChrome.seekTrack(squeezed);
+      expect(short.center.dy, closeTo(204, 0.01)); // 400 - (1080 - 884)
+      expect(short.height, closeTo(wide.height, 0.01));
+
+      final ui.Rect seekZone = OsdChrome.hotZones(squeezed).first;
+      expect(seekZone.height, closeTo(OsdChrome.seekHitHeight, 0.01));
+      expect(seekZone.bottom, lessThanOrEqualTo(squeezed.height));
+
+      final ui.Rect play = OsdChrome.zones(squeezed)
+          .firstWhere((OsdZone zone) => zone.id == 'play')
+          .rect;
+      expect(play.height, closeTo(66, 0.01));
+      expect(play.bottom, lessThanOrEqualTo(squeezed.height));
+    });
+
+    test('a 16:9 stage keeps the original geometry', () {
+      // The bottom-anchor formula is algebraically identical to height scaling
+      // when the stage keeps the design aspect ratio.
+      const ui.Size stage = ui.Size(1280, 720);
+      expect(OsdChrome.seekTrack(stage).center.dy, closeTo(884 * 720 / 1080, 0.01));
     });
   });
 
