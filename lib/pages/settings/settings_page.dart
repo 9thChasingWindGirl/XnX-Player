@@ -601,7 +601,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       _Row(
                         label: S.skipIntro,
-                        hint: '检测到片头标记时自动跳过',
+                        hint: '片头标记、章节名与旁挂 .edl / comskip 里的片段自动跳过',
                         toggle: prefs.skipIntro,
                         onSelect: () => _apply(prefs.copyWith(skipIntro: !prefs.skipIntro)),
                       ),

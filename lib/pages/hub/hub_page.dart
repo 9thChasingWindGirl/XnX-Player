@@ -22,6 +22,7 @@ import '../../ui/core/tv_scale.dart';
 import '../../ui/widgets/ps_button.dart';
 import '../../ui/widgets/ps_page.dart';
 import '../home/home_tile.dart';
+import '../media/reader_page.dart';
 
 /// Game hub: the page a cover opens into.
 ///
@@ -616,16 +617,7 @@ class _Info extends StatelessWidget {
         ],
         if ((item.overview ?? '').isNotEmpty) ...<Widget>[
           const SizedBox(height: 14),
-          Text(
-            item.overview!,
-            maxLines: 4,
-            overflow: TextOverflow.ellipsis,
-            style: PsType.body.copyWith(
-              fontSize: 21,
-              height: 1.5,
-              color: PsColor.text.withValues(alpha: 0.84),
-            ),
-          ),
+          _Overview(text: item.overview!, title: item.title),
         ] else if (item.sourceKind == SourceKind.local) ...<Widget>[
           const SizedBox(height: 14),
           Text(
@@ -1343,6 +1335,104 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// Four lines of plot that say, visibly, that there is more.
+///
+/// The reference build makes the whole block a button into a text viewer. Same
+/// here — but the affordance is permanent rather than hover-only, because a
+/// viewer on a remote never hovers and would otherwise never learn that the
+/// text continues past line four.
+///
+/// The hover plate is drawn as a stack sibling with negative insets instead of
+/// as padding, so the copy keeps the exact left edge it shares with the title,
+/// the chips and the facts row.
+class _Overview extends StatefulWidget {
+  const _Overview({required this.text, required this.title});
+
+  final String text;
+  final String title;
+
+  @override
+  State<_Overview> createState() => _OverviewState();
+}
+
+class _OverviewState extends State<_Overview> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tint = _hover ? PsColor.accentHover : PsColor.textFaint;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => unawaited(
+          ReaderPage.open(
+            context,
+            title: widget.title,
+            text: widget.text,
+            eyebrow: '剧情简介',
+          ),
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: <Widget>[
+            Positioned(
+              left: -14,
+              right: -14,
+              top: -10,
+              bottom: -10,
+              child: AnimatedContainer(
+                duration: PsMotion.fast,
+                decoration: BoxDecoration(
+                  color: _hover
+                      ? PsColor.surface.withValues(alpha: 0.55)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _hover ? PsColor.hairline : Colors.transparent,
+                  ),
+                ),
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  widget.text,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: PsType.body.copyWith(
+                    fontSize: 21,
+                    height: 1.5,
+                    color: PsColor.text.withValues(alpha: 0.84),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      '阅读全文',
+                      style: PsType.micro.copyWith(
+                        color: tint,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(Icons.chevron_right_rounded, size: 16, color: tint),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

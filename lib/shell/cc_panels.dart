@@ -415,7 +415,7 @@ class CcSubtitlePanel extends StatelessWidget {
           ),
           CcPanelRow(
             label: S.skipIntro,
-            hint: '有片头标记时自动跳过',
+            hint: '标记、章节名与旁挂 EDL 里的片段自动跳过',
             toggle: prefs.skipIntro,
             onSelect: () => onChanged(prefs.copyWith(skipIntro: !prefs.skipIntro)),
           ),

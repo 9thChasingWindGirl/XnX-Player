@@ -124,7 +124,7 @@ abstract final class S {
   static const String subtitleSize = '字幕大小';
   static const String reduceMotion = '减少动效';
   static const String reduceMotionHint = '关闭背景漂移与入场位移';
-  static const String skipIntro = '跳过片头';
+  static const String skipIntro = '跳过片头与广告';
   static const String runTour = '播放器信息';
 
   // Metadata service (TMDB). Kept here with the other UI copy so the settings

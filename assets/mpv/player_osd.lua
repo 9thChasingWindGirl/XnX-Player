@@ -1117,6 +1117,54 @@ local function seek_rel(delta)
   end
 end
 
+-- Seek ladder, the shape `SeekHandler.cpp` uses: the first press is a nudge,
+-- and pressing again inside a short window climbs a ladder of step sizes
+-- instead of repeating the same nudge. With a flat 5 s step, rewinding ten
+-- minutes took 120 presses; the ladder does it in seven.
+--
+-- The two columns are separate ladders: the plain arrow key nudges, Shift is
+-- the shoulder-button jump. Sharing one counter between them meant a Shift press
+-- after two taps of the arrow key started at the third rung.
+local SEEK_NUDGE = { 5, 10, 30, 60, 180, 300, 600, 1800 }
+local SEEK_JUMP = { 15, 60, 300, 1800 }
+local SEEK_LADDER_RESET = 0.9
+
+local seek_ladder = { key = '', direction = 0, step = 0, total = 0, from = 0, at = 0 }
+
+local function seek_step(direction, steps, key)
+  local stamp = now()
+  local same = seek_ladder.key == key and seek_ladder.direction == direction
+  if not same or stamp - seek_ladder.at > SEEK_LADDER_RESET then
+    seek_ladder.step = 0
+    seek_ladder.total = 0
+    -- The destination is measured from where the burst started, not from the
+    -- last `time-pos`: the observer lags a seek by a frame or two, so adding up
+    -- positions would drift over a long hold.
+    seek_ladder.from = state.position or 0
+  else
+    seek_ladder.step = math.min(seek_ladder.step + 1, #steps)
+  end
+  seek_ladder.key = key
+  seek_ladder.direction = direction
+  seek_ladder.at = stamp
+
+  local size = steps[seek_ladder.step] or steps[#steps]
+  seek_ladder.total = seek_ladder.total + size * direction
+  command('seek', tostring(size * direction), 'relative', 'exact')
+
+  -- One label that grows with the burst, rather than a toast per press landing
+  -- on top of the one before it.
+  local mark = direction < 0 and '«' or '»'
+  local text = mark .. ' ' .. fmt_time(math.abs(seek_ladder.total))
+  if state.duration > 0 then
+    local aim = math.max(0, math.min(state.duration, seek_ladder.from + seek_ladder.total))
+    text = text .. ' · ' .. fmt_time(aim)
+  end
+  if state.menu == nil then
+    toast(text, 1.4)
+  end
+end
+
 local function add_volume(delta)
   -- Read-then-set: commands are queued, so reading back right after would give
   -- the previous value and the toast would lag one step behind.
@@ -2645,12 +2693,12 @@ local function handle_key(raw)
       show()
     end
   elseif name == 'left' then
-    -- 5 s is a nudge, 15 s is the shoulder-button jump. Both numbers are
-    -- PsSeek.step / PsSeek.jump in lib/design/ps_media.dart: change them here
-    -- and there, never here alone.
-    seek_rel(shift and -15 or -5)
+    -- Tap to nudge, keep tapping to climb. The first rung matches PsSeek.step
+    -- in lib/design/ps_media.dart and Shift matches PsSeek.jump: change them
+    -- here and there, never here alone.
+    seek_step(-1, shift and SEEK_JUMP or SEEK_NUDGE, shift and 'jump' or 'nudge')
   elseif name == 'right' then
-    seek_rel(shift and 15 or 5)
+    seek_step(1, shift and SEEK_JUMP or SEEK_NUDGE, shift and 'jump' or 'nudge')
   elseif name == 'up' then
     add_volume(5)
   elseif name == 'down' then
