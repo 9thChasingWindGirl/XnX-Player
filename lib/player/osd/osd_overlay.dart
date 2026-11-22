@@ -186,9 +186,7 @@ class OsdOverlay {
     _idleTimer?.cancel();
     _idleTimer = Timer(const Duration(seconds: 3), () {
       // A pause pressed inside the window keeps the chrome up.
-      // An open menu holds it too: the panel lives on this layer and would
-      // disappear with it.
-      if (!_player.state.value.paused && _menu == null) {
+      if (!_player.state.value.paused) {
         setVisible(false);
       }
     });
@@ -200,56 +198,14 @@ class OsdOverlay {
   /// keeps interactive coordinates exact.
   void startSizeWatch() {
     _sizeTimer?.cancel();
-    _sizeTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      syncSize();
-      // The VO settles after file-loaded: `video-out-params` / audio format can
-      // arrive a beat late, which would leave every badge dim forever. Watch
-      // the two properties that decide "lit" and re-resolve only on change —
-      // two cheap reads per poll, no full FFI sweep.
-      final String outGamma = (_player.getProperty('video-out-params/gamma') ?? '').trim();
-      final String audioFormat =
-          (_player.getProperty('audio-out-params/format') ?? '').trim();
-      if (outGamma != _lastOutGamma || audioFormat != _lastAudioFormat) {
-        _lastOutGamma = outGamma;
-        _lastAudioFormat = audioFormat;
-        refreshFormat();
-      }
-      // How far mpv has demuxed, in seconds. A stream reports a real lead; a
-      // local file reports nothing useful, and the paint drops the lead-in
-      // when it is not ahead of the playhead.
-      final double cache =
-          double.tryParse((_player.getProperty('demuxer-cache-time') ?? '').trim()) ?? 0;
-      if (cache != _buffered) {
-        _buffered = cache;
-        if (_visible) {
-          _schedulePaint();
-        }
-      }
-      // Chapters can land after file-loaded on a network source, so the poll
-      // is also the place that notices them arriving.
-      if (_loadChapters() && _visible) {
-        _schedulePaint();
-      }
-    });
+    _sizeTimer = Timer.periodic(const Duration(milliseconds: 200), (_) => syncSize());
   }
-
-  String _lastOutGamma = '';
-  String _lastAudioFormat = '';
 
   /// Whether a normalized pointer position is over the chrome band at all —
   /// the wheel's volume strip.
   bool inChromeZone(double nx, double ny) {
     if (!_visible || !ownsChrome || _size.isEmpty) {
       return false;
-    }
-    // The menu panel reaches well above the transport band, so it has to claim
-    // its own rectangle; `ny > 0.70` alone would let presses on its upper rows
-    // fall through to mpv.
-    final OsdMenu? menu = _menu;
-    if (menu != null &&
-        OsdChrome.menuPanel(_size, menu)
-            .contains(ui.Offset(nx * _size.width, ny * _size.height))) {
-      return true;
     }
     // The chrome occupies the bottom ~35 % of the stage in design units.
     return ny > 0.70;
@@ -258,7 +214,6 @@ class OsdOverlay {
   void dispose() {
     _idleTimer?.cancel();
     _sizeTimer?.cancel();
-    _volumeTimer?.cancel();
     _player.state.removeListener(_invalidate);
     _layer.destroy();
     if (_live == this) {
@@ -277,48 +232,18 @@ class OsdOverlay {
   }
 
   void _invalidate() {
-    // Volume is the one state tick the chrome has to answer for itself: it is
-    // not a position change, and if the band is hidden there is nothing else on
-    // screen to say the level moved.
-    final MpvViewState now = _player.state.value;
-    final double effective = now.muted ? 0 : now.volume;
-    if (_lastVolumeSeen >= 0 && (effective - _lastVolumeSeen).abs() >= 0.5) {
-      _showVolume();
-    }
-    _lastVolumeSeen = effective;
-
     if (!_visible) {
       return;
     }
     // Pause holds the chrome; resuming restarts the countdown, so the band
     // does not linger over playback the user has already stepped away from.
-    if (now.paused) {
+    if (_player.state.value.paused) {
       _idleTimer?.cancel();
     } else if (_idleTimer == null || !_idleTimer!.isActive) {
       _armIdleTimer();
     }
     _schedulePaint();
   }
-
-  /// Brings the band up just long enough to show the volume bar.
-  void _showVolume() {
-    _volumeUntil = DateTime.now().add(const Duration(milliseconds: 1600));
-    _volumeTimer?.cancel();
-    _volumeTimer = Timer(const Duration(milliseconds: 1700), () {
-      _volumeUntil = null;
-      _schedulePaint();
-    });
-    poke();
-  }
-
-  /// Last volume the chrome drew, so the first tick after boot does not flash a
-  /// bar for a level the user did not change.
-  double _lastVolumeSeen = -1;
-  DateTime? _volumeUntil;
-  Timer? _volumeTimer;
-
-  /// Seconds mpv has demuxed ahead. 0 for a local file that reports nothing.
-  double _buffered = 0;
 
   void _schedulePaint() {
     if (_paintScheduled || _size.isEmpty) {
@@ -365,18 +290,10 @@ class OsdOverlay {
       volume: state.volume,
       muted: state.muted,
       badges: _badges(state),
-      badgeStyles: _badgeStyles,
       accent: PsColor.accent,
       scrubbing: _scrubbing,
       hoverSeek: _hoverSeek,
       toast: toast,
-      volumeHint: _volumeUntil != null && DateTime.now().isBefore(_volumeUntil!)
-          ? (state.muted ? 0.0 : (state.volume / 100).clamp(0.0, 1.0).toDouble())
-          : null,
-      buffered: _buffered,
-      chapters: _chapters,
-      menu: _menu,
-      menuHover: _menuHover,
     );
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();
@@ -403,160 +320,29 @@ class OsdOverlay {
   /// not change while a file plays.
   List<String> _formatBadges = const <String>[];
 
-  /// Accent + truthfulness for each badge, keyed by the same label used in
-  /// [_formatBadges]. Kept separate from the labels so the plain-string model
-  /// contract (and its tests) stay intact.
-  Map<String, OsdBadge> _badgeStyles = const <String, OsdBadge>{};
-
-  /// Resolves the format pills from what the *output chain* is really doing.
-  ///
-  /// The source (`video-params`) says what the file contains; the output
-  /// (`video-out-params`, `audio-out-params/format`) says what mpv actually
-  /// delivers. A HDR10 file tone-mapped onto SDR, or DTS-HD MA decoded to PCM,
-  /// must not light up as if it were passed through — that was the whole point
-  /// of the Lua stage's lit/dim split, and the independent layer has to match.
   void refreshFormat() {
-    String prop(String name) => (_player.getProperty(name) ?? '').trim();
-    int intProp(String name) => int.tryParse(prop(name)) ?? 0;
-
-    final int width = intProp('video-params/w');
-    final int height = intProp('video-params/h');
-    final int depth = intProp('video-params/plane-depth');
-    final String codec = prop('video-format').toUpperCase();
-    final String gamma = prop('video-params/gamma').toLowerCase();
-    final String primaries = prop('video-params/primaries').toLowerCase();
-    final double fps = double.tryParse(prop('container-fps')) ?? 0;
-    final String hwdec = prop('hwdec-current');
-
-    // Output-side truth. Empty values mean mpv did not report one — fall back
-    // to the source only for the *presence* of the format, never for "lit".
-    final String outGamma = prop('video-out-params/gamma').toLowerCase();
-    final String outPrimaries = prop('video-out-params/primaries').toLowerCase();
-    final bool outHdr = (outPrimaries.contains('2020')) &&
-        (outGamma == 'pq' || outGamma == 'hlg' || outGamma.contains('st2084'));
-
-    final String audioFormat = prop('audio-out-params/format').toLowerCase();
-    final String audioCodec = prop('audio-codec-name');
-    final bool audioPassthrough = audioFormat.isNotEmpty &&
-        !audioFormat.contains('float') &&
-        !RegExp(r'^[su]\d\d').hasMatch(audioFormat);
-
-    final List<String> badges = <String>[];
-    final Map<String, OsdBadge> styles = <String, OsdBadge>{};
-
-    void add(String label, ui.Color color, OsdBadgeTier tier) {
-      badges.add(label);
-      styles[label] = OsdBadge(label, color, tier);
-    }
-
-    if (width >= 3800 || height >= 2100) {
-      add('8K', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    } else if (width >= 3400 || height >= 2000) {
-      add('4K', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    } else if (width >= 2400 || height >= 1400) {
-      add('1440p', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    } else if (height >= 1000) {
-      add('1080p', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    } else if (height >= 700) {
-      add('720p', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    } else if (width > 0 && height > 0) {
-      add('$width×$height', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    }
-
-    if (codec.isNotEmpty) {
-      add('$codec${depth >= 10 ? ' 10BIT' : ''}', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    }
-
-    final bool sourceDv = primaries.contains('dolby');
-    final bool sourceHlg = gamma == 'hlg';
-    final bool sourcePq = gamma == 'pq' || gamma.contains('st2084');
-    if (sourceDv) {
-      // A DV source plays its HDR10 base layer through the PQ output; mpv's
-      // video-out-params reports bt.2020/pq, not a "dolby" primaries value.
-      // Lighting it needs the same bt.2020+HDR test the Lua stage uses.
-      add('DOLBY VISION', OsdBadge.dvPurple,
-          outHdr ? OsdBadgeTier.lit : OsdBadgeTier.dim);
-    } else if (sourceHlg) {
-      add('HLG', OsdBadge.hlgCyan, outHdr ? OsdBadgeTier.lit : OsdBadgeTier.dim);
-    } else if (sourcePq) {
-      final String label = (intProp('video-params/sig-peak') >= 900) ? 'HDR10' : 'HDR';
-      add(label, OsdBadge.hdrGold, outHdr ? OsdBadgeTier.lit : OsdBadgeTier.dim);
-    }
-
-    final String audioLabel = _audioBadgeLabel(audioCodec, audioFormat);
-    if (audioLabel.isNotEmpty) {
-      final ui.Color audioColor = audioLabel.contains('DTS') ? OsdBadge.dtsAmber : OsdBadge.dolbyBlue;
-      add(audioLabel, audioColor,
-          audioPassthrough ? OsdBadgeTier.lit : OsdBadgeTier.dim);
-    }
-
-    if (fps > 0) add('${fps.toStringAsFixed(fps % 1 == 0 ? 0 : 2)}FPS', OsdBadge.plainWhite, OsdBadgeTier.fact);
-    if (hwdec.isNotEmpty && hwdec != 'no') {
-      add(hwdec.toUpperCase(), OsdBadge.plainWhite, OsdBadgeTier.fact);
-    }
-
-    _formatBadges = List<String>.unmodifiable(badges);
-    _badgeStyles = Map<String, OsdBadge>.unmodifiable(styles);
-    // A new file invalidates the chapter count we cached; forcing a reload here
-    // is what keeps chapter marks from the previous file off the new bar.
-    _chapterCount = -1;
-    _loadChapters();
+    final int height = int.tryParse(_player.getProperty('video-params/h') ?? '') ?? 0;
+    final String gamma = (_player.getProperty('video-params/gamma') ?? '').toLowerCase();
+    final String primaries = (_player.getProperty('video-params/primaries') ?? '').toLowerCase();
+    final String audio = _player.getProperty('audio-codec-name') ?? '';
+    final String hwdec = _player.getProperty('hwdec-current') ?? '';
+    final double fps = double.tryParse(_player.getProperty('container-fps') ?? '') ?? 0;
+    _formatBadges = <String>[
+      if (height >= 2160)
+        '4K'
+      else if (height > 0)
+        '${height}P',
+      if (primaries.contains('dolby'))
+        'DOLBY VISION'
+      else if (gamma == 'pq' || gamma.contains('st2084'))
+        'HDR'
+      else if (gamma == 'hlg')
+        'HLG',
+      if (audio.isNotEmpty) audio.toUpperCase(),
+      if (fps > 0) '${fps.round()}FPS',
+      if (hwdec.isNotEmpty && hwdec != 'no') hwdec.toUpperCase(),
+    ];
     _schedulePaint();
-  }
-
-  List<OsdChapter> _chapters = const <OsdChapter>[];
-  int _chapterCount = -1;
-
-  /// Reads `chapter-list` through its indexed path.
-  ///
-  /// The property is an mpv array, which `get_property_string` cannot hand
-  /// back; `chapter-list/count` plus `chapter-list/N/{time,title}` is the
-  /// shape every build supports. Cheap enough to sit behind a count check.
-  bool _loadChapters() {
-    final int count =
-        int.tryParse((_player.getProperty('chapter-list/count') ?? '').trim()) ?? 0;
-    if (count == _chapterCount) {
-      return false;
-    }
-    _chapterCount = count;
-    if (count <= 0 || count > 300) {
-      _chapters = const <OsdChapter>[];
-      return true;
-    }
-    final List<OsdChapter> out = <OsdChapter>[];
-    for (int i = 0; i < count; i++) {
-      final double time =
-          double.tryParse((_player.getProperty('chapter-list/$i/time') ?? '').trim()) ?? -1;
-      if (time < 0) {
-        continue;
-      }
-      final String title = (_player.getProperty('chapter-list/$i/title') ?? '').trim();
-      out.add(OsdChapter(time, title.isEmpty ? '章节 ${i + 1}' : title));
-    }
-    out.sort((OsdChapter a, OsdChapter b) => a.time.compareTo(b.time));
-    _chapters = out;
-    return true;
-  }
-
-  /// Mirrors the Lua stage's audio badge naming, including channel suffix.
-  String _audioBadgeLabel(String codec, String outFormat) {
-    if (codec.isEmpty) return '';
-    final String c = codec.toLowerCase();
-    final int channels =
-        int.tryParse(_player.getProperty('audio-params/channel-count') ?? '') ?? 0;
-    final String suffix = switch (channels) { 8 => ' 7.1', 6 => ' 5.1', 2 => ' 2.0', _ => '' };
-    if (c.contains('truehd') || c.contains('mlp')) {
-      return '${c.contains('atmos') ? 'ATMOS' : 'TRUEHD'}$suffix'.toUpperCase();
-    }
-    if (c.contains('dts')) {
-      final String label = c.contains('x') ? 'DTS:X' : 'DTS';
-      return '$label$suffix'.toUpperCase();
-    }
-    if (c.contains('eac3') || c.contains('dd+')) {
-      return '${c.contains('atmos') ? 'DD+ ATMOS' : 'DD+'}$suffix'.toUpperCase();
-    }
-    if (c.contains('ac3')) return 'DD$suffix';
-    return codec.toUpperCase();
   }
 
   List<String> _badges(MpvViewState state) {
@@ -578,155 +364,16 @@ class OsdOverlay {
   // in player_page.dart asks these three questions before handing a pointer
   // event to the Lua side, so a press on the seek bar never reaches mpv.
 
-  /// The popup menu Lua is showing, mirrored for drawing only.
-  ///
-  /// Lua owns this state: it pushes a new model on every change and applies
-  /// every command sent back, because a row's action is a closure that cannot
-  /// cross the process boundary.
-  OsdMenu? _menu;
-
-  /// Receives the menu model from the Lua stage.
-  void setMenu(Map<Object?, Object?> payload) {
-    if (payload['open'] != true) {
-      if (_menu != null) {
-        _menu = null;
-        _menuHover = null;
-        _armIdleTimer();
-        _schedulePaint();
-      }
-      return;
-    }
-    final Object? rawRows = payload['rows'];
-    final List<Object?> list = rawRows is List ? rawRows : const <Object?>[];
-    final List<OsdMenuRow> rows = <OsdMenuRow>[];
-    for (final Object? entry in list) {
-      if (entry is! Map) {
-        continue;
-      }
-      rows.add(OsdMenuRow(
-        kind: entry['kind'] as String? ?? 'item',
-        label: entry['label'] as String? ?? '',
-        value: entry['value'] as String? ?? '',
-        active: entry['active'] == true,
-      ));
-    }
-    final int luaIndex = (payload['index'] as num?)?.toInt() ?? 1;
-    _menu = OsdMenu(
-      title: payload['title'] as String? ?? '',
-      index: luaIndex - 1,
-      rows: rows,
-    );
-    // A new model invalidates whatever row the pointer used to be over.
-    _menuHover = null;
-    // The panel lives on this layer, so opening a menu has to bring the layer
-    // up even if the transport had already auto-hidden.
-    poke();
-    _schedulePaint();
-  }
-
-  bool get hasMenu => _menu != null;
-
-  /// Whether a pointer lands on the menu panel itself (not just the band).
-  bool inMenuZone(double nx, double ny) {
-    final OsdMenu? menu = _menu;
-    if (menu == null || _size.isEmpty) {
-      return false;
-    }
-    return OsdChrome.menuPanel(_size, menu)
-        .contains(ui.Offset(nx * _size.width, ny * _size.height));
-  }
-
-  /// Moves the selection by [delta], skipping headers.
-  ///
-  /// Asks Lua to move rather than moving a local copy: the index it acknowledges
-  /// comes back in the next model, so the panel can never disagree with what the
-  /// arrow keys would do.
-  void menuStep(int delta) {
-    final OsdMenu? menu = _menu;
-    if (menu == null) {
-      return;
-    }
-    int next = menu.selected;
-    for (int i = 0; i < menu.rows.length; i++) {
-      next += delta;
-      if (next < 0 || next >= menu.rows.length) {
-        return;
-      }
-      if (!menu.rows[next].isHeader) {
-        menuMove(next);
-        return;
-      }
-    }
-  }
-
-  /// Row under the pointer, for hover feedback only.
-  int? _menuHover;
-
-  /// Tracks which menu row the pointer is over. Deliberately does not touch
-  /// Lua's selection: drifting the mouse must not behave like arrow keys.
-  void updateMenuHover(double nx, double ny) {
-    final OsdMenu? menu = _menu;
-    int? hover;
-    if (menu != null && !_size.isEmpty) {
-      final ui.Offset point = ui.Offset(nx * _size.width, ny * _size.height);
-      for (final OsdZone zone in OsdChrome.menuZones(_size, menu)) {
-        if (zone.rect.contains(point)) {
-          hover = int.tryParse(zone.id.substring('menurow:'.length));
-          break;
-        }
-      }
-    }
-    if (hover != _menuHover) {
-      _menuHover = hover;
-      _schedulePaint();
-    }
-  }
-
-  /// Forwards a row click to Lua, which knows what the row means.
-  void menuChoose(int index) {
-    _player.sendScriptMessage(<String, Object?>{
-      'cmd': 'menu-op',
-      'op': 'choose',
-      'index': index + 1,
-    });
-  }
-
-  /// Moves the selection without activating it (hover / wheel).
-  void menuMove(int index) {
-    _player.sendScriptMessage(<String, Object?>{
-      'cmd': 'menu-op',
-      'op': 'move',
-      'index': index + 1,
-    });
-  }
-
-  /// Nudges an `adjust` row left or right.
-  void menuAdjust(int direction) {
-    _player.sendScriptMessage(<String, Object?>{
-      'cmd': 'menu-op',
-      'op': 'adjust',
-      'direction': direction,
-    });
-  }
-
-  void menuClose() {
-    _player.sendScriptMessage(<String, Object?>{
-      'cmd': 'menu-op',
-      'op': 'close',
-    });
-  }
-
   /// The chrome control under a normalized pointer position, or null.
   ///
-  /// `seek`, `play`, `back10`, `fwd10`, `menu:<id>` or `menurow:<index>`. The
-  /// rectangles come from the same list the paint pass uses, so a drawn button
-  /// is a working button.
+  /// `seek`, `play`, `back10`, `fwd10` or `menu:<id>`. The rectangles come from
+  /// the same list the paint pass uses, so a drawn button is a working button.
   String? actionAt(double nx, double ny) {
     if (!_visible || !ownsChrome || _size.isEmpty) {
       return null;
     }
     final ui.Offset point = ui.Offset(nx * _size.width, ny * _size.height);
-    for (final OsdZone zone in OsdChrome.zones(_size, menu: _menu)) {
+    for (final OsdZone zone in OsdChrome.zones(_size)) {
       if (zone.rect.contains(point)) {
         return zone.id;
       }

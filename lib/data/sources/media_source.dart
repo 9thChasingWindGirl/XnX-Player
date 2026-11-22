@@ -213,9 +213,6 @@ EpisodeTag? episodeTagFromFileName(String name) {
   }
 
   String show = name.substring(0, match.start).replaceAll(RegExp(r'[._]'), ' ');
-  // `Show - S02E05` leaves `Show -` once the dots become spaces: the dash is
-  // the separator in front of the tag, not part of the show name.
-  show = show.replaceAll(RegExp(r'\s*[-–—]+\s*$'), '');
   show = show.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
   if (show.isEmpty) {
     return null;

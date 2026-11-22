@@ -44,7 +44,7 @@ dev 的 `0.00.02.Dev` 晋升后就是 `0.00.02.Beta`，再晋升就是 `0.00.02`
 
 | 通道 | 产物 |
 |---|---|
-| dev | `XnX-Player-Portable-X.YY.ZZ.Dev`（Actions artifact，下载即便携 zip） |
+| dev | `XnX-Player-Portable-X.YY.ZZ.Dev-<run>`（Actions artifact，下载即便携 zip） |
 | beta | `XnX-Player-Portable-X.YY.ZZ.Beta.zip` + `XnX-Player-Setup-X.YY.ZZ.Beta.exe` |
 | stable | `XnX-Player-Portable-X.YY.ZZ.zip` + `XnX-Player-Setup-X.YY.ZZ.exe` |
 
