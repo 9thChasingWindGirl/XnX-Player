@@ -214,6 +214,10 @@ EpisodeTag? episodeTagFromFileName(String name) {
 
   String show = name.substring(0, match.start).replaceAll(RegExp(r'[._]'), ' ');
   show = show.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+  // Plex/TMM style names put a hyphen between the show and the tag
+  // ("Show - S02E05 - Title"). Only the trailing separator is stripped: a
+  // hyphen inside a name ("Spider-Man") is part of the title.
+  show = show.replaceAll(RegExp(r'\s*[-–—]+\s*$'), '').trim();
   if (show.isEmpty) {
     return null;
   }

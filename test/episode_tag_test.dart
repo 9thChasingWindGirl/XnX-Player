@@ -49,5 +49,16 @@ void main() {
       final EpisodeTag tag = _require('The.Show.S10E02.720p.HDR.mkv');
       expect(tag.show, 'The Show');
     });
+
+    test('drops the separator before the tag without eating a hyphen in the name', () {
+      // The exact shape in the library: "Show - SxxEyy - Title.mkv".
+      final EpisodeTag tag = _require(
+          '赛博朋克：边缘行者 - S02E01 - 危险边缘的慢舞.mkv');
+      expect(tag.show, '赛博朋克：边缘行者');
+      expect(tag.episodeTitle, '危险边缘的慢舞');
+
+      // A hyphen inside the title is not a separator.
+      expect(_require('Spider-Man - S01E02.mkv').show, 'Spider-Man');
+    });
   });
 }
