@@ -71,8 +71,8 @@ abstract final class SubtitleRules {
   /// `Movie.en.forced.srt` reads "forced" then "en" as the language.
   static SubtitleCandidate describe(String name, String path) {
     final String base = stem(name);
-    final String video = RegExp(r'[._\- ]');
-    final List<String> tokens = base.split(video)
+    final RegExp separators = RegExp(r'[._\- ]');
+    final List<String> tokens = base.split(separators)
         .where((String token) => token.isNotEmpty)
         .toList(growable: false);
 

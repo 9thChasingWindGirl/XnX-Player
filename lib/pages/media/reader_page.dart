@@ -5,7 +5,6 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../core/input/input_action.dart';
 import '../../core/input/input_router.dart';
-import '../../design/ps_motion.dart';
 import '../../design/ps_tokens.dart';
 
 /// Full-screen reader for copy that does not fit where it is being shown.
