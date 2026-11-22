@@ -224,10 +224,13 @@ class _EpisodePattern {
 
 /// Ordered rules transcribed from Kodi's defaults, with Chinese/roman forms
 /// added for the libraries XnX actually sees.
-const List<_EpisodePattern> _episodePatterns = <_EpisodePattern>[
+///
+/// `final`, not `const`: [RegExp] has no const constructor, so a const list
+/// of patterns cannot exist.
+final List<_EpisodePattern> _episodePatterns = <_EpisodePattern>[
   // 1) S01E02, s01.e02, S01-E02, S01xE02, with optional episode suffix a-i.
   _EpisodePattern(
-    regex: RegExp(r'[Ss](\d{1,2})\s*[._x -]?\s*[Ee](\d{1,3}(?:[a-i]|\.[1-9])?)', caseSensitive: false),
+    regex: RegExp(r'[Ss](\d{1,2})\s*[._x -]?\s*[Ee](\d{1,3}(?:[a-i]|\.[1-9](?!\d))?)', caseSensitive: false),
     seasonGroup: 1,
     episodeGroup: 2,
   ),
@@ -335,7 +338,7 @@ EpisodeTag? episodeTagFromFileName(String name, {String? folderHint}) {
     }
     int? season;
     if (rule.seasonGroup != null) {
-      final String raw = match.group(rule.seasonGroup)!;
+      final String raw = match.group(rule.seasonGroup!)!;
       season = rule.byDate ? int.tryParse(raw) : int.tryParse(raw);
     } else if (rule.seasonFromFolder) {
       season = _seasonFromFolderName(folderHint) ?? rule.defaultSeason;
@@ -367,7 +370,9 @@ EpisodeTag? episodeTagFromFileName(String name, {String? folderHint}) {
 
     String tail = name.substring(match.end);
     final int dot = tail.lastIndexOf('.');
-    if (dot > 0) {
+    // A tail of just ".mkv" has its dot at 0: `dot >= 0` strips it, `dot > 0`
+    // leaves "mkv" to become a phantom episode title.
+    if (dot >= 0) {
       tail = tail.substring(0, dot);
     }
     tail = tail.replaceAll(RegExp(r'[._]'), ' ');
