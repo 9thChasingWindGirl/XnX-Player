@@ -42,9 +42,25 @@ class HttpFailure implements Exception {
 
 abstract final class Http {
   static final HttpClient _client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 12)
+    ..connectionTimeout = const Duration(seconds: 15)
     ..autoUncompress = true
-    ..userAgent = 'XnX Player/0.1 (Windows)';
+    ..userAgent = 'XnX Player/0.1 (Windows)'
+    // Media sources and TMDB go through this client. Without a proxy hook a
+    // machine that needs one to reach them silently waits for every request to
+    // time out, while in-app updates (which have their own hook) work fine.
+    ..findProxy = proxyFor;
+
+  /// Explicit override first, then the process environment.
+  ///
+  /// Dart does not read the Windows "Internet options" proxy, so
+  /// `XNX_MEDIA_PROXY=127.0.0.1:7890` is the dependable way to set one.
+  static String proxyFor(Uri uri) {
+    final String explicit = (Platform.environment['XNX_MEDIA_PROXY'] ?? '').trim();
+    if (explicit.isNotEmpty) {
+      return 'PROXY $explicit';
+    }
+    return HttpClient.findProxyFromEnvironment(uri);
+  }
 
   static const Map<String, String> userAgentHeader = <String, String>{
     'User-Agent': 'XnX Player/0.1 (Windows)',
@@ -94,8 +110,17 @@ abstract final class Http {
     return HttpResult(response.statusCode, text, out);
   }
 
-  static Future<HttpResult> get(Uri uri, {Map<String, String>? headers}) =>
-      send('GET', uri, headers: headers);
+  static Future<HttpResult> get(
+    Uri uri, {
+    Map<String, String>? headers,
+    Duration? timeout,
+  }) =>
+      send(
+        'GET',
+        uri,
+        headers: headers,
+        timeout: timeout ?? const Duration(seconds: 20),
+      );
 
   static Future<HttpResult> postJson(
     Uri uri,
@@ -133,8 +158,9 @@ abstract final class Http {
   static Future<Map<String, dynamic>> getJson(
     Uri uri, {
     Map<String, String>? headers,
+    Duration? timeout,
   }) async {
-    final HttpResult result = await get(uri, headers: headers);
+    final HttpResult result = await get(uri, headers: headers, timeout: timeout);
     if (!result.ok) {
       throw HttpFailure('请求失败', status: result.status);
     }

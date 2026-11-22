@@ -183,7 +183,9 @@ class _HomePageState extends State<HomePage> {
           AppLog.warn('TMDB 未返回任何条目，请检查 API Key 与网络');
         } else {
           AppLog.info(
-              'TMDB 首页已载入：趋势 ${home.trending.length}，电影 ${home.popularMovies.length}，剧集 ${home.popularTv.length}');
+              'TMDB 首页已载入${home.fromCache ? '（本地缓存）' : ''}：'
+              '趋势 ${home.trending.length}，电影 ${home.popularMovies.length}，'
+              '剧集 ${home.popularTv.length}');
         }
       }).catchError((Object error) {
         AppLog.warn('TMDB 首页加载失败：$error');

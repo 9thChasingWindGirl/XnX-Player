@@ -268,62 +268,71 @@ class AppStore extends ChangeNotifier {
     if (loading) {
       return;
     }
+    final List<SourceConfig> targets = sources
+        .where((SourceConfig entry) =>
+            entry.enabled && entry.kind != SourceKind.tmdb)
+        .toList(growable: false);
     loading = true;
     errors.clear();
-    AppLog.info('刷新媒体库开始（${sources.length} 个来源）');
-    LibraryLog.write('刷新开始（${sources.length} 个来源）');
+    AppLog.info('刷新媒体库开始（${targets.length} 个来源）');
+    LibraryLog.write('刷新开始（${targets.length} 个来源）');
     // A refresh that takes a minute is exactly the silent wait a notification
     // is for: it becomes a live row in the centre and in the top bar.
     NoticeCenter.instance.activity('library-refresh', '正在刷新媒体库',
-        body: '${sources.length} 个来源');
+        body: '${targets.length} 个来源');
     _notify();
 
     final List<MediaItem> collected = <MediaItem>[];
     final Set<String> seen = <String>{};
 
-    try {
-      // TMDB is a metadata portal: it has no files to enumerate, so it never
-      // takes part in the library refresh.
-      for (final SourceConfig config
-          in sources.where((SourceConfig entry) => entry.enabled && entry.kind != SourceKind.tmdb)) {
-        try {
-          // One stalled source must not hold the whole library hostage: each
-          // source gets its own deadline, and a miss is recorded as an error
-          // the control center can show instead of an eternal skeleton.
-          final MediaSource source = _sourceFor(config);
-          final List<MediaItem> listing =
-              await source.browse().timeout(const Duration(seconds: 60));
-          for (final MediaItem item in listing) {
-            if (seen.add(item.id)) {
-              collected.add(_withResume(item));
-            }
-          }
-          if (source is EmbySource) {
-            for (final MediaItem item in await source.resumable()) {
-              if (seen.add(item.id)) {
-                collected.add(_withResume(item));
-              }
-            }
-          }
-          LibraryLog.write('${config.label}：${listing.length} 项');
-        } on Object catch (error, stack) {
-          errors.add('${config.label}：$error');
-          AppLog.error('媒体源刷新失败：${config.label}', error, stack);
-          LibraryLog.write('${config.label}：失败 — $error');
-          // One row per failing source, refreshed on a retry rather than piled
-          // up: the id is the source, not the failure.
-          NoticeCenter.instance.publish(
-            'source-fail-${config.id}',
-            '${config.label} 连接失败',
-            body: '$error',
-            kind: NoticeKind.error,
-          );
+    // Publish each source the moment it answers. The old loop waited for *all*
+    // sources before assigning `items`, so one unreachable Emby held the local
+    // library behind its 60-second timeout even though local files succeeded in
+    // milliseconds.
+    void commit(List<MediaItem> listing) {
+      for (final MediaItem item in listing) {
+        if (seen.add(item.id)) {
+          collected.add(_withResume(item));
         }
       }
-
       items
         ..clear()
         ..addAll(collected);
+      _notify();
+    }
+
+    try {
+      await Future.wait<void>(
+        targets.map((SourceConfig config) async {
+          try {
+            // A per-source deadline: one dead host can no longer hold the
+            // whole library hostage for a full minute.
+            final MediaSource source = _sourceFor(config);
+            final List<MediaItem> listing = await source
+                .browse()
+                .timeout(const Duration(seconds: 20));
+            commit(listing);
+            if (source is EmbySource) {
+              commit(await source
+                  .resumable()
+                  .timeout(const Duration(seconds: 20)));
+            }
+            LibraryLog.write('${config.label}：${listing.length} 项');
+          } on Object catch (error, stack) {
+            errors.add('${config.label}：$error');
+            AppLog.error('媒体源刷新失败：${config.label}', error, stack);
+            LibraryLog.write('${config.label}：失败 — $error');
+            // One row per failing source, refreshed on a retry rather than piled
+            // up: the id is the source, not the failure.
+            NoticeCenter.instance.publish(
+              'source-fail-${config.id}',
+              '${config.label} 连接失败',
+              body: '$error',
+              kind: NoticeKind.error,
+            );
+          }
+        }),
+      );
       AppLog.info('刷新媒体库完成：${collected.length} 项，${errors.length} 个错误');
       LibraryLog.write('刷新完成：${collected.length} 项');
     } finally {

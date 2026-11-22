@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import '../../core/app_log.dart';
+import '../../core/app_paths.dart';
 import '../models/artwork.dart';
 import '../models/media_item.dart';
 import '../net.dart';
@@ -21,6 +25,7 @@ class TmdbHome {
     required this.popularTv,
     required this.onTheAir,
     required this.genres,
+    this.fromCache = false,
   });
 
   final List<MediaItem> trending;
@@ -30,6 +35,10 @@ class TmdbHome {
   final List<MediaItem> popularTv;
   final List<MediaItem> onTheAir;
   final List<TmdbGenre> genres;
+
+  /// The payload came from the last successful request, not from this launch.
+  /// The UI can say so instead of presenting stale titles as live discovery.
+  final bool fromCache;
 
   /// Every discovered item, for the hero carousel and genre filtering.
   List<MediaItem> get all => <MediaItem>[
@@ -79,16 +88,57 @@ class Tmdb {
     Map<String, String> params = const <String, String>{},
   ]) async {
     try {
-      return await Http.getJson(_uri(path, params), headers: _headers)
-          .timeout(const Duration(seconds: 12));
+      // 12 s was too tight for a portal that is reached over a shared link:
+      // the log shows the same machine succeeding once and timing out eight
+      // requests the next time. The inner bound is on the whole exchange, not
+      // just the handshake.
+      return await Http.getJson(
+        _uri(path, params),
+        headers: _headers,
+        timeout: const Duration(seconds: 25),
+      ).timeout(const Duration(seconds: 28));
     } on Object catch (error) {
       AppLog.warn('TMDB 请求失败：$path（$error）');
       return const <String, dynamic>{};
     }
   }
 
+  /// Last good home payload, kept in the user's data directory.
+  ///
+  /// Discovery is optional, but when it silently empties the home screen the
+  /// feature looks deleted. One outage should degrade to yesterday's rows, not
+  /// to nothing.
+  static const String _cacheFile = 'tmdb_home.json';
+
+  String get _cachePath =>
+      '${AppPaths.dataDir}${Platform.pathSeparator}$_cacheFile';
+
+  void _writeCache(List<Map<String, dynamic>> data) {
+    try {
+      File(_cachePath).writeAsStringSync(jsonEncode(data));
+    } on Object {
+      // Best effort: a read-only data dir must not break discovery.
+    }
+  }
+
+  List<Map<String, dynamic>>? _readCache() {
+    try {
+      final Object? decoded = jsonDecode(File(_cachePath).readAsStringSync());
+      if (decoded is List && decoded.length == 8) {
+        return decoded
+            .map((Object? entry) =>
+                entry is Map<String, dynamic> ? entry : <String, dynamic>{})
+            .toList(growable: false);
+      }
+    } on Object {
+      // Missing, or a truncated write from a killed process.
+    }
+    return null;
+  }
+
   Future<TmdbHome> home() async {
-    final List<Map<String, dynamic>> data = await Future.wait<Map<String, dynamic>>(
+    final List<Map<String, dynamic>> fresh =
+        await Future.wait<Map<String, dynamic>>(
       <Future<Map<String, dynamic>>>[
         _get('/trending/all/week'),
         _get('/movie/popular'),
@@ -100,6 +150,23 @@ class Tmdb {
         _get('/genre/tv/list'),
       ],
     );
+
+    // `_get` swallows failures into empty maps, so one missing endpoint used
+    // to leave the whole portal blank. Fall back as one unit: a half-populated
+    // home is harder to reason about than a clearly cached one.
+    List<Map<String, dynamic>> data = fresh;
+    bool fromCache = false;
+    if (fresh.any((Map<String, dynamic> entry) => entry.isEmpty)) {
+      final List<Map<String, dynamic>>? stored = _readCache();
+      if (stored != null) {
+        data = stored;
+        fromCache = true;
+        AppLog.info('TMDB 本次请求不完整，改用本地缓存的首页数据');
+      }
+    } else {
+      _writeCache(fresh);
+    }
+
     final Map<int, String> movieGenres = _genreMap(data[6]);
     final Map<int, String> tvGenres = _genreMap(data[7]);
     final List<TmdbGenre> genres = _mergeGenres(movieGenres, tvGenres);
@@ -111,6 +178,7 @@ class Tmdb {
       popularTv: _items(data[4], 'tv', movieGenres, tvGenres),
       onTheAir: _items(data[5], 'tv', movieGenres, tvGenres),
       genres: genres,
+      fromCache: fromCache,
     );
   }
 
