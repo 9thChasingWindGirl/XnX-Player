@@ -961,8 +961,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
 
     final HardwareKeyboard keyboard = HardwareKeyboard.instance;
-    // Ctrl combinations belong to the app shell (Ctrl+F, Ctrl+O...).
-    if (keyboard.isControlPressed) {
+    // Ctrl combinations belong to the app shell (Ctrl+F, Ctrl+O...), with the
+    // few exceptions the OSD binds for itself — Ctrl+B places a bookmark.
+    final bool ctrl = keyboard.isControlPressed;
+    if (ctrl && !OsdKeys.ctrlOwned(key)) {
       return false;
     }
 
@@ -970,6 +972,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       key,
       shift: keyboard.isShiftPressed,
       alt: keyboard.isAltPressed,
+      ctrl: ctrl,
     );
     if (composed == null) {
       return false;

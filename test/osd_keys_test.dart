@@ -61,5 +61,17 @@ void main() {
       expect(OsdKeys.compose(LogicalKeyboardKey.mediaPlay), isNull);
       expect(OsdKeys.base(LogicalKeyboardKey.shiftLeft), isNull);
     });
+
+    test('carries ctrl for the one chord the OSD owns', () {
+      expect(
+        OsdKeys.compose(LogicalKeyboardKey.keyB, ctrl: true),
+        'ctrl+b',
+      );
+      // Ctrl is checked first because the shell swallows it — the player has to
+      // know which keys are exceptions before it composes anything.
+      expect(OsdKeys.ctrlOwned(LogicalKeyboardKey.keyB), isTrue);
+      expect(OsdKeys.ctrlOwned(LogicalKeyboardKey.keyF), isFalse);
+      expect(OsdKeys.ctrlOwned(LogicalKeyboardKey.arrowLeft), isFalse);
+    });
   });
 }

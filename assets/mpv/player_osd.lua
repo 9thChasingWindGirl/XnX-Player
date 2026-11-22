@@ -65,6 +65,12 @@ local DTS_AMBER = '&H4696FF&' -- RGB 255,150,70
 local CUT_TINT = '&H576BFF&' -- RGB 255,107,87
 local OK_GREEN = '&H72D96E&' -- RGB 110,217,114
 
+-- Bookmark ticks. Gold, because it is the one hue on the bar that is not a
+-- judgement about the file: a cut is bad news, a bookmark is an annotation.
+-- Kept as its own constant rather than reusing the HDR badge gold so the two
+-- can diverge without one silently recolouring the other.
+local BOOKMARK_TINT = '&H3CBEFF&' -- RGB 255,190,60
+
 local FONT = 'Microsoft YaHei UI'
 local MONO = 'Consolas'
 
@@ -301,6 +307,10 @@ local state = {
   fallback_title = '',
   chapters = {},
   chapter = -1,
+  -- Bookmarks for the current file, read from the per-file record on load.
+  -- Kept on `state` because the bar redraws many times a second and reading a
+  -- file from a paint path would be a stall, not a feature.
+  bookmarks = {},
   hover = nil,
   pointer = nil,
   menu = nil,
@@ -331,7 +341,10 @@ local hide_timer = nil
 
 -- Forward declarations. Lua locals are not hoisted: the menu section above the
 -- render section calls back into it, so these names must exist first.
-local mark_dirty, render, show_ui, schedule_hide, send_back, close_menu
+-- Forward declarations. `build_menu` reaches back into the menu machinery it is
+-- part of (opening a sub-menu from a row), which only works if the names exist
+-- before it is defined; a later `local function` would shadow them instead.
+local mark_dirty, render, show_ui, schedule_hide, send_back, close_menu, open_menu
 local send_fullscreen
 
 local function now()
@@ -627,6 +640,106 @@ local function save_segments()
   end
   file:write(utils.format_json(SEG_CACHE))
   file:close()
+end
+
+-- ==== BOOKMARKS ============================================================
+--
+-- Points, not spans. The EDL section above answers "which part of this file
+-- must not play"; this answers "which moment is worth coming back to". Both
+-- live in the same per-file record, because they are the same kind of fact: a
+-- claim the viewer made about this file, keyed by its full path.
+--
+-- The reference build keeps bookmarks in the video database, each with a
+-- rendered thumbnail and a saved player state. Neither is reproducible here — a
+-- screenshot would stall the picture for a frame, and there is no window to
+-- browse them in — so what is left is the part that matters: timestamp, jump,
+-- delete, and a tick on the bar so they are not invisible until opened.
+
+--- How close a second press must be to toggle instead of adding a new mark.
+---
+--- Kodi splits "add" (Ctrl+B) from "delete" (a key inside the bookmark window).
+--- With no window, one key has to do both, and this tolerance is what stops a
+--- slightly-off second press from stacking two marks half a second apart.
+local BOOKMARK_SNAP = 2
+
+--- Marks stored for one entry, in playback order.
+local function entry_bookmarks(entry)
+  local out = {}
+  if type(entry) ~= 'table' or type(entry.bookmarks) ~= 'table' then
+    return out
+  end
+  for _, mark in ipairs(entry.bookmarks) do
+    local at = tonumber(type(mark) == 'table' and mark.at or mark)
+    if at and at >= 0 then
+      out[#out + 1] = { at = at, label = type(mark) == 'table' and mark.label or nil }
+    end
+  end
+  table.sort(out, function(a, b)
+    return a.at < b.at
+  end)
+  return out
+end
+
+--- Replaces the stored list and republishes it to the bar.
+local function store_bookmarks(list)
+  local entry, key, all = segment_entry()
+  if not key or key == '' or not all then
+    return false
+  end
+  if not entry then
+    entry = {}
+    all[key] = entry
+  end
+  -- An empty list drops the key instead of storing `[]`: a file with no marks
+  -- should leave no trace in the file, and the reader already treats a missing
+  -- list as empty. If that leaves the whole entry empty, the entry goes too —
+  -- otherwise every file the user bookmarked once and cleared would keep an
+  -- empty `{}` in segments.json for ever.
+  entry.bookmarks = #list > 0 and list or nil
+  if next(entry) == nil then
+    all[key] = nil
+  end
+  SEG_CACHE = all
+  save_segments()
+  state.bookmarks = list
+  mark_dirty()
+  return true
+end
+
+--- Adds a mark here, or removes the one already here.
+local function toggle_bookmark()
+  local pos = state.position or 0
+  if pos <= 0 then
+    return
+  end
+  local list = entry_bookmarks(segment_entry())
+  for i, mark in ipairs(list) do
+    if math.abs(mark.at - pos) <= BOOKMARK_SNAP then
+      table.remove(list, i)
+      if store_bookmarks(list) then
+        toast('已移除 ' .. fmt_time(mark.at) .. ' 的书签')
+      end
+      return
+    end
+  end
+  -- Tenth of a second: enough to be reproducible, coarse enough that the file
+  -- stays readable when opened by hand.
+  list[#list + 1] = { at = math.floor(pos * 10 + 0.5) / 10 }
+  if store_bookmarks(list) then
+    toast('已添加书签 ' .. fmt_time(pos))
+  end
+end
+
+local function clear_bookmarks()
+  if #entry_bookmarks(segment_entry()) == 0 then
+    return false
+  end
+  return store_bookmarks({})
+end
+
+--- Re-reads the stored marks into `state` so the bar can draw them.
+local function refresh_bookmarks()
+  state.bookmarks = entry_bookmarks(segment_entry())
 end
 
 --- Chapter names that the reference build treats as skippable.
@@ -1560,6 +1673,43 @@ local function build_menu(id)
         end,
       })
     end
+  elseif id == 'bookmarks' then
+    local marks = state.bookmarks or {}
+    for _, mark in ipairs(marks) do
+      table.insert(rows, {
+        label = mark.label or fmt_time(mark.at),
+        value = (state.position and math.abs(state.position - mark.at) < 1) and '当前' or nil,
+        kind = 'item',
+        act = function()
+          -- Closing on the way out is the difference between "jump there" and
+          -- "jump there and cover the picture with a menu".
+          seek_abs(mark.at)
+          close_menu()
+        end,
+      })
+    end
+    if #marks == 0 then
+      table.insert(rows, { label = '这个文件还没有书签', kind = 'header' })
+    end
+    table.insert(rows, {
+      label = '在当前位置添加',
+      value = fmt_time(state.position or 0),
+      kind = 'item',
+      act = function()
+        toggle_bookmark()
+      end,
+    })
+    if #marks > 0 then
+      table.insert(rows, {
+        label = '清空全部书签',
+        kind = 'item',
+        act = function()
+          if clear_bookmarks() then
+            toast('书签已清空')
+          end
+        end,
+      })
+    end
   elseif id == 'speed' then
     for _, preset in ipairs({ 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0 }) do
       table.insert(rows, {
@@ -1782,6 +1932,14 @@ local function build_menu(id)
       end,
     })
     table.insert(rows, {
+      label = '书签（Ctrl+B）',
+      value = #(state.bookmarks or {}) > 0 and (tostring(#state.bookmarks) .. ' 个') or '无',
+      kind = 'item',
+      act = function()
+        open_menu('bookmarks')
+      end,
+    })
+    table.insert(rows, {
       label = '退出播放',
       value = 'Esc',
       kind = 'item',
@@ -1802,6 +1960,7 @@ local MENU_TITLES = {
   audio = '音轨',
   subtitle = '字幕',
   chapters = '章节',
+  bookmarks = '书签',
   speed = '播放速度',
   playlist = '播放列表',
   video = '画面',
@@ -1826,7 +1985,7 @@ local function first_selectable(rows, from, step)
   return 1
 end
 
-local function open_menu(id)
+function open_menu(id)
   if id == 'stats' then
     state.stats = not state.stats
     state.menu = nil
@@ -2054,6 +2213,17 @@ local function draw_progress(parts)
       if chapter.time and chapter.time > 0 and chapter.time < duration then
         local cx = x + w * (chapter.time / duration)
         parts[#parts + 1] = rect(cx - 1, top - 5, 2, thickness + 10, 1, WHITE, 0x66)
+      end
+    end
+
+    -- Bookmarks: short gold blocks above the track, against the chapters'
+    -- full-height white hairlines. A tick rather than a span, because a
+    -- bookmark is a point — drawing it as wide as an edit would promise a
+    -- region the player is about to skip, and it skips nothing.
+    for _, mark in ipairs(state.bookmarks or {}) do
+      if mark.at > 0 and mark.at < duration then
+        local bx = x + w * (mark.at / duration)
+        parts[#parts + 1] = rect(bx - 3, top - 9, 6, 3, 1.5, BOOKMARK_TINT, 0xD8)
       end
     end
 
@@ -2652,6 +2822,7 @@ local function handle_key(raw)
   local name, mods = esc_key_name(raw)
   local shift = has_mod(mods, 'shift')
   local alt = has_mod(mods, 'alt')
+  local ctrl = has_mod(mods, 'ctrl')
 
   if state.help then
     state.help = false
@@ -2770,6 +2941,11 @@ local function handle_key(raw)
     mp.commandv('script-message', 'player-event', utils.format_json({ type = 'subtitle', seq = seq }))
   elseif name == 'b' and alt then
     command('playlist-prev')
+  elseif name == 'b' and ctrl then
+    -- Ctrl+B is the reference build's CreateBookmark (keyboard.xml:457). It
+    -- toggles here rather than only adding, because there is no bookmark
+    -- window to delete from.
+    toggle_bookmark()
   elseif name == 'pageup' then
     command('playlist-prev')
   elseif name == 'pagedown' then
@@ -2826,6 +3002,7 @@ local BINDINGS = {
   { 'Alt+n', 'alt+n' },
   { 'Alt+e', 'alt+e' },
   { 'Alt+o', 'alt+o' },
+  { 'Ctrl+b', 'ctrl+b' },
   { '1', '1' }, { '2', '2' }, { '3', '3' }, { '4', '4' }, { '5', '5' },
   { '6', '6' }, { '7', '7' }, { '8', '8' }, { '9', '9' },
 }
@@ -3437,6 +3614,9 @@ mp.register_event('file-loaded', function()
   state.help = false
   invalidate_edits()
   reset_edits()
+  -- Before the first paint, so the ticks are there the moment the bar appears
+  -- instead of popping in on the first redraw.
+  refresh_bookmarks()
   mark_dirty()
   render()
   schedule_hide()

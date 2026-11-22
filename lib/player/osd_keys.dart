@@ -118,16 +118,26 @@ abstract final class OsdKeys {
   /// leave the event alone for the rest of the app.
   static String? base(LogicalKeyboardKey key) => _named[key.keyId];
 
-  /// `shift+left`, `alt+n`, `space` — exactly what the Lua handler parses.
-  static String? compose(LogicalKeyboardKey key, {bool shift = false, bool alt = false}) {
+  /// `shift+left`, `alt+n`, `ctrl+b`, `space` — exactly what the Lua handler
+  /// parses. Order matters only for readability: the OSD strips modifiers one
+  /// at a time in a loop, so any order reaches the same action.
+  static String? compose(
+    LogicalKeyboardKey key, {
+    bool shift = false,
+    bool alt = false,
+    bool ctrl = false,
+  }) {
     final String? name = base(key);
     if (name == null) {
       return null;
     }
-    if (!shift && !alt) {
+    if (!shift && !alt && !ctrl) {
       return name;
     }
     final StringBuffer buffer = StringBuffer();
+    if (ctrl) {
+      buffer.write('ctrl+');
+    }
     if (alt) {
       buffer.write('alt+');
     }
@@ -137,4 +147,14 @@ abstract final class OsdKeys {
     buffer.write(name);
     return buffer.toString();
   }
+
+  /// Ctrl chords the OSD handles itself.
+  ///
+  /// Everything else stays with the shell — Windows has too many Ctrl
+  /// combinations of its own to forward them all, and Ctrl+F in a player that
+  /// also owns a search field is not a bet worth taking. This is a list of
+  /// exceptions rather than a rule, which is what keeps it from growing into a
+  /// second keymap nobody reads.
+  static bool ctrlOwned(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.keyB;
 }
