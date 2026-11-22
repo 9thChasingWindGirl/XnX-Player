@@ -14,6 +14,8 @@ import '../core/input/input_router.dart';
 import '../design/ps_tokens.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
+import '../data/sources/subtitle_finder.dart';
+import '../data/sources/subtitle_rules.dart';
 import '../data/store.dart';
 import '../playback/mpv/capabilities.dart';
 import '../playback/mpv/hw_profile.dart';
@@ -94,6 +96,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   String? _hint;
   bool _fileLoaded = false;
   bool _showDiagnostics = false;
+
+  /// Subtitles found beside the current video. Populated on file-loaded and
+  /// mounted once; a queue advance (next episode) rescans for that file.
+  List<SubtitleCandidate> _subtitles = const <SubtitleCandidate>[];
+  String? _subtitleKey;
   /// Window state on entry, so leaving the player does not quietly exit a
   /// fullscreen shell.
   bool _fullScreenAtEntry = false;
@@ -448,6 +455,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           ..startSizeWatch();
         _startHealthWatch();
         _probeCapabilities();
+        unawaited(_mountExternalSubtitles());
       });
 
       player.setProperty('volume', '${prefs.volume}');
@@ -762,6 +770,39 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  /// Finds subtitle files beside a locally stored video and mounts them.
+  ///
+  /// Only local paths are scanned: a remote source has no neighbourhood on
+  /// this machine, and blindly `sub-add`-ing an HTTP URL would be wrong.
+  /// `file-loaded` fires on every queue entry, so the key guards against
+  /// mounting the same tracks twice after a seek or a capability re-probe.
+  Future<void> _mountExternalSubtitles() async {
+    final MpvPlayer? player = _player;
+    if (player == null || widget.item.sourceKind != SourceKind.local) {
+      return;
+    }
+    final String? path = widget.item.path;
+    if (path == null || path.isEmpty) {
+      return;
+    }
+    if (_subtitleKey == path) {
+      return;
+    }
+    _subtitleKey = path;
+
+    final List<SubtitleCandidate> found = await SubtitleFinder.find(path);
+    if (!mounted || found.isEmpty) {
+      return;
+    }
+    _subtitles = found;
+    // `auto` lets mpv choose by language; forcing `select` would open the OSD
+    // menu and interrupt playback. forked/default tracks sort first.
+    for (final SubtitleCandidate candidate in found) {
+      player.command(<String>['sub-add', candidate.path, 'auto']);
+    }
+    AppLog.info('自动挂载外挂字幕：${found.length} 条（${found.first}）');
   }
 
   /// Opens a file dialog for an external subtitle and hands it to mpv.
