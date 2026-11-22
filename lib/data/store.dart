@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/app_log.dart';
 import '../core/app_paths.dart';
+import '../core/bookmark.dart';
 import '../core/net_proxy.dart';
 import '../core/notice_center.dart';
 import '../playback/mpv/hw_profile.dart';
@@ -33,6 +34,15 @@ class AppStore extends ChangeNotifier {
   final List<SourceConfig> sources = <SourceConfig>[];
   final List<MediaItem> items = <MediaItem>[];
   final Map<String, Duration> _resume = <String, Duration>{};
+
+  /// Items played past the end threshold.
+  ///
+  /// Kept apart from [_resume] because they are opposite facts: a resume point
+  /// says "stop here next time", this says "there is nothing left to stop at".
+  /// Without it a finished item loses its resume point and its progress bar
+  /// snaps back to zero on the next refresh — indistinguishable from never
+  /// having been played.
+  final Set<String> _watched = <String>{};
   final Map<String, MediaSource> _open = <String, MediaSource>{};
   final List<String> errors = <String>[];
 
@@ -157,6 +167,14 @@ class AppStore extends ChangeNotifier {
               }
             });
           }
+          final Object? rawWatched = decoded['watched'];
+          if (rawWatched is List) {
+            for (final Object? entry in rawWatched) {
+              if (entry is String) {
+                _watched.add(entry);
+              }
+            }
+          }
         }
       }
     } on Object catch (error, stack) {
@@ -188,6 +206,7 @@ class AppStore extends ChangeNotifier {
         'resume': _resume.map(
           (String key, Duration value) => MapEntry<String, int>(key, value.inMilliseconds),
         ),
+        'watched': _watched.toList(growable: false),
       };
       await File(statePath).writeAsString(jsonEncode(snapshot));
     } on Object catch (error, stack) {
@@ -360,6 +379,12 @@ class AppStore extends ChangeNotifier {
   }
 
   MediaItem _withResume(MediaItem item) {
+    if (_watched.contains(item.id)) {
+      // Finished: full bar, no resume point. Setting the bar to 1 rather than
+      // leaving it at zero is what keeps "watched" from reading as "unplayed"
+      // after the item is rebuilt from its source.
+      return item.copyWith(progress: 1.0, clearResume: true);
+    }
     final Duration? saved = _resume[item.id];
     if (saved == null || item.duration == null || item.duration!.inMilliseconds <= 0) {
       return item;
@@ -442,14 +467,36 @@ class AppStore extends ChangeNotifier {
     return item.headers;
   }
 
+  /// Records where playback stopped — or decides it should not be recorded.
+  ///
+  /// A reported position is not automatically a resume point. Two ends of a
+  /// film carry no information: the first minutes (a mis-click, a trailer, a
+  /// look at the credits) and the last ones (the item is done). Storing either
+  /// is how "continue watching" starts offering to resume the credits.
+  /// [BookmarkPolicy] owns those two thresholds so the player does not have to.
   void remember(MediaItem item, Duration position, Duration duration) {
-    _resume[item.id] = position;
+    final BookmarkDecision decision =
+        BookmarkPolicy.decide(position: position, total: duration);
+    if (decision == BookmarkDecision.ignore) {
+      return;
+    }
+
     final int index = items.indexWhere((MediaItem entry) => entry.id == item.id);
-    if (index >= 0) {
-      final double progress = duration.inMilliseconds <= 0
-          ? 0
-          : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0).toDouble();
-      items[index] = items[index].copyWith(progress: progress, resumeAt: position);
+    if (decision == BookmarkDecision.finished) {
+      _resume.remove(item.id);
+      _watched.add(item.id);
+      if (index >= 0) {
+        items[index] = items[index].copyWith(progress: 1.0, clearResume: true);
+      }
+    } else {
+      _resume[item.id] = position;
+      _watched.remove(item.id);
+      if (index >= 0) {
+        final double progress = duration.inMilliseconds <= 0
+            ? 0
+            : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0).toDouble();
+        items[index] = items[index].copyWith(progress: progress, resumeAt: position);
+      }
     }
     _notify();
     unawaited(_persist());

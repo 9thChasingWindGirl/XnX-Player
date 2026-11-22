@@ -715,7 +715,7 @@ class _Info extends StatelessWidget {
             PsButton(
               label: (item.path ?? '').isEmpty
                   ? '缺少媒体源'
-                  : (item.progress > 0.02 ? S.resume : S.play),
+                  : (item.resumeAt != null ? S.resume : S.play),
               icon: (item.path ?? '').isEmpty
                   ? Icons.link_off_rounded
                   : Icons.play_arrow_rounded,
