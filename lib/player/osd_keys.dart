@@ -92,9 +92,11 @@ abstract final class OsdKeys {
     InputAction.adjustForward => 'right',
     InputAction.confirm => 'enter',
     InputAction.back => 'esc',
-    // The pad has no Tab, so the secondary button (Y) raises the chrome instead;
-    // inside a menu `tab` closes it, which is the same thing.
-    InputAction.contextMenu => 'tab',
+    // `menu` rather than `tab`: a pad has no way to click a toolbar button, so
+    // the secondary button is its only route into track and chapter selection.
+    // Folding it into Tab (show/hide chrome) left a pad able to pause and seek
+    // but unable to reach anything else.
+    InputAction.contextMenu => 'menu',
     InputAction.toggleDock => 'tab',
     InputAction.playPause => 'space',
     InputAction.seekBack => 'left',

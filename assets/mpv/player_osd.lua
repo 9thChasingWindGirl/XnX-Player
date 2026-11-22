@@ -311,6 +311,9 @@ local state = {
   -- Kept on `state` because the bar redraws many times a second and reading a
   -- file from a paint path would be a stall, not a feature.
   bookmarks = {},
+  -- Which device is in the user's hand ('keyboard' / 'pointer' / 'gamepad'),
+  -- pushed by the host from `InputRouter.device`. Only the help page reads it.
+  input = 'keyboard',
   hover = nil,
   pointer = nil,
   menu = nil,
@@ -2422,36 +2425,69 @@ local function draw_stats(parts)
   end
 end
 
+--- The help page lists bindings, and which bindings exist depends on the device
+--- in the user's hand.
+---
+--- Everything below drives the same handlers — a pad's A arrives as `enter`,
+--- its B as `esc` — but "Space: play/pause" tells someone holding a controller
+--- nothing. Rather than print both lists and let each user filter, the page
+--- prints the one that describes what they are holding. The host pushes the
+--- device down as `user-data/player/input` (see `InputRouter.device`).
+local HELP_KEYBOARD = {
+  { '空格 / K', '播放 / 暂停' },
+  { '← →', '快退 / 快进 5 秒' },
+  { 'Shift + ← →', '快退 / 快进 15 秒' },
+  { '↑ ↓', '音量 ±5' },
+  { 'M', '静音' },
+  { 'J / Shift+J', '下一个 / 上一个字幕' },
+  { 'V', '字幕显示开关' },
+  { 'Z / X', '字幕延迟 -0.1 / +0.1' },
+  { 'A / Shift+A', '下一个 / 上一个音轨' },
+  { '[ / ]', '减速 / 加速' },
+  { 'Backspace', '恢复 1.0×' },
+  { 'C', '下一个章节' },
+  { ', / .', '逐帧后退 / 前进' },
+  { 'S / Shift+S', '截图 / 含字幕截图' },
+  { 'I', '统计信息' },
+  { 'L', '循环模式' },
+  { 'Ctrl + B', '记书签 / 取消书签' },
+  { 'Alt + N / Alt + E', '标记片头 / 片尾' },
+  { 'F7 / F8', '播放列表 / 章节' },
+  { 'F10 / F6', '音轨 / 字幕' },
+  { 'F11', '全屏切换' },
+  { 'Tab', '显示 / 隐藏界面' },
+  { 'Esc', '关闭菜单 / 返回' },
+  { '1 – 9', '跳转到 10% – 90%' },
+}
+
+--- A pad reaches a much smaller vocabulary, because that is all the pad has.
+--- Written as what the button *does*, not as the key it impersonates: the
+--- mapping (`OsdKeys.nameForAction`) is an implementation detail and changes.
+local HELP_GAMEPAD = {
+  { 'A', '确认 / 显示控件' },
+  { 'B', '返回 / 关闭' },
+  { 'X', '显示 / 隐藏控件' },
+  { 'Y', '打开菜单' },
+  { 'Start', '播放 / 暂停' },
+  { '← →', '快退 / 快进（连按加大步长）' },
+  { '↑ ↓', '音量 ±5' },
+  { 'LB / RB', '上一个 / 下一个' },
+  { 'L2 / R2', '快退 / 快进 15 秒' },
+}
+
 local function draw_help(parts)
-  local lines = {
-    { '空格 / K', '播放 / 暂停' },
-    { '← →', '快退 / 快进 5 秒' },
-    { 'Shift + ← →', '快退 / 快进 15 秒' },
-    { '↑ ↓', '音量 ±5' },
-    { 'M', '静音' },
-    { 'J / Shift+J', '下一个 / 上一个字幕' },
-    { 'V', '字幕显示开关' },
-    { 'Z / X', '字幕延迟 -0.1 / +0.1' },
-    { 'A / Shift+A', '下一个 / 上一个音轨' },
-    { '[ / ]', '减速 / 加速' },
-    { 'Backspace', '恢复 1.0×' },
-    { 'C', '下一个章节' },
-    { ', / .', '逐帧后退 / 前进' },
-    { 'S / Shift+S', '截图 / 含字幕截图' },
-    { 'I', '统计信息' },
-    { 'L', '循环模式' },
-    { 'Alt + N', '标记片头 / 片尾' },
-    { 'F7 / F8', '播放列表 / 章节' },
-    { 'F10 / F6', '音轨 / 字幕' },
-    { 'F11', '全屏切换' },
-    { 'Tab', '显示 / 隐藏界面' },
-    { 'Esc', '关闭菜单 / 返回' },
-    { '1 – 9', '跳转到 10% – 90%' },
-  }
-  local pw, ph = 1180, 120 + math.ceil(#lines / 2) * 44
+  local gamepad = state.input == 'gamepad'
+  local lines = gamepad and HELP_GAMEPAD or HELP_KEYBOARD
+  local title = gamepad and '手柄操作' or '键盘快捷键'
+  -- A pointer user has a keyboard too, so the key table stays; the footer only
+  -- adds what a mouse can do without one.
+  local footer = state.input == 'pointer' and '鼠标：移动显示控件，左键点击，右键菜单' or nil
+
+  local pw = 1180
+  local ph = 120 + math.ceil(#lines / 2) * 44 + (footer and 44 or 0)
   local px, py = (W - pw) / 2, (H - ph) / 2
   parts[#parts + 1] = rect(px, py, pw, ph, 30, BLACK, 0xF4)
-  parts[#parts + 1] = text(px + 40, py + 32, 34, WHITE, 0x00, '键盘快捷键', 7, true)
+  parts[#parts + 1] = text(px + 40, py + 32, 34, WHITE, 0x00, title, 7, true)
   parts[#parts + 1] = text(px + pw - 40, py + 40, 20, DIM, 0x00, '任意键关闭', 9, false)
   local half = math.ceil(#lines / 2)
   for i, line in ipairs(lines) do
@@ -2461,6 +2497,9 @@ local function draw_help(parts)
     local y = py + 104 + (row - 1) * 44
     parts[#parts + 1] = text(x, y, 21, WHITE, 0x00, line[1], 7, true, MONO)
     parts[#parts + 1] = text(x + 230, y, 21, GREY, 0x00, line[2], 7, false)
+  end
+  if footer then
+    parts[#parts + 1] = text(px + 40, py + ph - 44, 20, DIM, 0x00, footer, 7, false)
   end
 end
 
@@ -2850,6 +2889,12 @@ local function handle_key(raw)
     elseif name == 'right' then
       adjust_row(1)
       return
+    elseif name == 'menu' then
+      -- Swap panels instead of closing and reopening: pressing the button again
+      -- should land on the main menu, not blink the panel off and on. Pressing
+      -- it while already there closes it, which `open_menu` handles.
+      open_menu('more')
+      return
     else
       close_menu()
       -- fall through to the global map
@@ -2873,6 +2918,11 @@ local function handle_key(raw)
     end
   elseif name == 'tab' then
     toggle_ui()
+  elseif name == 'menu' then
+    -- Sent by a gamepad's secondary button. There is no physical key behind it:
+    -- a pad cannot click a toolbar button, so this is the only way into track,
+    -- subtitle and chapter selection without a mouse.
+    open_menu('more')
   elseif name == 'space' or name == 'k' then
     -- Space is pause everywhere, even with the chrome hidden: it is the key
     -- people press without looking.
@@ -3483,6 +3533,21 @@ end)
 mp.observe_property('user-data/player/title', 'string', function(_, value)
   state.title = value or ''
   mark_dirty()
+end)
+
+-- Which device the user last touched. Only the help page depends on it, so the
+-- observer repaints nothing unless that page is up — and it must repaint then,
+-- or the list a pad user is staring at stays labelled with keyboard keys.
+mp.observe_property('user-data/player/input', 'string', function(_, value)
+  local device = value or 'keyboard'
+  if device == state.input then
+    return
+  end
+  state.input = device
+  if state.help then
+    mark_dirty()
+    render()
+  end
 end)
 
 mp.observe_property('chapter-list', 'native', function(_, value)

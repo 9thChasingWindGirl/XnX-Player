@@ -125,7 +125,18 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _input = InputRouter.instance.subscribe(_onIntent, name: 'player');
+    // The OSD's help page lists keys, and which keys exist depends on the
+    // device in the user's hand. Pushing the device down means the page can
+    // say "A: select" instead of "Space: play" to someone holding a pad.
+    InputRouter.instance.device.addListener(_onInputDevice);
     unawaited(_boot());
+  }
+
+  void _onInputDevice() {
+    _player?.setProperty(
+      'user-data/player/input',
+      InputRouter.instance.device.value.name,
+    );
   }
 
   /// A resize delivered while the pointer is idle still has to move the OSD
@@ -171,6 +182,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _input?.cancel();
+    InputRouter.instance.device.removeListener(_onInputDevice);
     _watchdog?.cancel();
     _escFallback?.cancel();
     _mouseTimer?.cancel();
@@ -488,6 +500,12 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       // directory the rest of the app uses instead of %APPDATA%.
       player.setProperty('user-data/player/data-dir', AppPaths.dataDir);
       player.setProperty('user-data/player/skip-intro', prefs.skipIntro ? 'yes' : 'no');
+      // Initial value only: the listener installed in initState keeps it in
+      // step if the user picks up a pad halfway through.
+      player.setProperty(
+        'user-data/player/input',
+        InputRouter.instance.device.value.name,
+      );
 
       final Duration resume = widget.item.resumeAt ?? Duration.zero;
       player.loadQueue(queue, startAt: resume.inSeconds > 5 ? resume : Duration.zero);

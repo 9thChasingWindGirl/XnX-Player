@@ -177,6 +177,9 @@ void main() {
       expect(OsdKeys.nameForAction(InputAction.seekJumpForward), 'shift+right');
       expect(OsdKeys.nameForAction(InputAction.jumpPrev), 'shift+left');
       expect(OsdKeys.nameForAction(InputAction.pageNext), 'pagedown');
+      // The pad's only route into track selection. It used to share Tab with
+      // the chrome toggle, which left a controller unable to open any menu.
+      expect(OsdKeys.nameForAction(InputAction.contextMenu), 'menu');
       // Actions that only make sense in the shell have no OSD meaning.
       expect(OsdKeys.nameForAction(InputAction.search), isNull);
       expect(OsdKeys.nameForAction(InputAction.openFile), isNull);
