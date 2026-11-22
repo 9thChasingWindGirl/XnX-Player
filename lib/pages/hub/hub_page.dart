@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -99,6 +100,14 @@ class _HubPageState extends State<HubPage> {
       Navigator.of(context).maybePop();
       return true;
     }
+    // Shoulder buttons / PageUp-PageDown page through the library. Up/down is
+    // kept for focus and scrolling — stealing it would make the long copy on
+    // this screen impossible to read with a keyboard.
+    if (intent.action == InputAction.pagePrev ||
+        intent.action == InputAction.pageNext) {
+      _step(intent.action == InputAction.pagePrev ? -1 : 1);
+      return true;
+    }
     if (intent.action == InputAction.navigateUp || intent.action == InputAction.navigateDown) {
       final bool up = intent.action == InputAction.navigateUp;
       if (FocusNavigator.move(up ? NavDir.up : NavDir.down)) {
@@ -122,6 +131,38 @@ class _HubPageState extends State<HubPage> {
       return false;
     }
     return false;
+  }
+
+  /// Replaces this page with the previous/next title in the current library.
+  ///
+  /// The store list is the order the shelves were built from, so paging follows
+  /// what the user just browsed. Portal-only titles are not in it and simply
+  /// have no siblings.
+  void _step(int delta) {
+    final List<MediaItem> siblings = AppStore.instance.items;
+    if (siblings.length < 2) {
+      return;
+    }
+    final int index = siblings.indexWhere(
+      (MediaItem entry) => entry.id == widget.item.id,
+    );
+    if (index < 0) {
+      return;
+    }
+    final int next = index + delta;
+    if (next < 0 || next >= siblings.length) {
+      return;
+    }
+    unawaited(
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (BuildContext context) => HubPage(
+            item: siblings[next],
+            onPlay: widget.onPlay,
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _load() async {
@@ -693,6 +734,16 @@ class _Info extends StatelessWidget {
               accent: item.accentColor,
               selected: favorite,
               onSelect: onFavorite,
+            ),
+            const SizedBox(width: 14),
+            PsIconButton(
+              icon: Icons.keyboard_arrow_up_rounded,
+              onSelect: () => _step(-1),
+            ),
+            const SizedBox(width: 8),
+            PsIconButton(
+              icon: Icons.keyboard_arrow_down_rounded,
+              onSelect: () => _step(1),
             ),
             const SizedBox(width: 14),
             PsButton(
