@@ -5,18 +5,21 @@
 /// rewrites only that channel segment — beta and stable never bump the number
 /// themselves; they inherit exactly what dev produced.
 ///
-/// The `YY`/`ZZ` pair is a counter, not a per-build bump: the automatic dev
-/// build adds the number of commits made since `VERSION` last changed to `ZZ`.
-/// So `VERSION = 0.00.00` yields `0.00.00.Dev` on the commit that set it,
-/// `0.00.01.Dev` after the next commit, and so on. Only the dev channel does
-/// this; beta/stable keep the resulting number as-is.
+/// The dev hotfix counter counts **successful builds**, not commits: each
+/// successful dev build adds 1 to `ZZ`, seeded from `beta:VERSION.latest` —
+/// the record the previous build wrote back. `VERSION = 0.00.00` yields
+/// `0.00.00.Dev` on the first successful build, `0.00.01.Dev` on the second,
+/// and so on. A burst of commits between builds costs nothing, so early
+/// development does not inflate the number a stable release inherits. Failed
+/// and cancelled builds count too: they write nothing back, so the counter
+/// does not move.
 ///
 /// `X` is a breaking change, `YY` the two-digit minor iteration and `ZZ` the
 /// two-digit hotfix, so versions always sort as strings of equal length.
 ///
 ///   dart run tool/version.dart show
 ///   dart run tool/version.dart bump minor
-///   dart run tool/version.dart resolve --base 0.02.00 --channel dev --commits 3
+///   dart run tool/version.dart resolve --base 0.02.00 --channel dev --prev 0.00.15.Dev --prev-base 0.00.00
 ///   dart run tool/version.dart auto --write
 library;
 
@@ -46,8 +49,19 @@ void main(List<String> argv) {
     case 'resolve':
       final String base = _normalize(flags['base'] ?? _readBase());
       final String channel = (flags['channel'] ?? 'dev').toLowerCase();
-      final int commits = int.tryParse(flags['commits'] ?? '0') ?? 0;
-      stdout.writeln(_resolve(base, channel, commits: commits));
+      try {
+        stdout.writeln(
+          _resolve(
+            base,
+            channel,
+            previous: flags['prev'],
+            previousBase: flags['prev-base'],
+          ),
+        );
+      } on StateError catch (error) {
+        stderr.writeln(error.message);
+        exitCode = 1;
+      }
       break;
     case 'bump':
       final String part = (flags['part'] ?? 'patch').toLowerCase();
@@ -67,6 +81,8 @@ void main(List<String> argv) {
       break;
     default:
       stderr.writeln('usage: version.dart <show|resolve|bump|auto> [flags]');
+      stderr.writeln('  resolve: --base X.YY.ZZ --channel dev|beta|stable');
+      stderr.writeln('           [--prev LAST_DEV --prev-base BASE]');
       exitCode = 64;
       break;
   }
@@ -76,29 +92,79 @@ void main(List<String> argv) {
 /// `0.00.03.Beta`, `0.00.03`. Promotion only rewrites this segment; the build
 /// number is not part of the version.
 ///
-/// [commits] is the number of commits since `VERSION` last changed and is added
-/// to `ZZ` for the dev channel only — beta/stable must stay byte-identical to
-/// the dev artifact they were promoted from.
-String _resolve(String base, String channel, {int commits = 0}) {
+/// [previous] is the version the last successful dev build recorded in
+/// `beta:VERSION.latest` (possibly empty on a fresh repository); [previousBase]
+/// is the `base:` line next to it. Dev adds the hotfix counter on top of the
+/// base; every other channel returns the base untouched, so beta/stable stay
+/// byte-identical to the dev artifact they were promoted from.
+String _resolve(
+  String base,
+  String channel, {
+  String? previous,
+  String? previousBase,
+}) {
   switch (channel) {
     case 'stable':
       return base;
     case 'beta':
       return '$base.Beta';
     case 'dev':
-      return '${_addHotfix(base, commits)}.Dev';
+      return '${_nextDev(base, previous, previousBase: previousBase)}.Dev';
     default:
       stderr.writeln('unknown channel "$channel", falling back to dev');
-      return '${_addHotfix(base, commits)}.Dev';
+      return '${_nextDev(base, previous, previousBase: previousBase)}.Dev';
   }
 }
 
-String _addHotfix(String base, int commits) {
-  if (commits <= 0) {
+/// Next dev hotfix number: last successful build + 1, reset to the base
+/// whenever the base itself changed.
+///
+/// "The base changed" needs the base the record was built from, which is why
+/// `VERSION.latest` carries a `base:` line. Comparing versions alone cannot
+/// work: a normal accumulation (`VERSION = 0.00.00`, record `0.00.15.Dev`)
+/// differs from the base in every digit, while a manual hotfix bump
+/// (`0.00.05` → `0.00.10`) may differ in none. With the base line, any change
+/// to `VERSION` restarts the counter exactly at the new base. A legacy
+/// single-line record (written before the base line existed) falls back to
+/// comparing `X.YY` only — an accumulated hotfix digit there is
+/// indistinguishable from a manual bump, so it continues.
+///
+/// `previous` carrying a channel suffix (`0.00.15.Dev`) is fine; [parts]
+/// ignores it.
+String _nextDev(String base, String? previous, {String? previousBase}) {
+  final List<int> current = _parts(base);
+  final String? prev = previous?.trim();
+  if (prev == null || prev.isEmpty) {
+    // Fresh repository, or the record was deleted on purpose: the first
+    // successful build ships exactly the base.
     return base;
   }
-  final List<int> parts = _parts(base);
-  return _format(parts[0], parts[1], parts[2] + commits);
+  final List<int> last = _parts(prev);
+  final String? recorded = previousBase?.trim();
+  final bool sameBase;
+  if (recorded != null && recorded.isNotEmpty) {
+    final List<int> built = _parts(recorded);
+    sameBase = built[0] == current[0] &&
+        built[1] == current[1] &&
+        built[2] == current[2];
+  } else {
+    sameBase = last[0] == current[0] && last[1] == current[1];
+  }
+  if (!sameBase) {
+    // VERSION changed since the last build: restart from the new base.
+    return base;
+  }
+  final int hotfix = last[2] + 1;
+  if (hotfix > 99) {
+    // `_format` would happily emit a three-digit hotfix, breaking the
+    // equal-length property every consumer (sorting, promote's matching)
+    // silently relies on. Fail the build instead of shipping `0.YY.100`.
+    throw StateError(
+      'dev hotfix counter overflowed 99 (next would be '
+      '${last[0]}.${last[1]}.$hotfix); bump VERSION before building again',
+    );
+  }
+  return _format(last[0], last[1], hotfix);
 }
 
 String _bump(String base, String part) {

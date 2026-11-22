@@ -10,21 +10,26 @@ X.YY.ZZ
 
 - `X`：重大变更，从 `0` 开始；
 - `YY`：小幅度迭代，固定两位（`00`、`01` …… `10`）；
-- `ZZ`：hotfix 基数，两位；dev 构建会自动在它上面加提交数。
+- `ZZ`：hotfix 基数，两位；dev 构建会按**成功构建次数**在它上面累加。
 
 `VERSION` 只在要换迭代线时手动改。日常提交不改它，dev 构建时自动计算：
 
 ```text
-dev 版本 ZZ = VERSION 的 ZZ + 自 VERSION 最后一次变更以来的 commit 数
+dev 版本 ZZ = VERSION 的 ZZ + 自 VERSION 变更以来成功 dev 构建的次数
 ```
 
-以 `VERSION = 0.00.00` 为例：
+计数不看 commit：每次**成功**构建 ZZ+1，失败或被取消的构建不写回记录、不计数。
+所以前期密集提交不会把版本号撑大——发 stable 时继承的是 dev 构建的次数，
+不是提交的次数。以 `VERSION = 0.00.00` 为例：
 
-| 提交 | dev 版本 |
+| 构建 | dev 版本 |
 |---|---|
-| 设置 `VERSION = 0.00.00` 的那次提交 | `0.00.00.Dev` |
-| 之后第 1 次提交 | `0.00.01.Dev` |
-| 之后第 2 次提交 | `0.00.02.Dev` |
+| `VERSION` 变更后的第 1 次成功构建 | `0.00.00.Dev` |
+| 第 2 次成功构建 | `0.00.01.Dev` |
+| 第 3 次成功构建 | `0.00.02.Dev` |
+
+连续快速 push 会取消上一次未完成的构建（并发组 `cancel-in-progress`），
+所以版本号的增长只会慢于提交数，不会更快。
 
 **只有 dev 做这个加法。** beta 与 stable 原样继承 dev 的版本号，不再 +1：
 dev 的 `0.00.02.Dev` 晋升后就是 `0.00.02.Beta`，再晋升就是 `0.00.02`。
@@ -34,7 +39,7 @@ dev 的 `0.00.02.Dev` 晋升后就是 `0.00.02.Beta`，再晋升就是 `0.00.02`
 
 | 通道 | 版本 | 来源 | 发布位置 |
 |---|---|---|---|
-| dev | `X.YY.ZZ.Dev` | 仅 beta 分支 push 自动构建（ZZ 含提交数） | Actions artifact（**不进 Release**） |
+| dev | `X.YY.ZZ.Dev` | 仅 beta 分支 push 自动构建（ZZ 含成功构建数） | Actions artifact（**不进 Release**） |
 | beta | `X.YY.ZZ.Beta` | 手动从最新 dev 产物晋升，版本号不变 | GitHub prerelease |
 | stable | `X.YY.ZZ` | 手动从最新 beta 产物晋升（也可从 dev 直通），版本号不变 | GitHub Release |
 
@@ -64,10 +69,20 @@ dev 构建只由 push 触发，**基版本唯一来源是仓库根目录的 `VER
 一旦忘记就会让后续构建一直沿用旧版本号。该变量已移除：CI 只读 `VERSION`，避免
 "构建拿到了版本号却没落到仓库、下次又算回旧值"的问题。
 
-日常迭代**不需要** bump：提交本身就会让 dev 的 ZZ 加一。每次 dev 构建还会把实际
-产出的版本号写回 beta 分支的 `VERSION.latest`（提交带 `[skip ci]`，不会触发新构建），
-作为"最近一次 dev 发布了什么"的仓库内记录；promote 晋升时会与它交叉核对并提示不一致。
-注意 `VERSION` 本身不会被 CI 改写——它是 commit 计数的锚点，改写会让计数归零、版本回退。
+日常迭代**不需要** bump：每次成功的 dev 构建会让 ZZ 加一。每次 dev 构建还会把
+实际产出的版本号与构建时的基版本写回 beta 分支的 `VERSION.latest`（两行，提交带
+`[skip ci]`，不会触发新构建）：
+
+```text
+0.00.16.Dev
+base: 0.00.00
+```
+
+这份记录同时是**下一次构建的计数来源**和 promote 晋升时的交叉核对材料：下次构建
+读它的 `ZZ+1`，并用 `base:` 行判断 `VERSION` 变没变——变了就从新基数重新计数
+（比较版本号本身做不到这一点，正常累积下版本号与基数本来就不同）。
+`VERSION` 本身不会被 CI 改写——它是计数比对的基准，改写会让计数归零、版本回退。
+记录里没有 `base:` 行的旧格式也能读：此时按 `X.YY` 判断是否换线，匹配则继续累积。
 
 只有在要开新的迭代线时才手动改基版本：
 
@@ -76,7 +91,7 @@ dart run tool/version.dart bump minor   # 0.00.03 -> 0.01.00
 dart run tool/version.dart bump major   # 0.01.07 -> 1.00.00
 ```
 
-`bump patch` 仍然保留，用来强制跳过一个 hotfix 号；它和手改 `VERSION` 一样，会把自动计数归零（这次提交的 offset 为 0）。
+`bump patch` 仍然保留，用来重置 hotfix 基数（比如想跳过一段累计的 dev 号）；它和手改 `VERSION` 一样，下次成功构建会从新基数重新开始。
 
 没有 Flutter/Dart SDK：
 
@@ -84,7 +99,7 @@ dart run tool/version.dart bump major   # 0.01.07 -> 1.00.00
 powershell -ExecutionPolicy Bypass -File tool/bump-version.ps1 -Part minor
 ```
 
-两者都会更新 `VERSION` 与 `pubspec.yaml` 的 `version:`（自动补足两位）。提交并 push 到 **beta 分支**后，dev 构建从新的基版本重新计数（这次提交是 `0.02.00.Dev`）。PowerShell 脚本加 `-Push` 可直接提交并推送。
+两者都会更新 `VERSION` 与 `pubspec.yaml` 的 `version:`（自动补足两位）。提交并 push 到 **beta 分支**后，下一次成功的 dev 构建就是新基版本本身（如 `0.02.00.Dev`），之后每次成功构建再加一。PowerShell 脚本加 `-Push` 可直接提交并推送。
 
 ### 仓库变量（已停用）
 
@@ -103,7 +118,7 @@ dart run tool/version.dart auto --write
 
 ### 1. dev
 
-只有 push 到 **beta 分支**才会自动构建，ZZ 在该次构建时按提交数自动加一，只上传 Actions artifact，不创建 Release。`dev-build` 没有手动入口——手动构建走下面的 promote，产物永远是 beta 或 stable，且不会再次加一。
+只有 push 到 **beta 分支**才会自动构建，ZZ 按成功构建次数累加（读 `VERSION.latest` 取 +1），只上传 Actions artifact，不创建 Release。`dev-build` 没有手动入口——手动构建走下面的 promote，产物永远是 beta 或 stable，且不会再次加一。
 
 ### 2. dev → beta
 

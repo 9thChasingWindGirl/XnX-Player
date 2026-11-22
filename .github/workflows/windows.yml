@@ -8,9 +8,11 @@
 # （便携版 zip + 安装包），target=stable 产出正式版。
 #
 # 基版本唯一来源：VERSION 文件（仓库变量 XNX_VERSION 已停用，避免晋升后陈旧）
-# 每次 commit 自动把 ZZ+1（自 VERSION 最后一次变更起数 commit），
-# 只作用于 dev。beta/stable 晋升时原样继承 dev 的版本号，不再加一。
-# 构建成功后把实际版本写回 beta:VERSION.latest（[skip ci]），供晋升时交叉核对。
+# ZZ = 基数 + 自 VERSION 变更以来成功构建的次数：读 beta:VERSION.latest
+# （上一枚成功 dev 构建写回的记录）取 ZZ+1。只作用于 dev，前期密集提交不抬高
+# 版本号。beta/stable 晋升时原样继承 dev 的版本号，不再加一。
+# 构建成功后把实际版本写回 beta:VERSION.latest（[skip ci]），它既是晋升时的
+# 交叉核对记录，也是下一次构建的计数来源。
 #
 # 后续晋升：
 #   promote.yml  target=beta  -> 取最新 dev 产物，改名为 X.YY.ZZ.Beta，发 Release
@@ -80,15 +82,29 @@ jobs:
           if ($base -notmatch '^\d+\.\d{2}\.\d{2}$') {
             throw "VERSION must be X.YY.ZZ (two-digit minor/hotfix); got: $base"
           }
-          # 自动 hotfix：锚定 VERSION 最后一次变更，数它之后有多少 commit。
-          # 设置 VERSION 的那次提交是 +0，之后每次提交 +1，只给 dev 用。
-          $anchor = (git log -1 --format=%H -- VERSION).Trim()
-          $commits = 0
-          if ($anchor) { $commits = [int](git rev-list --count "$anchor..HEAD").Trim() }
-          $version = (dart tool/version.dart resolve --base "$base" --channel dev --commits $commits | Select-Object -Last 1).Trim()
+          # 计数来源是上一枚成功 dev 构建写回的 VERSION.latest，不是 commit 数：
+          # 一次成功的构建 ZZ+1，失败与被取消的构建不写回、不计入。这样前期
+          # 密集提交不会把 stable 继承到的版本号撑大。checkout 是 fetch-depth 0，
+          # 并发组 cancel-in-progress 保证读与写回不会同时进行。
+          # 记录第二行是构建时的基版本（base: X.YY.ZZ）：判断"基版本变没变"
+          # 必须比对构建时的基版本——正常累积下版本号本身就不等于基数。
+          $prevVersion = ''
+          $prevBase = ''
+          if (Test-Path VERSION.latest) {
+            $record = @(Get-Content VERSION.latest | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($record.Count -ge 1) { $prevVersion = $record[0] }
+            foreach ($line in $record) {
+              if ($line -match '^base:\s*(.+)$') { $prevBase = $Matches[1].Trim() }
+            }
+          }
+          $prevArgs = @()
+          if ($prevVersion) { $prevArgs = @('--prev', $prevVersion) }
+          if ($prevBase) { $prevArgs += @('--prev-base', $prevBase) }
+          $version = (dart tool/version.dart resolve --base "$base" --channel dev @prevArgs | Select-Object -Last 1).Trim()
           if (-not $version) { throw "version resolution returned empty" }
-          Write-Host "base=$base commits=$commits version=$version"
+          Write-Host "base=$base prev=${prevArgs -join ' '} version=$version"
           "RESOLVED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "BASE_VERSION=$base" | Out-File -FilePath $env:GITHUB_ENV -Append
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Analyze (gate)
@@ -212,11 +228,11 @@ jobs:
 
       # Record the version this run actually produced back in the repository.
       # The build artifact already carries it in its name and version.txt, but
-      # nothing on the repo side did — so the next build had to re-derive the
-      # number, and a stale XNX_VERSION variable could silently win. Writing a
-      # dedicated record keeps the commit-count anchor in VERSION untouched
-      # (rewriting VERSION itself would reset the count and go backwards) while
-      # giving every channel a persisted, readable "what did dev ship last".
+      # the counter needs a repo-side home: the next build reads this record
+      # and adds 1, so a build that fails or is cancelled never advances the
+      # number. Writing a dedicated record keeps the base in VERSION untouched
+      # (rewriting VERSION itself would restart the counter at the new base)
+      # while doubling as the "what did dev ship last" record promote checks.
       - name: Persist dev version to repository
         if: success()
         shell: pwsh
@@ -224,15 +240,22 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $version = "$env:RESOLVED_VERSION"
           if (-not $version) { throw 'RESOLVED_VERSION is empty; refusing to write' }
+          $base = "$env:BASE_VERSION"
+          if (-not $base) { throw 'BASE_VERSION is empty; refusing to write' }
+          # 第一行是 dev 版本（promote 只读这一行），第二行是构建时的基版本，
+          # 供下次构建判断 VERSION 变没变。两行都空不了，缺一行版本就回退。
           $current = ''
-          if (Test-Path VERSION.latest) { $current = (Get-Content VERSION.latest -Raw).Trim() }
+          if (Test-Path VERSION.latest) {
+            $first = Get-Content VERSION.latest | Select-Object -First 1
+            if ($first) { $current = $first.Trim() }
+          }
           if ($current -eq $version) {
             Write-Host "VERSION.latest already $version; nothing to commit"
             exit 0
           }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE 'VERSION.latest'), "$version`n", (New-Object System.Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE 'VERSION.latest'), "$version`nbase: $base`n", (New-Object System.Text.UTF8Encoding($false)))
           git add VERSION.latest
           # [skip ci] prevents this bookkeeping commit from triggering another
           # dev build; push targets the branch that started this run.
