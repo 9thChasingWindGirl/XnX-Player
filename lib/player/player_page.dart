@@ -14,9 +14,6 @@ import '../core/input/input_router.dart';
 import '../design/ps_tokens.dart';
 import '../data/models/media_item.dart';
 import '../data/prefs.dart';
-import '../data/sources/resolved_media.dart';
-import '../data/sources/subtitle_finder.dart';
-import '../data/sources/subtitle_rules.dart';
 import '../data/store.dart';
 import '../playback/mpv/capabilities.dart';
 import '../playback/mpv/hw_profile.dart';
@@ -24,7 +21,6 @@ import '../playback/mpv/mpv_assets.dart';
 import '../playback/mpv/mpv_options.dart';
 import '../playback/mpv/mpv_player.dart';
 import '../playback/mpv/mpv_window.dart';
-import 'osd/osd_chrome.dart';
 import 'osd/osd_overlay.dart';
 import '../playback/mpv/video_surface.dart';
 import '../ui/core/tv_scale.dart';
@@ -53,11 +49,6 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   static const int _maxQueue = 30;
-
-  /// How many queue entries resolve at once. Each one is a backend round-trip,
-  /// so a couple of them overlap the latency without opening 30 sockets to a
-  /// small home server.
-  static const int _resolveBatch = 4;
 
   MpvPlayer? _player;
   OsdBridge? _bridge;
@@ -103,11 +94,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   String? _hint;
   bool _fileLoaded = false;
   bool _showDiagnostics = false;
-
-  /// Subtitles found beside the current video. Populated on file-loaded and
-  /// mounted once; a queue advance (next episode) rescans for that file.
-  List<SubtitleCandidate> _subtitles = const <SubtitleCandidate>[];
-  String? _subtitleKey;
   /// Window state on entry, so leaving the player does not quietly exit a
   /// fullscreen shell.
   bool _fullScreenAtEntry = false;
@@ -126,18 +112,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _input = InputRouter.instance.subscribe(_onIntent, name: 'player');
-    // The OSD's help page lists keys, and which keys exist depends on the
-    // device in the user's hand. Pushing the device down means the page can
-    // say "A: select" instead of "Space: play" to someone holding a pad.
-    InputRouter.instance.device.addListener(_onInputDevice);
     unawaited(_boot());
-  }
-
-  void _onInputDevice() {
-    _player?.setProperty(
-      'user-data/player/input',
-      InputRouter.instance.device.value.name,
-    );
   }
 
   /// A resize delivered while the pointer is idle still has to move the OSD
@@ -183,7 +158,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _input?.cancel();
-    InputRouter.instance.device.removeListener(_onInputDevice);
     _watchdog?.cancel();
     _escFallback?.cancel();
     _mouseTimer?.cancel();
@@ -276,11 +250,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       final String? scriptPath = await MpvAssets.osdScriptPath();
       // The badge script is optional: when its assets are missing it simply
       // finds no manifest and draws nothing, so a failure here must never stop
-      // playback.
-      //
-      // `startup-logo-bounds.lua` is unpacked but not loaded: the badge script
-      // reaches it with `dofile` from its own folder, so all it needs is a copy
-      // on disk next to the badge script.
+      // playback. Both Lua files are unpacked together because the badge script
+      // locates its companion through `mp.get_script_directory()`.
       final String? logoScriptPath = await MpvAssets.scriptPath(MpvAssets.logoScript);
       await MpvAssets.scriptPath(MpvAssets.logoBounds);
       final String? logoDir = await MpvAssets.formatLogoDir();
@@ -308,32 +279,23 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       }
 
       // Backends may need a round-trip for a playable URL (AList raw link).
-      final ResolvedMedia primary = await AppStore.instance.resolveMedia(widget.item);
+      final String url = await AppStore.instance.resolve(widget.item);
 
       // Queue the sibling episodes. A single unresolvable sibling must not take
       // the whole season down, so only the clicked item is strict.
-      //
-      // Resolution is a network round-trip per item, so they run a few at a time
-      // rather than one after another: a 30-episode season used to mean 29 serial
-      // backend lookups before the first frame. Order is preserved, because "next
-      // episode" has to mean the next episode.
-      final List<String> queue = <String>[primary.uri];
-      final List<MediaItem> pending = <MediaItem>[];
+      final List<String> queue = <String>[url];
       for (final MediaItem sibling in widget.queue) {
-        if (queue.length + pending.length >= _maxQueue) {
+        if (queue.length >= _maxQueue) {
           break;
         }
-        if (sibling.id != widget.item.id) {
-          pending.add(sibling);
+        if (sibling.id == widget.item.id) {
+          continue;
         }
-      }
-      for (int start = 0; start < pending.length; start += _resolveBatch) {
-        final int end = start + _resolveBatch <= pending.length
-            ? start + _resolveBatch
-            : pending.length;
-        final List<String?> resolved =
-            await Future.wait(pending.sublist(start, end).map(_resolveQuietly));
-        queue.addAll(resolved.whereType<String>());
+        try {
+          queue.add(await AppStore.instance.resolve(sibling));
+        } catch (_) {
+          // Skip it; the playlist simply loses one entry.
+        }
       }
 
       final MpvPlayer player = MpvPlayer();
@@ -403,11 +365,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           _escFallback?.cancel();
           if (payload['type'] == 'chrome') {
             _chromeReply?.call(payload['mode'] == 'window');
-          } else if (payload['type'] == 'menu') {
-            // Lua mirrors its popup here as data; in chrome-window mode it
-            // does not draw the panel itself, so dropping this event would
-            // leave menus openable but invisible.
-            _osd?.handleMenuEvent(payload);
           }
         }
         ..attach();
@@ -491,7 +448,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           ..startSizeWatch();
         _startHealthWatch();
         _probeCapabilities();
-        unawaited(_mountExternalSubtitles());
       });
 
       player.setProperty('volume', '${prefs.volume}');
@@ -501,20 +457,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       // The OSD reads these before the first frame so the title and the
       // opening-skip preference are already in place at file-loaded.
       player.setProperty('user-data/player/title', widget.item.title);
-      // The OSD keys its intro/outro marks by media identity. A local file is
-      // identified by its full path, but a resolved stream's path is a URL that
-      // can rotate, so the stable item id is the fallback.
-      player.setProperty('user-data/player/media-id', widget.item.id);
       // The Lua stage persists intro/outro marks; point it at the same data
       // directory the rest of the app uses instead of %APPDATA%.
       player.setProperty('user-data/player/data-dir', AppPaths.dataDir);
       player.setProperty('user-data/player/skip-intro', prefs.skipIntro ? 'yes' : 'no');
-      // Initial value only: the listener installed in initState keeps it in
-      // step if the user picks up a pad halfway through.
-      player.setProperty(
-        'user-data/player/input',
-        InputRouter.instance.device.value.name,
-      );
 
       final Duration resume = widget.item.resumeAt ?? Duration.zero;
       player.loadQueue(queue, startAt: resume.inSeconds > 5 ? resume : Duration.zero);
@@ -818,52 +764,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     );
   }
 
-  /// Resolves one queue entry, returning null when the backend refuses.
-  ///
-  /// A season with one dead episode must still play the other twenty-three, so
-  /// the failure is swallowed here instead of aborting the queue — the playlist
-  /// simply loses that entry.
-  Future<String?> _resolveQuietly(MediaItem item) async {
-    try {
-      return (await AppStore.instance.resolveMedia(item)).uri;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Finds subtitle files beside a locally stored video and mounts them.
-  ///
-  /// Only local paths are scanned: a remote source has no neighbourhood on
-  /// this machine, and blindly `sub-add`-ing an HTTP URL would be wrong.
-  /// `file-loaded` fires on every queue entry, so the key guards against
-  /// mounting the same tracks twice after a seek or a capability re-probe.
-  Future<void> _mountExternalSubtitles() async {
-    final MpvPlayer? player = _player;
-    if (player == null || widget.item.sourceKind != SourceKind.local) {
-      return;
-    }
-    final String? path = widget.item.path;
-    if (path == null || path.isEmpty) {
-      return;
-    }
-    if (_subtitleKey == path) {
-      return;
-    }
-    _subtitleKey = path;
-
-    final List<SubtitleCandidate> found = await SubtitleFinder.find(path);
-    if (!mounted || found.isEmpty) {
-      return;
-    }
-    _subtitles = found;
-    // `auto` lets mpv choose by language; forcing `select` would open the OSD
-    // menu and interrupt playback. forked/default tracks sort first.
-    for (final SubtitleCandidate candidate in found) {
-      player.command(<String>['sub-add', candidate.path, 'auto']);
-    }
-    AppLog.info('自动挂载外挂字幕：${found.length} 条（${found.first}）');
-  }
-
   /// Opens a file dialog for an external subtitle and hands it to mpv.
   ///
   /// The OSD lives inside mpv and cannot show a dialog, so it asks Flutter to
@@ -988,10 +888,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
 
     final HardwareKeyboard keyboard = HardwareKeyboard.instance;
-    // Ctrl combinations belong to the app shell (Ctrl+F, Ctrl+O...), with the
-    // few exceptions the OSD binds for itself — Ctrl+B places a bookmark.
-    final bool ctrl = keyboard.isControlPressed;
-    if (ctrl && !OsdKeys.ctrlOwned(key)) {
+    // Ctrl combinations belong to the app shell (Ctrl+F, Ctrl+O...).
+    if (keyboard.isControlPressed) {
       return false;
     }
 
@@ -999,7 +897,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       key,
       shift: keyboard.isShiftPressed,
       alt: keyboard.isAltPressed,
-      ctrl: ctrl,
     );
     if (composed == null) {
       return false;
@@ -1107,18 +1004,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _mouseTimer = Timer(_mouseInterval, _flushMove);
   }
 
-  /// Parses a `menurow:<index>` zone id into its 0-based row, or null.
-  ///
-  /// Also false-matches `menu:<id>` correctly: the two prefixes share no
-  /// characters beyond `menu`, and only the row prefix carries the colon
-  /// digits this helper is after.
-  int? _menuRowIndex(String? action) {
-    if (action == null || !action.startsWith(OsdChrome.menuRowZone)) {
-      return null;
-    }
-    return int.tryParse(action.substring(OsdChrome.menuRowZone.length));
-  }
-
   void _flushMove() {
     final Offset? unit = _pendingMouse;
     _pendingMouse = null;
@@ -1136,9 +1021,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         osd.scrub(osd.seekFraction(unit.dx));
         return;
       }
-      final String? action = osd.actionAt(unit.dx, unit.dy);
-      osd.setSeekHover(action == 'seek');
-      osd.setMenuHover(_menuRowIndex(action));
+      osd.setSeekHover(osd.inSeekZone(unit.dx, unit.dy));
     }
     _player?.sendMouse(ev: 'move', nx: unit.dx, ny: unit.dy);
   }
@@ -1182,18 +1065,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 'cmd': 'menu',
                 'id': action.substring(5),
               });
-            } else if (action != null && action.startsWith(OsdChrome.menuRowZone)) {
-              // The row's meaning is a Lua closure and cannot cross the IPC
-              // boundary, so a click is a `choose` — Lua sets its selection to
-              // the row and runs it. Index is 1-based on the Lua side.
-              final int? row = _menuRowIndex(action);
-              if (row != null) {
-                player.sendScriptMessage(<String, Object?>{
-                  'cmd': 'menu-op',
-                  'op': 'choose',
-                  'index': row + 1,
-                });
-              }
             }
             break;
         }
@@ -1228,15 +1099,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       osd
         ..poke()
         ..adjustVolume(dy < 0 ? 5 : -5);
-      return;
-    }
-    if (osd != null && osd.hasMenu && osd.inMenuZone(unit.dx, unit.dy)) {
-      // A notch scrolls the mirrored popup. The panel is not a chrome band
-      // zone, so without this branch the wheel would change volume while the
-      // menu is visibly open; Lua still owns the selection and re-pushes the
-      // panel with the new index.
-      osd.poke();
-      _player?.sendMouse(ev: 'wheel', nx: unit.dx, ny: unit.dy, delta: dy < 0 ? 1 : -1);
       return;
     }
     // One notch per message regardless of the platform's scroll step; the Lua

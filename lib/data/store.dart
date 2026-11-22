@@ -6,8 +6,6 @@ import 'package:flutter/foundation.dart';
 
 import '../core/app_log.dart';
 import '../core/app_paths.dart';
-import '../core/bookmark.dart';
-import '../core/net_proxy.dart';
 import '../core/notice_center.dart';
 import '../playback/mpv/hw_profile.dart';
 import 'models/media_item.dart';
@@ -18,7 +16,6 @@ import 'sources/iptv.dart';
 import 'sources/local.dart';
 import 'sources/media_source.dart';
 import 'sources/remote_files.dart';
-import 'sources/resolved_media.dart';
 
 /// Application state: configured backends, the merged library, resume points
 /// and playback preferences.
@@ -34,15 +31,6 @@ class AppStore extends ChangeNotifier {
   final List<SourceConfig> sources = <SourceConfig>[];
   final List<MediaItem> items = <MediaItem>[];
   final Map<String, Duration> _resume = <String, Duration>{};
-
-  /// Items played past the end threshold.
-  ///
-  /// Kept apart from [_resume] because they are opposite facts: a resume point
-  /// says "stop here next time", this says "there is nothing left to stop at".
-  /// Without it a finished item loses its resume point and its progress bar
-  /// snaps back to zero on the next refresh — indistinguishable from never
-  /// having been played.
-  final Set<String> _watched = <String>{};
   final Map<String, MediaSource> _open = <String, MediaSource>{};
   final List<String> errors = <String>[];
 
@@ -167,23 +155,12 @@ class AppStore extends ChangeNotifier {
               }
             });
           }
-          final Object? rawWatched = decoded['watched'];
-          if (rawWatched is List) {
-            for (final Object? entry in rawWatched) {
-              if (entry is String) {
-                _watched.add(entry);
-              }
-            }
-          }
         }
       }
     } on Object catch (error, stack) {
       errors.add('读取配置失败：$error');
       AppLog.error('读取配置失败', error, stack);
     }
-    // Apply the saved proxy choice once preferences are on disk. Both the
-    // media client and the update downloader read it from here.
-    NetProxy.configure(prefs.networkProxyMode, prefs.networkProxyAddress);
     ready = true;
     AppLog.info('配置已载入：${sources.length} 个来源，${items.length} 项媒体');
     _notify();
@@ -206,7 +183,6 @@ class AppStore extends ChangeNotifier {
         'resume': _resume.map(
           (String key, Duration value) => MapEntry<String, int>(key, value.inMilliseconds),
         ),
-        'watched': _watched.toList(growable: false),
       };
       await File(statePath).writeAsString(jsonEncode(snapshot));
     } on Object catch (error, stack) {
@@ -265,7 +241,6 @@ class AppStore extends ChangeNotifier {
 
   Future<void> updatePrefs(PlaybackPrefs value) async {
     prefs = value;
-    NetProxy.configure(prefs.networkProxyMode, prefs.networkProxyAddress);
     await _persist();
     _notify();
   }
@@ -379,12 +354,6 @@ class AppStore extends ChangeNotifier {
   }
 
   MediaItem _withResume(MediaItem item) {
-    if (_watched.contains(item.id)) {
-      // Finished: full bar, no resume point. Setting the bar to 1 rather than
-      // leaving it at zero is what keeps "watched" from reading as "unplayed"
-      // after the item is rebuilt from its source.
-      return item.copyWith(progress: 1.0, clearResume: true);
-    }
     final Duration? saved = _resume[item.id];
     if (saved == null || item.duration == null || item.duration!.inMilliseconds <= 0) {
       return item;
@@ -430,14 +399,7 @@ class AppStore extends ChangeNotifier {
   }
 
   /// The URL handed to mpv, after any backend round-trip (AList raw URL).
-  Future<String> resolve(MediaItem item) async => (await resolveMedia(item)).uri;
-
-  /// [resolve] with the metadata that belongs to the answer.
-  ///
-  /// Local files, direct URLs and IPTV entries are already playable and skip the
-  /// backend entirely; everything else asks its source, which is the only place
-  /// that knows whether the link is signed and for how long.
-  Future<ResolvedMedia> resolveMedia(MediaItem item) async {
+  Future<String> resolve(MediaItem item) async {
     final String? path = item.path;
     if (path == null || path.isEmpty) {
       throw const SourceException('这一项没有可播放的地址');
@@ -445,13 +407,13 @@ class AppStore extends ChangeNotifier {
     if (item.sourceKind == SourceKind.local ||
         item.sourceKind == SourceKind.directUrl ||
         item.sourceKind == SourceKind.iptv) {
-      return ResolvedMedia(uri: path, headers: item.headers);
+      return path;
     }
     final SourceConfig? config = _configFor(item);
     if (config == null) {
-      return ResolvedMedia(uri: path, headers: item.headers);
+      return path;
     }
-    return _sourceFor(config).resolveMedia(item);
+    return _sourceFor(config).resolve(item);
   }
 
   /// Headers mpv would need. Kept for completeness: credentials are instead
@@ -467,36 +429,14 @@ class AppStore extends ChangeNotifier {
     return item.headers;
   }
 
-  /// Records where playback stopped — or decides it should not be recorded.
-  ///
-  /// A reported position is not automatically a resume point. Two ends of a
-  /// film carry no information: the first minutes (a mis-click, a trailer, a
-  /// look at the credits) and the last ones (the item is done). Storing either
-  /// is how "continue watching" starts offering to resume the credits.
-  /// [BookmarkPolicy] owns those two thresholds so the player does not have to.
   void remember(MediaItem item, Duration position, Duration duration) {
-    final BookmarkDecision decision =
-        BookmarkPolicy.decide(position: position, total: duration);
-    if (decision == BookmarkDecision.ignore) {
-      return;
-    }
-
+    _resume[item.id] = position;
     final int index = items.indexWhere((MediaItem entry) => entry.id == item.id);
-    if (decision == BookmarkDecision.finished) {
-      _resume.remove(item.id);
-      _watched.add(item.id);
-      if (index >= 0) {
-        items[index] = items[index].copyWith(progress: 1.0, clearResume: true);
-      }
-    } else {
-      _resume[item.id] = position;
-      _watched.remove(item.id);
-      if (index >= 0) {
-        final double progress = duration.inMilliseconds <= 0
-            ? 0
-            : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0).toDouble();
-        items[index] = items[index].copyWith(progress: progress, resumeAt: position);
-      }
+    if (index >= 0) {
+      final double progress = duration.inMilliseconds <= 0
+          ? 0
+          : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0).toDouble();
+      items[index] = items[index].copyWith(progress: progress, resumeAt: position);
     }
     _notify();
     unawaited(_persist());

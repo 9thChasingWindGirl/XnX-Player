@@ -94,28 +94,6 @@ class _SettingsPageState extends State<SettingsPage> {
     _apply(_store.prefs.copyWith(passthrough: values[next]));
   }
 
-  void _cycleProxy() {
-    const List<String> modes = <String>['none', 'system', 'custom'];
-    final int index = modes.indexOf(_store.prefs.networkProxyMode);
-    final String next = modes[(index + 1) % modes.length];
-    // updatePrefs pushes the choice into NetProxy, which both HTTP clients
-    // consult — no separate apply step to forget.
-    _apply(_store.prefs.copyWith(networkProxyMode: next));
-  }
-
-  Future<void> _editProxyAddress() async {
-    final String? value = await showDialog<String>(
-      context: context,
-      builder: (BuildContext context) => _ProxyInputDialog(
-        initial: _store.prefs.networkProxyAddress,
-      ),
-    );
-    if (value == null) {
-      return;
-    }
-    _apply(_store.prefs.copyWith(networkProxyAddress: value.trim()));
-  }
-
   static String _channelLabel(UpdateChannel channel) => switch (channel) {
         UpdateChannel.stable => '正式版Stable',
         UpdateChannel.beta => '测试版Beta',
@@ -601,7 +579,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       _Row(
                         label: S.skipIntro,
-                        hint: '片头标记、章节名与旁挂 .edl / comskip 里的片段自动跳过',
+                        hint: '检测到片头标记时自动跳过',
                         toggle: prefs.skipIntro,
                         onSelect: () => _apply(prefs.copyWith(skipIntro: !prefs.skipIntro)),
                       ),
@@ -633,33 +611,6 @@ class _SettingsPageState extends State<SettingsPage> {
                           });
                         },
                       ),
-                      _Row(
-                        label: '网络代理',
-                        hint: switch (prefs.networkProxyMode) {
-                          'none' => '媒体库、TMDB 与更新下载全部直连',
-                          'system' => '读取 Windows 系统代理设置；未配置时为直连',
-                          'custom' => prefs.networkProxyAddress.isEmpty
-                              ? '请再点一次设置代理地址，如 127.0.0.1:7890'
-                              : '自定义代理：${prefs.networkProxyAddress}',
-                          _ => '',
-                        },
-                        value: switch (prefs.networkProxyMode) {
-                          'none' => '无代理',
-                          'system' => '系统代理',
-                          'custom' => '自定义',
-                          _ => '系统代理',
-                        },
-                        onSelect: _cycleProxy,
-                      ),
-                      if (prefs.networkProxyMode == 'custom')
-                        _Row(
-                          label: '代理地址',
-                          hint: '格式 host:port，例如 127.0.0.1:7890',
-                          value: prefs.networkProxyAddress.isEmpty
-                              ? '未设置'
-                              : prefs.networkProxyAddress,
-                          onSelect: () => unawaited(_editProxyAddress()),
-                        ),
                       _Row(
                         label: _pending == null ? '检查更新' : '安装 ${_pending!.version}',
                         hint: _updater.isSnapshotLaunch
@@ -1316,122 +1267,6 @@ class _UpdateToggle extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Address for the "custom" proxy mode. Shared by every HTTP client.
-class _ProxyInputDialog extends StatefulWidget {
-  const _ProxyInputDialog({required this.initial});
-
-  final String initial;
-
-  @override
-  State<_ProxyInputDialog> createState() => _ProxyInputDialogState();
-}
-
-class _ProxyInputDialogState extends State<_ProxyInputDialog> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
-  InputSubscription? _inputSub;
-
-  @override
-  void initState() {
-    super.initState();
-    TextEntry.active.value = true;
-    _inputSub =
-        InputRouter.instance.subscribe(_onIntent, name: 'proxy-input');
-  }
-
-  @override
-  void dispose() {
-    _inputSub?.cancel();
-    TextEntry.active.value = false;
-    _controller.dispose();
-    super.dispose();
-  }
-
-  bool _onIntent(InputIntent intent) {
-    if (intent.action != InputAction.back) {
-      return false;
-    }
-    Navigator.of(context).pop();
-    return true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Material(
-        color: const Color(0xEE141821),
-        borderRadius: BorderRadius.circular(PsRadius.sheet),
-        child: Container(
-          width: 720,
-          padding: const EdgeInsets.all(40),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(PsRadius.sheet),
-            border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('自定义代理', style: PsType.page.copyWith(fontSize: 36)),
-              const SizedBox(height: 10),
-              Text(
-                '格式 host:port，例如 127.0.0.1:7890。留空表示直连。',
-                style: PsType.micro.copyWith(
-                  fontSize: 16,
-                  color: PsColor.textFaint,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 24),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                cursorColor: PsColor.text,
-                style: PsType.meta.copyWith(color: PsColor.text, fontSize: 24),
-                decoration: InputDecoration(
-                  isDense: true,
-                  filled: true,
-                  fillColor: PsColor.text.withValues(alpha: 0.06),
-                  hintText: '127.0.0.1:7890',
-                  hintStyle:
-                      PsType.meta.copyWith(color: PsColor.textFaint, fontSize: 22),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(12)),
-                    borderSide: BorderSide(color: PsColor.text, width: 2),
-                  ),
-                ),
-                onSubmitted: (String value) =>
-                    Navigator.of(context).pop(value.trim()),
-              ),
-              const SizedBox(height: 28),
-              Row(
-                children: <Widget>[
-                  PsButton(
-                    label: '取消',
-                    onSelect: () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(width: 12),
-                  PsButton(
-                    label: '保存',
-                    primary: true,
-                    onSelect: () => Navigator.of(context).pop(_controller.text.trim()),
-                  ),
-                ],
-              ),
-            ],
-          ),
         ),
       ),
     );

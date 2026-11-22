@@ -220,12 +220,6 @@ jobs:
           # GPL 分发要求随二进制附带许可；便携版里也放一份，安装包同样会装入 {app}。
           Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $payload 'LICENSE.txt') -Force
           Copy-Item -LiteralPath 'INSTALL.txt' -Destination (Join-Path $payload 'INSTALL.txt') -Force
-          # libmpv-2.dll 是别人编译的 LGPL 产物，附带声明与许可全文是分发义务的一部分。
-          # 之前只放了 LICENSE：安装说明让人去看 THIRD_PARTY_NOTICES.md，包里却没有这个文件。
-          Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination (Join-Path $payload 'THIRD_PARTY_NOTICES.md') -Force
-          $noticeLicences = Join-Path $payload 'licenses'
-          New-Item -ItemType Directory -Force -Path $noticeLicences | Out-Null
-          Copy-Item -Path 'licenses/*.txt' -Destination $noticeLicences -Force
 
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $portable = "dist/XnX-Player-Portable-$version.zip"

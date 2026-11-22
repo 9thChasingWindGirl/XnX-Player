@@ -8,9 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'core/app_log.dart';
 import 'core/app_version.dart';
-import 'core/net_proxy.dart';
 import 'core/strings.dart';
-import 'core/window_sizing.dart';
 import 'update/update_service.dart';
 
 Future<void> main() async {
@@ -39,22 +37,9 @@ Future<void> main() async {
 
   try {
     await windowManager.ensureInitialized();
-    // Fit the window to the display instead of assuming a 1080p monitor: on a
-    // 1366x768 laptop a hard-coded 1600x900 starts off-screen, and a user can
-    // drag any shape they like, which collapses the 16:9 OSD bottom band.
-    Size startSize = WindowSizing.minimum;
-    try {
-      // Read the primary view from Dart UI rather than window_manager's
-      // display helpers: those vary across 0.4.x and had no getDisplay().
-      final ui.FlutterView view = ui.PlatformDispatcher.instance.views.first;
-      final ui.Size screen = view.physicalSize / view.devicePixelRatio;
-      startSize = WindowSizing.fit(Size(screen.width, screen.height));
-    } on Object catch (error) {
-      AppLog.warn('读取显示器尺寸失败，使用默认窗口：$error');
-    }
-    final WindowOptions options = WindowOptions(
-      size: startSize,
-      minimumSize: WindowSizing.minimum,
+    const WindowOptions options = WindowOptions(
+      size: Size(1600, 900),
+      minimumSize: Size(1024, 576),
       center: true,
       title: 'XnX Player',
       titleBarStyle: TitleBarStyle.normal,
@@ -63,25 +48,12 @@ Future<void> main() async {
       unawaited(windowManager.show());
       unawaited(windowManager.focus());
     });
-    // Hard constraint: resizing keeps 16:9, the aspect the OSD is drawn in.
-    // Maximize/fullscreen still work — those bypass the aspect lock.
-    try {
-      await windowManager.setAspectRatio(WindowSizing.aspect);
-    } on Object catch (error) {
-      AppLog.warn('设置窗口宽高比失败：$error');
-    }
-    AppLog.info('主窗口已创建：${startSize.width.toInt()}x${startSize.height.toInt()} '
-        '（16:9，最小 ${WindowSizing.minimum.width.toInt()}x'
-        '${WindowSizing.minimum.height.toInt()}）');
+    AppLog.info('主窗口已创建');
   } on Object catch (error, stack) {
     // Window management is a nicety; the app still runs if the plugin is
     // unavailable (for example in a headless smoke test).
     AppLog.error('窗口初始化失败', error, stack);
   }
-
-  // Dart does not read the Windows proxy settings; resolve them once before
-  // any HTTP client asks for a route.
-  await NetProxy.detectSystem();
 
   _ensureInstallDirs();
 

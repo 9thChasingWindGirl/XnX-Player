@@ -259,13 +259,6 @@ class MediaItem {
     bool? favorite,
     String? group,
     Duration? resumeAt,
-
-    /// Drops the resume point instead of keeping the old one.
-    ///
-    /// `resumeAt: null` cannot mean "clear" in a copy-with — it means "leave it
-    /// alone" — and a finished item genuinely has no resume point. Without this
-    /// flag the only way to clear one is to rebuild the item from scratch.
-    bool clearResume = false,
     bool? playable,
     int? year,
     double? rating,
@@ -300,7 +293,7 @@ class MediaItem {
       headers: headers ?? this.headers,
       favorite: favorite ?? this.favorite,
       group: group ?? this.group,
-      resumeAt: clearResume ? null : (resumeAt ?? this.resumeAt),
+      resumeAt: resumeAt ?? this.resumeAt,
       year: year ?? this.year,
       rating: rating ?? this.rating,
       playable: playable ?? this.playable,

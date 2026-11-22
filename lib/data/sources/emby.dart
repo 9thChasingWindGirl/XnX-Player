@@ -109,11 +109,7 @@ class EmbySource extends MediaSource {
           }),
           headers: _headers,
         ).timeout(const Duration(seconds: 12));
-      } on Object catch (error) {
-        // Keep the exception class in the log: "timeout" alone cannot tell a
-        // dead host from a TLS handshake or an unreachable AAAA record.
-        AppLog.warn('Emby 分页失败（StartIndex=$start）：'
-            '${error.runtimeType}: $error');
+      } on Object {
         if (out.isEmpty) {
           rethrow;
         }

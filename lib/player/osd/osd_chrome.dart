@@ -76,48 +76,6 @@ class OsdMenu {
   final List<OsdMenuRow> rows;
 
   int get selected => rows.isEmpty ? 0 : index.clamp(0, rows.length - 1).toInt();
-
-  /// Reads the `menu` event the Lua OSD pushes over `player-event`.
-  ///
-  /// Two things differ from the wire format and are easy to get wrong:
-  ///
-  /// * `index` is **1-based** on the Lua side (`ipairs` order) and 0-based
-  ///   here, so it is shifted on the way in and shifted back when a click is
-  ///   forwarded.
-  /// * a closed panel arrives as `open: false` with no rows at all, which is
-  ///   this method's null. Treating that as an empty menu would leave an empty
-  ///   panel frame on screen forever.
-  ///
-  /// Returns null for anything that is not a well-formed open menu, so a
-  /// half-written event leaves the previous panel alone instead of clearing it.
-  static OsdMenu? fromEvent(Map<Object?, Object?> event) {
-    if (event['open'] != true) {
-      return null;
-    }
-    final Object? rawRows = event['rows'];
-    if (rawRows is! List) {
-      return null;
-    }
-    final List<OsdMenuRow> parsed = <OsdMenuRow>[];
-    for (final Object? raw in rawRows) {
-      if (raw is! Map) {
-        continue;
-      }
-      parsed.add(OsdMenuRow(
-        kind: '${raw['kind'] ?? 'item'}',
-        label: '${raw['label'] ?? ''}',
-        value: '${raw['value'] ?? ''}',
-        active: raw['active'] == true,
-      ));
-    }
-    final Object? rawIndex = event['index'];
-    final int index = rawIndex is num ? rawIndex.toInt() : 1;
-    return OsdMenu(
-      title: '${event['title'] ?? ''}',
-      index: index - 1,
-      rows: parsed,
-    );
-  }
 }
 
 /// One chapter mark: a start time and the name mpv reports for it.
@@ -176,31 +134,16 @@ abstract final class OsdChrome {
 
   static double _sx(ui.Size size) => size.width / designW;
 
-  /// Sizes (type, glyphs, control height, radii) use one scale, the horizontal
-  /// one. The old vertical scale squeezed every control into a thin strip when
-  /// the window was stretched wide-but-short: sy fell to a fraction of sx
-  /// while text kept a legibility floor, so labels overflowed their buttons.
-  /// On a 16:9 stage both scales are equal, so this changes nothing there.
-  static double _sy(ui.Size size) => _sx(size);
-
-  /// Y for the bottom band, anchored to the window's bottom edge.
-  ///
-  /// Design coordinates below are measured from the top of a 1920x1080 frame,
-  /// but the chrome lives in the bottom 380 of it. Anchoring that band to the
-  /// bottom keeps seek/transport/hint together at any window aspect ratio;
-  /// multiplying by a height-derived scale pushed them into each other.
-  /// Algebraically identical to `v * sy` when the window is 16:9.
-  static double _bottom(ui.Size size, double v) =>
-      size.height - (designH - v) * _sx(size);
+  static double _sy(ui.Size size) => size.height / designH;
 
   /// The seek line's rectangle — one source of truth for paint, hit testing and
   /// pointer-to-fraction conversion.
   static ui.Rect seekTrack(ui.Size size) {
     final double sx = _sx(size);
-    final double center = _bottom(size, barY);
+    final double sy = _sy(size);
     final double left = safeX * sx;
     final double right = math.max(left + 40, size.width - safeX * sx);
-    return ui.Rect.fromLTRB(left, center - 6 * sx, right, center + 6 * sx);
+    return ui.Rect.fromLTRB(left, (barY - 6) * sy, right, (barY + 6) * sy);
   }
 
   static double fractionAt(ui.Size size, double x) {
@@ -211,7 +154,7 @@ abstract final class OsdChrome {
   /// The seek strip, kept for the geometry tests and the wheel zone.
   static List<ui.Rect> hotZones(ui.Size size) {
     final ui.Rect track = seekTrack(size);
-    final double half = seekHitHeight * _sx(size) / 2;
+    const double half = seekHitHeight / 2;
     return <ui.Rect>[
       ui.Rect.fromLTRB(
         track.left,
@@ -229,18 +172,12 @@ abstract final class OsdChrome {
     final double sy = _sy(size);
     final List<OsdZone> out = <OsdZone>[];
     final ui.Rect track = seekTrack(size);
-    final double seekCenter = _bottom(size, barY);
     out.add(OsdZone(
       'seek',
-      ui.Rect.fromLTRB(
-        track.left,
-        seekCenter - 18 * sy,
-        track.right,
-        seekCenter + 18 * sy,
-      ),
+      ui.Rect.fromLTRB(track.left, (barY - 18) * sy, track.right, (barY + 18) * sy),
     ));
 
-    final double top = _bottom(size, ctrlY);
+    final double top = ctrlY * sy;
     final double height = ctrlH * sy;
     out.add(OsdZone('play', ui.Rect.fromLTWH(safeX * sx, top, 62 * sx, height)));
     out.add(OsdZone('back10', ui.Rect.fromLTWH((safeX + 68) * sx, top, 58 * sx, height)));
@@ -303,15 +240,11 @@ abstract final class OsdChrome {
     final double height = (62 + used + 20) * sy;
     return ui.Rect.fromLTWH(
       size.width - safeX * sx - menuW * sx,
-      _bottom(size, menuBottom) - height,
+      menuBottom * sy - height,
       menuW * sx,
       height,
     );
   }
-
-  /// Zone id prefix for a visible popup row. The suffix is a 0-based row
-  /// index into [OsdMenu.rows]; callers translating it back to Lua add one.
-  static const String menuRowZone = 'menurow:';
 
   /// Clickable row rectangles, keyed `menurow:<index>` with a 0-based index.
   static List<OsdZone> menuZones(ui.Size size, OsdMenu menu) {
@@ -329,7 +262,7 @@ abstract final class OsdChrome {
       final double h = (row.isHeader ? menuHeaderH : menuRowH) * sy;
       if (!row.isHeader) {
         out.add(OsdZone(
-          '$menuRowZone$i',
+          'menurow:$i',
           ui.Rect.fromLTWH(panel.left + 12 * sx, y, panel.width - 24 * sx, h),
         ));
       }
@@ -343,17 +276,15 @@ abstract final class OsdChrome {
     final double sy = _sy(size);
     double x(double v) => v * sx;
     double y(double v) => v * sy;
-    double b(double v) => _bottom(size, v);
-    // 12 px floor keeps a small badge legible. The scale is now the horizontal
-    // one, so a short-wide window no longer shrinks type below its controls.
+    // Positions scale with the video, text does not below 12 px: in a 1088×613
+    // window the 16-unit badges land on 9 px, which reads as noise rather than
+    // a label. A floor keeps the chrome legible without moving anything.
     double font(double v) => math.max(v * sy, 12);
 
-    // Scrim: the chrome must read over a bright frame. Never dim more than the
-    // lower half of a squeezed window, or the picture itself disappears.
-    final double scrimTop = math.max(b(700), size.height * 0.5);
+    // Scrim: the chrome must read over a bright frame.
     final ui.Paint scrim = ui.Paint()
       ..shader = ui.Gradient.linear(
-        ui.Offset(0, scrimTop),
+        ui.Offset(0, y(700)),
         ui.Offset(0, size.height),
         const <ui.Color>[
           ui.Color(0x00000000),
@@ -362,14 +293,13 @@ abstract final class OsdChrome {
         ],
         const <double>[0, 0.45, 1],
       );
-    canvas.drawRect(
-        ui.Rect.fromLTRB(0, scrimTop, size.width, size.height), scrim);
+    canvas.drawRect(ui.Rect.fromLTRB(0, y(700), size.width, size.height), scrim);
 
     if (model.title.isNotEmpty) {
       _textEllipsis(
         canvas,
         model.title,
-        ui.Offset(x(safeX), b(titleY)),
+        ui.Offset(x(safeX), y(titleY)),
         font(40),
         size.width - x(safeX) * 2,
         weight: ui.FontWeight.w600,
@@ -389,7 +319,7 @@ abstract final class OsdChrome {
     for (final String label in model.badges) {
       final OsdBadge badge = model.badgeFor(label);
       final double width = _textWidth(label, badgeInk) + x(22);
-      final ui.Rect box = ui.Rect.fromLTWH(bx, b(metaY), width, badgeH);
+      final ui.Rect box = ui.Rect.fromLTWH(bx, y(metaY), width, badgeH);
       final ui.RRect rounded = ui.RRect.fromRectAndRadius(box, ui.Radius.circular(x(6)));
       switch (badge.tier) {
         case OsdBadgeTier.lit:
@@ -498,7 +428,7 @@ abstract final class OsdChrome {
       }
     }
 
-    _text(canvas, hint, ui.Offset(x(safeX), b(hintY)), font(16),
+    _text(canvas, hint, ui.Offset(x(safeX), y(hintY)), font(16),
         color: const ui.Color(0x8AFFFFFF));
 
     // Above the pause badge (y 500) so the two never share a line.
@@ -509,13 +439,11 @@ abstract final class OsdChrome {
     }
 
     if (model.paused) {
-      // Centred on the picture, like the volume readout — a bottom-anchored
-      // design Y would land above the top edge in a short window.
       _centeredText(
         canvas,
         '已暂停',
         ui.Rect.fromCenter(
-          center: ui.Offset(size.width / 2, size.height * 0.42),
+          center: ui.Offset(size.width / 2, y(500)),
           width: size.width,
           height: font(60),
         ),
@@ -555,8 +483,7 @@ abstract final class OsdChrome {
     }
     double x(double v) => v * sx;
     double y(double v) => v * sy;
-    double font(double v) =>
-        math.max(v * sy, math.min(v * sx, 20));
+    double font(double v) => math.max(v * sy, 12);
 
     final ui.Rect panel = menuPanel(size, menu);
     canvas.drawRRect(
@@ -762,10 +689,8 @@ abstract final class OsdChrome {
     double x(double v) => v * sx;
     double y(double v) => v * sy;
     final double h = math.max(y(56), 40);
-    // The volume readout is centred on the picture, not part of the bottom
-    // band: anchoring it would send it off-screen in a short window.
     final ui.Rect box = ui.Rect.fromCenter(
-      center: ui.Offset(size.width / 2, size.height * 0.5),
+      center: ui.Offset(size.width / 2, y(430)),
       width: x(420),
       height: h,
     );

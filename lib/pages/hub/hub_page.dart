@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -22,7 +21,6 @@ import '../../ui/core/tv_scale.dart';
 import '../../ui/widgets/ps_button.dart';
 import '../../ui/widgets/ps_page.dart';
 import '../home/home_tile.dart';
-import '../media/reader_page.dart';
 
 /// Game hub: the page a cover opens into.
 ///
@@ -101,14 +99,6 @@ class _HubPageState extends State<HubPage> {
       Navigator.of(context).maybePop();
       return true;
     }
-    // Shoulder buttons / PageUp-PageDown page through the library. Up/down is
-    // kept for focus and scrolling — stealing it would make the long copy on
-    // this screen impossible to read with a keyboard.
-    if (intent.action == InputAction.pagePrev ||
-        intent.action == InputAction.pageNext) {
-      _step(intent.action == InputAction.pagePrev ? -1 : 1);
-      return true;
-    }
     if (intent.action == InputAction.navigateUp || intent.action == InputAction.navigateDown) {
       final bool up = intent.action == InputAction.navigateUp;
       if (FocusNavigator.move(up ? NavDir.up : NavDir.down)) {
@@ -132,38 +122,6 @@ class _HubPageState extends State<HubPage> {
       return false;
     }
     return false;
-  }
-
-  /// Replaces this page with the previous/next title in the current library.
-  ///
-  /// The store list is the order the shelves were built from, so paging follows
-  /// what the user just browsed. Portal-only titles are not in it and simply
-  /// have no siblings.
-  void _step(int delta) {
-    final List<MediaItem> siblings = AppStore.instance.items;
-    if (siblings.length < 2) {
-      return;
-    }
-    final int index = siblings.indexWhere(
-      (MediaItem entry) => entry.id == widget.item.id,
-    );
-    if (index < 0) {
-      return;
-    }
-    final int next = index + delta;
-    if (next < 0 || next >= siblings.length) {
-      return;
-    }
-    unawaited(
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (BuildContext context) => HubPage(
-            item: siblings[next],
-            onPlay: widget.onPlay,
-          ),
-        ),
-      ),
-    );
   }
 
   Future<void> _load() async {
@@ -317,7 +275,6 @@ class _HubPageState extends State<HubPage> {
                                     onFavorite: _toggleFavorite,
                                     onPlay: _play,
                                     onBack: () => Navigator.of(context).maybePop(),
-                                    onStep: _step,
                                     sources: _providers
                                         .map(_sourceLabel)
                                         .toList(growable: false),
@@ -527,7 +484,6 @@ class _Info extends StatelessWidget {
     required this.onFavorite,
     required this.onPlay,
     required this.onBack,
-    required this.onStep,
     this.sources = const <String>[],
     this.sourceIndex = 0,
     this.onSource,
@@ -538,9 +494,6 @@ class _Info extends StatelessWidget {
   final VoidCallback onFavorite;
   final VoidCallback onPlay;
   final VoidCallback onBack;
-
-  /// Pages to the previous (-1) or next (+1) title in the library.
-  final void Function(int delta) onStep;
 
   /// Every configured file that can play this portal title, by source label.
   final List<String> sources;
@@ -617,7 +570,16 @@ class _Info extends StatelessWidget {
         ],
         if ((item.overview ?? '').isNotEmpty) ...<Widget>[
           const SizedBox(height: 14),
-          _Overview(text: item.overview!, title: item.title),
+          Text(
+            item.overview!,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: PsType.body.copyWith(
+              fontSize: 21,
+              height: 1.5,
+              color: PsColor.text.withValues(alpha: 0.84),
+            ),
+          ),
         ] else if (item.sourceKind == SourceKind.local) ...<Widget>[
           const SizedBox(height: 14),
           Text(
@@ -715,7 +677,7 @@ class _Info extends StatelessWidget {
             PsButton(
               label: (item.path ?? '').isEmpty
                   ? '缺少媒体源'
-                  : (item.resumeAt != null ? S.resume : S.play),
+                  : (item.progress > 0.02 ? S.resume : S.play),
               icon: (item.path ?? '').isEmpty
                   ? Icons.link_off_rounded
                   : Icons.play_arrow_rounded,
@@ -731,16 +693,6 @@ class _Info extends StatelessWidget {
               accent: item.accentColor,
               selected: favorite,
               onSelect: onFavorite,
-            ),
-            const SizedBox(width: 14),
-            PsIconButton(
-              icon: Icons.keyboard_arrow_up_rounded,
-              onSelect: () => onStep(-1),
-            ),
-            const SizedBox(width: 8),
-            PsIconButton(
-              icon: Icons.keyboard_arrow_down_rounded,
-              onSelect: () => onStep(1),
             ),
             const SizedBox(width: 14),
             PsButton(
@@ -1335,104 +1287,6 @@ class _EpisodeShelfState extends State<_EpisodeShelf> {
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-/// Four lines of plot that say, visibly, that there is more.
-///
-/// The reference build makes the whole block a button into a text viewer. Same
-/// here — but the affordance is permanent rather than hover-only, because a
-/// viewer on a remote never hovers and would otherwise never learn that the
-/// text continues past line four.
-///
-/// The hover plate is drawn as a stack sibling with negative insets instead of
-/// as padding, so the copy keeps the exact left edge it shares with the title,
-/// the chips and the facts row.
-class _Overview extends StatefulWidget {
-  const _Overview({required this.text, required this.title});
-
-  final String text;
-  final String title;
-
-  @override
-  State<_Overview> createState() => _OverviewState();
-}
-
-class _OverviewState extends State<_Overview> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color tint = _hover ? PsColor.accentHover : PsColor.textFaint;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => unawaited(
-          ReaderPage.open(
-            context,
-            title: widget.title,
-            text: widget.text,
-            eyebrow: '剧情简介',
-          ),
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: <Widget>[
-            Positioned(
-              left: -14,
-              right: -14,
-              top: -10,
-              bottom: -10,
-              child: AnimatedContainer(
-                duration: PsMotion.fast,
-                decoration: BoxDecoration(
-                  color: _hover
-                      ? PsColor.surface.withValues(alpha: 0.55)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: _hover ? PsColor.hairline : Colors.transparent,
-                  ),
-                ),
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  widget.text,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                  style: PsType.body.copyWith(
-                    fontSize: 21,
-                    height: 1.5,
-                    color: PsColor.text.withValues(alpha: 0.84),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(
-                      '阅读全文',
-                      style: PsType.micro.copyWith(
-                        color: tint,
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(Icons.chevron_right_rounded, size: 16, color: tint),
-                  ],
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

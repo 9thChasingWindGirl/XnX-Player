@@ -59,34 +59,6 @@ void main() {
       expect(OsdChrome.hotZones(stage).first.left, closeTo(track.left, 0.0001));
       expect(OsdChrome.hotZones(stage).first.right, closeTo(track.right, 0.0001));
     });
-
-    test('the bottom band stays anchored and legible in a squeezed window', () {
-      // A wide-but-short window used to scale the band by height alone: the
-      // controls collapsed into a thin strip while the floored type overflowed
-      // them. Sizes now follow width; the band is anchored to the bottom edge.
-      const ui.Size squeezed = ui.Size(1920, 400);
-      final ui.Rect wide = OsdChrome.seekTrack(const ui.Size(1920, 1080));
-      final ui.Rect short = OsdChrome.seekTrack(squeezed);
-      expect(short.center.dy, closeTo(204, 0.01)); // 400 - (1080 - 884)
-      expect(short.height, closeTo(wide.height, 0.01));
-
-      final ui.Rect seekZone = OsdChrome.hotZones(squeezed).first;
-      expect(seekZone.height, closeTo(OsdChrome.seekHitHeight, 0.01));
-      expect(seekZone.bottom, lessThanOrEqualTo(squeezed.height));
-
-      final ui.Rect play = OsdChrome.zones(squeezed)
-          .firstWhere((OsdZone zone) => zone.id == 'play')
-          .rect;
-      expect(play.height, closeTo(66, 0.01));
-      expect(play.bottom, lessThanOrEqualTo(squeezed.height));
-    });
-
-    test('a 16:9 stage keeps the original geometry', () {
-      // The bottom-anchor formula is algebraically identical to height scaling
-      // when the stage keeps the design aspect ratio.
-      const ui.Size stage = ui.Size(1280, 720);
-      expect(OsdChrome.seekTrack(stage).center.dy, closeTo(884 * 720 / 1080, 0.01));
-    });
   });
 
   group('OsdChromeModel', () {
@@ -118,75 +90,6 @@ void main() {
         hoverSeek: true,
       );
       expect(scrubbing.scrubbing, 0.7);
-    });
-  });
-  group('OsdMenu mirroring', () {
-    // The wire format Lua pushes on `player-event`: 1-based index, rows as
-    // plain maps. These cases pin the shift in both directions, because an
-    // off-by-one here clicks the row next to the one the user aimed at.
-    Map<String, Object?> event({int index = 3}) => <String, Object?>{
-          'type': 'menu',
-          'open': true,
-          'title': '音轨',
-          'index': index,
-          'rows': <Object?>[
-            <Object?, Object?>{'kind': 'header', 'label': '音轨'},
-            <Object?, Object?>{'kind': 'item', 'label': 'Track 1', 'value': 'chi', 'active': true},
-            <Object?, Object?>{'kind': 'adjust', 'label': '同步', 'value': '0.0s'},
-            <Object?, Object?>{'kind': 'item', 'label': 'Track 2'},
-          ],
-        };
-
-    test('fromEvent shifts the 1-based Lua index to 0-based', () {
-      final OsdMenu? menu = OsdMenu.fromEvent(event());
-      expect(menu, isNotNull);
-      expect(menu!.title, '音轨');
-      expect(menu.index, 2); // Lua's row 3 → row 2 here.
-      expect(menu.rows, hasLength(4));
-      expect(menu.rows[0].isHeader, isTrue);
-      expect(menu.rows[1].active, isTrue);
-      expect(menu.rows[2].value, '0.0s');
-    });
-
-    test('a closed or malformed event does not fabricate a panel', () {
-      // Closed arrives as open:false with no rows — that is null, not an
-      // empty menu that would paint a bare frame forever.
-      expect(OsdMenu.fromEvent(<Object?, Object?>{'open': false}), isNull);
-      // Missing rows: not a well-formed open menu.
-      expect(OsdMenu.fromEvent(<Object?, Object?>{'open': true}), isNull);
-      // A row that is not a map is skipped, not a crash.
-      final OsdMenu? menu = OsdMenu.fromEvent(<Object?, Object?>{
-        'open': true,
-        'index': 1,
-        'rows': <Object?>['garbage'],
-      });
-      expect(menu, isNotNull);
-      expect(menu!.rows, isEmpty);
-    });
-
-    test('menuZones keep real row indices and skip headers', () {
-      final OsdMenu menu = OsdMenu.fromEvent(event())!;
-      final List<OsdZone> rows = OsdChrome.menuZones(zonelessStage(), menu);
-      // Headers are drawn but not clickable; the three non-header rows are.
-      expect(rows, hasLength(3));
-      expect(
-        rows.map((OsdZone zone) => zone.id),
-        <String>['menurow:1', 'menurow:2', 'menurow:3'],
-      );
-      // Clicking the second zone must name Lua's row 3 after the +1 shift —
-      // the same row the event said was selected.
-      final int clicked = int.parse(rows[1].id.substring(OsdChrome.menuRowZone.length)) + 1;
-      expect(clicked, 3);
-    });
-
-    test('the selected row lands inside its own clickable rect', () {
-      final OsdMenu menu = OsdMenu.fromEvent(event())!;
-      final List<OsdZone> rows = OsdChrome.menuZones(zonelessStage(), menu);
-      final OsdZone selected = rows.firstWhere(
-        (OsdZone zone) => zone.id == 'menurow:${menu.index}',
-      );
-      expect(selected.rect.top, greaterThan(0));
-      expect(selected.rect.bottom, lessThan(zonelessStage().height));
     });
   });
 }

@@ -55,21 +55,7 @@ local HDR_GOLD = '&H3CBEFF&' -- RGB 255,190,60
 local DV_PURPLE = '&HFF78A0&' -- RGB 160,120,255
 local HLG_CYAN = '&HDCDC50&' -- RGB 80,220,220
 local DTS_AMBER = '&H4696FF&' -- RGB 255,150,70
-
--- Timeline band tints. A cut and a mute are different promises: one removes
--- picture, the other only sound. Drawing both in the same white — separated by
--- two steps of alpha — meant the only way to tell them apart was to hover the
--- bar and read a tooltip. The reference build gives EDL its own red row above
--- the progress bar for the same reason; here the cut row is red and the mute
--- row stays a faint white hairline beneath it.
-local CUT_TINT = '&H576BFF&' -- RGB 255,107,87
 local OK_GREEN = '&H72D96E&' -- RGB 110,217,114
-
--- Bookmark ticks. Gold, because it is the one hue on the bar that is not a
--- judgement about the file: a cut is bad news, a bookmark is an annotation.
--- Kept as its own constant rather than reusing the HDR badge gold so the two
--- can diverge without one silently recolouring the other.
-local BOOKMARK_TINT = '&H3CBEFF&' -- RGB 255,190,60
 
 local FONT = 'Microsoft YaHei UI'
 local MONO = 'Consolas'
@@ -307,13 +293,6 @@ local state = {
   fallback_title = '',
   chapters = {},
   chapter = -1,
-  -- Bookmarks for the current file, read from the per-file record on load.
-  -- Kept on `state` because the bar redraws many times a second and reading a
-  -- file from a paint path would be a stall, not a feature.
-  bookmarks = {},
-  -- Which device is in the user's hand ('keyboard' / 'pointer' / 'gamepad'),
-  -- pushed by the host from `InputRouter.device`. Only the help page reads it.
-  input = 'keyboard',
   hover = nil,
   pointer = nil,
   menu = nil,
@@ -341,13 +320,11 @@ local state = {
 
 local seq = 0
 local hide_timer = nil
+local outro_skipped = false
 
 -- Forward declarations. Lua locals are not hoisted: the menu section above the
 -- render section calls back into it, so these names must exist first.
--- Forward declarations. `build_menu` reaches back into the menu machinery it is
--- part of (opening a sub-menu from a row), which only works if the names exist
--- before it is defined; a later `local function` would shadow them instead.
-local mark_dirty, render, show_ui, schedule_hide, send_back, close_menu, open_menu
+local mark_dirty, render, show_ui, schedule_hide, send_back, close_menu
 local send_fullscreen
 
 local function now()
@@ -391,32 +368,10 @@ local function path_name()
   return name or path
 end
 
---- Normalises a path into a storage key.
----
---- Windows paths are case-insensitive, so `C:\Films\A.mkv` and `c:\films\a.mkv`
---- are one file and must share one record. URLs are *not* case-insensitive — an
---- Emby item id is a case-sensitive path segment — so a scheme is left alone.
-local function normalize_key(raw)
-  local text = tostring(raw or ''):gsub('\\', '/')
-  if text:find('://', 1, true) then
-    return text
-  end
-  local collapsed = text:gsub('/+', '/')
-  return collapsed:lower()
-end
-
---- The identity of the file mpv currently has open.
----
---- The whole path, never the basename: two copies of `S01E01.mkv` in different
---- folders are different episodes.
-local function path_key()
+local function file_key()
   local path = mp.get_property('path') or ''
-  if path ~= '' then
-    return normalize_key(path)
-  end
-  -- Streams resolved through the host may have no useful path; the app hands us
-  -- a stable item id for exactly this case.
-  return normalize_key(mp.get_property('user-data/player/media-id') or '')
+  local _, name = utils.split_path(path)
+  return name or path or ''
 end
 
 -- ==== FORMAT / BADGES ======================================================
@@ -575,23 +530,9 @@ local function badge_items()
 end
 
 -- ==== SEGMENTS =============================================================
---
--- Every mark is one EDL edit — `start, end, action` — which is the shape Kodi
--- defined in `xbmc/video/Edl.cpp` and the shape of a `<video>.edl` sidecar, so
--- the same record can be exported for other players instead of being a private
--- blob. Actions: `cut` removes the span from playback, `mute` only silences it,
--- `commbreak` is an ad break (muted, but labelled differently).
---
--- Records are keyed by the **full path**. Version 1 keyed them by bare file
--- name, which meant `C:\A\S01E01.mkv` and `D:\B\S01E01.mkv` shared one mark —
--- mark the opening of one episode and every copy of it on every drive skipped
--- the wrong two minutes. `adopt_legacy` migrates those records once.
 
 local SEG_CACHE = nil
 local SEG_PATH = nil
-
---- Action used when a record predates the action column.
-local DEFAULT_ACTION = 'cut'
 
 local function segments_path()
   if SEG_PATH then
@@ -645,104 +586,36 @@ local function save_segments()
   file:close()
 end
 
--- ==== BOOKMARKS ============================================================
---
--- Points, not spans. The EDL section above answers "which part of this file
--- must not play"; this answers "which moment is worth coming back to". Both
--- live in the same per-file record, because they are the same kind of fact: a
--- claim the viewer made about this file, keyed by its full path.
---
--- The reference build keeps bookmarks in the video database, each with a
--- rendered thumbnail and a saved player state. Neither is reproducible here — a
--- screenshot would stall the picture for a frame, and there is no window to
--- browse them in — so what is left is the part that matters: timestamp, jump,
--- delete, and a tick on the bar so they are not invisible until opened.
-
---- How close a second press must be to toggle instead of adding a new mark.
----
---- Kodi splits "add" (Ctrl+B) from "delete" (a key inside the bookmark window).
---- With no window, one key has to do both, and this tolerance is what stops a
---- slightly-off second press from stacking two marks half a second apart.
-local BOOKMARK_SNAP = 2
-
---- Marks stored for one entry, in playback order.
-local function entry_bookmarks(entry)
-  local out = {}
-  if type(entry) ~= 'table' or type(entry.bookmarks) ~= 'table' then
-    return out
+local function current_segment()
+  local key = file_key()
+  if key == '' then
+    return nil
   end
-  for _, mark in ipairs(entry.bookmarks) do
-    local at = tonumber(type(mark) == 'table' and mark.at or mark)
-    if at and at >= 0 then
-      out[#out + 1] = { at = at, label = type(mark) == 'table' and mark.label or nil }
-    end
-  end
-  table.sort(out, function(a, b)
-    return a.at < b.at
-  end)
-  return out
+  local all = load_segments()
+  return all[key]
 end
 
---- Replaces the stored list and republishes it to the bar.
-local function store_bookmarks(list)
-  local entry, key, all = segment_entry()
-  if not key or key == '' or not all then
-    return false
-  end
-  if not entry then
-    entry = {}
-    all[key] = entry
-  end
-  -- An empty list drops the key instead of storing `[]`: a file with no marks
-  -- should leave no trace in the file, and the reader already treats a missing
-  -- list as empty. If that leaves the whole entry empty, the entry goes too —
-  -- otherwise every file the user bookmarked once and cleared would keep an
-  -- empty `{}` in segments.json for ever.
-  entry.bookmarks = #list > 0 and list or nil
-  if next(entry) == nil then
-    all[key] = nil
-  end
-  SEG_CACHE = all
-  save_segments()
-  state.bookmarks = list
-  mark_dirty()
-  return true
-end
-
---- Adds a mark here, or removes the one already here.
-local function toggle_bookmark()
-  local pos = state.position or 0
-  if pos <= 0 then
+local function set_segment(slot, s, e)
+  local key = file_key()
+  if key == '' then
     return
   end
-  local list = entry_bookmarks(segment_entry())
-  for i, mark in ipairs(list) do
-    if math.abs(mark.at - pos) <= BOOKMARK_SNAP then
-      table.remove(list, i)
-      if store_bookmarks(list) then
-        toast('已移除 ' .. fmt_time(mark.at) .. ' 的书签')
-      end
-      return
-    end
-  end
-  -- Tenth of a second: enough to be reproducible, coarse enough that the file
-  -- stays readable when opened by hand.
-  list[#list + 1] = { at = math.floor(pos * 10 + 0.5) / 10 }
-  if store_bookmarks(list) then
-    toast('已添加书签 ' .. fmt_time(pos))
-  end
+  local all = load_segments()
+  local entry = all[key] or {}
+  entry[slot] = { start = s, ['end'] = e }
+  all[key] = entry
+  SEG_CACHE = all
+  save_segments()
 end
 
-local function clear_bookmarks()
-  if #entry_bookmarks(segment_entry()) == 0 then
-    return false
+local function clear_segment(slot)
+  local key = file_key()
+  local all = load_segments()
+  local entry = all[key]
+  if entry then
+    entry[slot] = nil
+    save_segments()
   end
-  return store_bookmarks({})
-end
-
---- Re-reads the stored marks into `state` so the bar can draw them.
-local function refresh_bookmarks()
-  state.bookmarks = entry_bookmarks(segment_entry())
 end
 
 --- Chapter names that the reference build treats as skippable.
@@ -757,168 +630,24 @@ local function classify_chapter(name)
   return nil
 end
 
---- Normalises the action column.
----
---- Records written by this app use the words, but a `.edl` imported from
---- elsewhere may use Kodi's numeric codes (`0/1/2`) or a longer spelling, and
---- mistaking a cut for a mute would either leak two minutes of ads or silence
---- the opening titles.
----
---- Note the absence of `2`: in Kodi's EDL numbering that is a scene marker, a
---- point on the timeline with no interval, not a commercial break. It is
---- decoded by name in `parse_edl` so a stray `.edl` cannot invent a skip.
-local ACTION_ALIASES = {
-  ['0'] = 'cut',
-  ['1'] = 'mute',
-  ['3'] = 'commbreak',
-  commercial = 'commbreak',
-  commercial_break = 'commbreak',
-  ad = 'commbreak',
-  skip = 'cut',
-}
-
-local function normalize_action(raw)
-  local text = tostring(raw or DEFAULT_ACTION):lower()
-  return ACTION_ALIASES[text] or text
-end
-
---- Reads one stored record into a normalised edit list.
----
---- Two shapes are accepted, and both survive a round trip through the file:
----
----   v2  { edits = { { start=, end=, action=, slot= }, … } }
----   v1  { intro = { start=, end= }, outro = { … } }
----
---- A half-marked edit (start but no end) is *kept* — otherwise pressing Alt+N
---- once, closing the player and pressing it again would start over instead of
---- closing the mark.
-local function entry_edits(entry)
+--- Segments to honour: manual marks win, then chapter names.
+local function effective_segments()
   local out = {}
-  if type(entry) ~= 'table' then
-    return out
-  end
-  local edits = entry.edits
-  if type(edits) == 'table' then
-    for _, edit in ipairs(edits) do
-      if type(edit) == 'table' then
-        local finish = tonumber(edit['end'])
-        local start = tonumber(edit.start)
-        if start and (not finish or finish > start) then
-          out[#out + 1] = {
-            start = start,
-            ['end'] = finish,
-            action = normalize_action(edit.action),
-            slot = edit.slot,
-          }
-        end
-      end
-    end
-    return out
-  end
-  for _, slot in ipairs({ 'intro', 'outro' }) do
-    local pair = entry[slot]
-    if type(pair) == 'table' then
-      local start = tonumber(pair['start'])
-      local finish = tonumber(pair['end'])
-      if start and (not finish or finish > start) then
-        out[#out + 1] = {
-          start = start,
-          ['end'] = finish,
-          action = DEFAULT_ACTION,
-          slot = slot,
-        }
+  local stored = current_segment()
+  if stored then
+    for slot, pair in pairs(stored) do
+      if type(pair) == 'table' and tonumber(pair['start']) and tonumber(pair['end']) then
+        out[slot] = { start = tonumber(pair['start']), ['end'] = tonumber(pair['end']) }
       end
     end
   end
-  return out
-end
-
-local function sort_edits(list)
-  table.sort(list, function(a, b)
-    return a.start < b.start
-  end)
-  return list
-end
-
---- Effective edits are recomputed whenever a mark, a chapter or the file
---- changes, not on every tick: the playhead observer runs dozens of times a
---- second and the answer only depends on state that rarely moves.
-local EDIT_CACHE = nil
-
-local function invalidate_edits()
-  EDIT_CACHE = nil
-end
-
-local function is_complete(edit)
-  return type(edit) == 'table' and tonumber(edit['end']) ~= nil and edit['end'] > edit.start
-end
-
---- The stored record for the current file, migrating a v1 key if it exists.
-local function segment_entry()
-  local key = path_key()
-  if key == '' then
-    return nil, nil, nil
-  end
-  local all = load_segments()
-  local entry = all[key]
-  if type(entry) == 'table' then
-    return entry, key, all
-  end
-  -- v1 stored marks under the bare file name. Adopt the record once, then every
-  -- later read finds it under the full path.
-  local name = path_name()
-  for _, legacy in ipairs({ name, (name or ''):lower() }) do
-    if legacy ~= '' and legacy ~= key and type(all[legacy]) == 'table' then
-      local adopted = all[legacy]
-      all[legacy] = nil
-      all[key] = adopted
-      SEG_CACHE = all
-      save_segments()
-      return adopted, key, all
-    end
-  end
-  return nil, key, all
-end
-
---- Edit list of the current file plus a writer that persists it.
----
---- Returning `(edits, commit)` keeps every mutation on one path: callers push to
---- `edits` and call `commit()`, which normalises the record to the v2 shape so a
---- migrated file never keeps the old layout around.
-local function editable_segments()
-  local entry, key, all = segment_entry()
-  if not key then
-    return nil, nil
-  end
-  local edits = entry_edits(entry)
-  local function commit()
-    local packed = {}
-    for _, edit in ipairs(edits) do
-      packed[#packed + 1] = {
-        start = edit.start,
-        ['end'] = edit['end'],
-        action = edit.action or DEFAULT_ACTION,
-        slot = edit.slot,
-      }
-    end
-    all[key] = { edits = packed }
-    SEG_CACHE = all
-    save_segments()
-    invalidate_edits()
-  end
-  return edits, commit
-end
-
---- Edits a chapter list implies: a chapter says where a segment starts and the
---- following chapter says where it ends.
-local function chapter_edits()
-  local out = {}
-  local chapters = state.chapters
-  for _, chapter in ipairs(chapters) do
+  for _, chapter in ipairs(state.chapters) do
     local slot = classify_chapter(chapter.title)
-    if slot and chapter.time then
+    if slot and not out[slot] and chapter.time then
+      -- A chapter marker says where the segment starts; it ends where the
+      -- following chapter starts.
       local next_time = nil
-      for _, other in ipairs(chapters) do
+      for _, other in ipairs(state.chapters) do
         if other.time and other.time > chapter.time + 1 then
           if not next_time or other.time < next_time then
             next_time = other.time
@@ -926,286 +655,11 @@ local function chapter_edits()
         end
       end
       if next_time then
-        out[#out + 1] = {
-          start = chapter.time,
-          ['end'] = next_time,
-          action = DEFAULT_ACTION,
-          slot = slot,
-          from_chapter = true,
-        }
+        out[slot] = { start = chapter.time, ['end'] = next_time }
       end
     end
   end
   return out
-end
-
--- ==== SIDECAR EDITS (`.edl` / comskip `.txt`) ==============================
---
--- Two file formats sitting beside the video, both read the way the reference
--- build reads them:
---
---   `Show.mkv.edl`  `start end action`, one edit per line. Times are
---                   `HH:MM:SS.mmm` — **milliseconds**, not frames — or plain
---                   seconds, or `#12345` for a frame number. Actions are
---                   Kodi's codes: 0 cut, 1 mute, 2 scene marker, 3 ad break.
---                   Fields are whitespace separated; `##` starts a comment.
---
---   `Show.txt`      comskip's own output. Line 1 is
---                   `FILE PROCESSING COMPLETE <frames> FRAMES AT <fps x 100>`
---                   and every line after the ruler is a pair of *frame*
---                   numbers. Because the frame rate travels in the file, the
---                   conversion is exact — no guessing from the container,
---                   which is wrong for anything film-sourced played at 25 fps.
---
--- comskip can also be told to write `.edl`, but it writes `HH:MM:SS.ff` with
--- frames after the dot and keeps the frame rate to itself. That is
--- indistinguishable from milliseconds, and reading it as such shifts every
--- mark by up to a second — so that form is deliberately unsupported. Use
--- comskip's default `.txt` instead.
-
-local SIDECAR_CACHE = nil
-local SIDECAR_SOURCE = nil
-
-local function local_video_path()
-  local path = mp.get_property('path') or ''
-  if path == '' or path:find('://', 1, true) then
-    return ''
-  end
-  return path
-end
-
---- Folder and extension-less name of a path.
-local function split_stem(path)
-  local folder, name = utils.split_path(path)
-  local stem = name:match('^(.*)%.[^.]*$') or name
-  return folder or '', stem
-end
-
---- Reads a whole file, or nil. `io.open` goes through the C library, so a path
---- outside the active code page throws instead of failing — hence the pcall:
---- a sidecar that cannot be opened must never take playback with it.
-local function read_text(path)
-  local ok, file = pcall(io.open, path, 'r')
-  if not ok or not file then
-    return nil
-  end
-  local body = file:read('*a')
-  file:close()
-  return body
-end
-
---- Seeks are relative to the video, so the container's rate is the right
---- fallback for a comskip file that omitted its header rate.
-local function container_fps()
-  local ok, value = pcall(mp.get_property_number, 'video-params/fps')
-  if ok and type(value) == 'number' and value > 0 then
-    return value
-  end
-  return nil
-end
-
---- `HH:MM:SS.mmm`, `MM:SS.mmm`, plain seconds, or `#frames`.
----
---- The fractional part of a time code is the fraction of the second it names,
---- so `12.45` and a padded `.450` agree — one conversion covers both.
-local function parse_edl_time(raw, fps)
-  local text = tostring(raw or ''):gsub(',', '.')
-  if text == '' then
-    return nil
-  end
-  if text:sub(1, 1) == '#' then
-    local frames = tonumber(text:sub(2))
-    if not frames or not fps or fps <= 0 then
-      return nil
-    end
-    return frames / fps
-  end
-  local hours, minutes, seconds = text:match('^(%d+):(%d+):(%d+%.?%d*)$')
-  if hours then
-    return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds)
-  end
-  local mins, secs = text:match('^(%d+):(%d+%.?%d*)$')
-  if mins then
-    return tonumber(mins) * 60 + tonumber(secs)
-  end
-  return tonumber(text)
-end
-
---- Kodi's action codes. 2 is a scene marker and carries no interval, so it is
---- absent here on purpose — treating it as an ad break would cut a minute out
---- of the middle of the film wherever the file marked a chapter.
-local EDL_ACTIONS = { ['0'] = 'cut', ['1'] = 'mute', ['3'] = 'commbreak' }
-
---- Only the three interval-bearing actions are accepted. Anything else — a
---- scene marker, a misspelling, a column that is not an action at all — is
---- dropped, because the default for an unknown action would be to cut, and
---- cutting on a guess is the one failure mode that destroys the film.
-local function known_action(raw)
-  local action = EDL_ACTIONS[raw] or normalize_action(raw)
-  if action == 'cut' or action == 'mute' or action == 'commbreak' then
-    return action
-  end
-  return nil
-end
-
-local function parse_edl(body, fps)
-  local out = {}
-  for line in body:gmatch('[^\r\n]+') do
-    -- A decimal comma inside a time code is not a field separator.
-    local cooked = line:gsub('(%d),(%d)', '%1.%2')
-    local fields = {}
-    for token in cooked:gmatch('[^%s]+') do
-      fields[#fields + 1] = token
-    end
-    local comment = #fields > 0 and fields[1]:sub(1, 2) == '##'
-    if #fields >= 3 and not comment then
-      local start = parse_edl_time(fields[1], fps)
-      local finish = parse_edl_time(fields[2], fps)
-      local action = known_action(fields[3])
-      if start and finish and finish > start and action then
-        out[#out + 1] = {
-          start = start,
-          ['end'] = finish,
-          action = action,
-          from_edl = true,
-        }
-      end
-    end
-    -- Two fields is `time action`: a scene marker, not an interval. Skipped.
-  end
-  return out
-end
-
---- comskip's `.txt`. Returns nil when the file is something else entirely —
---- a stray `.txt` beside the video is far more likely to be notes than an
---- ad list, and a wrong guess would be silent.
-local function parse_comskip(body, fallback_fps)
-  local lines = {}
-  for line in body:gmatch('[^\r\n]+') do
-    lines[#lines + 1] = line
-  end
-  if not (lines[1] or ''):find('FILE PROCESSING COMPLETE', 1, true) then
-    return nil
-  end
-  local rate = tonumber((lines[1]:match('FRAMES AT (%d+)')))
-  local fps = (rate and rate > 0) and (rate / 100) or fallback_fps
-  if not fps or fps <= 0 then
-    -- Frame numbers with no frame rate are not times. Guessing would put the
-    -- ads somewhere else entirely.
-    return {}
-  end
-  local out = {}
-  for index = 3, #lines do
-    local first, second = lines[index]:match('^%s*(%d+%.?%d*)%s+(%d+%.?%d*)')
-    if not first then
-      -- A malformed tail means the rest cannot be trusted, and half a set of
-      -- ad breaks is worse than none.
-      return {}
-    end
-    local start = tonumber(first) / fps
-    local finish = tonumber(second) / fps
-    if finish > start then
-      out[#out + 1] = {
-        start = start,
-        ['end'] = finish,
-        action = 'commbreak',
-        from_edl = true,
-      }
-    end
-  end
-  return out
-end
-
---- Edits from the sidecar files, read once per file and then cached.
----
---- An `.edl` wins over a leftover comskip run: it is the explicit format, and
---- if someone wrote one they meant it. A `.edl` that parses to nothing is
---- still honoured as "this file has no edits" rather than falling through.
-local function sidecar_edits()
-  if SIDECAR_CACHE then
-    return SIDECAR_CACHE
-  end
-  SIDECAR_CACHE = {}
-  local path = local_video_path()
-  if path == '' then
-    return SIDECAR_CACHE
-  end
-  local folder, stem = split_stem(path)
-  if stem == '' then
-    return SIDECAR_CACHE
-  end
-
-  local edl = read_text(utils.join_path(folder, stem .. '.edl'))
-  if edl then
-    local edits = parse_edl(edl, container_fps())
-    if #edits > 0 then
-      SIDECAR_CACHE = sort_edits(edits)
-      SIDECAR_SOURCE = '.edl'
-    end
-    return SIDECAR_CACHE
-  end
-
-  local txt = read_text(utils.join_path(folder, stem .. '.txt'))
-  if txt then
-    local edits = parse_comskip(txt, container_fps())
-    if edits and #edits > 0 then
-      SIDECAR_CACHE = sort_edits(edits)
-      SIDECAR_SOURCE = 'comskip'
-    end
-  end
-  return SIDECAR_CACHE
-end
-
---- Drops the cache so a freshly dropped sidecar is picked up without
---- reopening the file.
-local function forget_sidecar()
-  SIDECAR_CACHE = nil
-  SIDECAR_SOURCE = nil
-  invalidate_edits()
-end
-
---- Menu label: how many intervals came from beside the file, and from which
---- format, so a silent absence is visibly different from an empty answer.
-local function sidecar_label()
-  local count = #sidecar_edits()
-  if count == 0 then
-    return '无'
-  end
-  return count .. ' 段 · ' .. (SIDECAR_SOURCE or 'EDL')
-end
-
---- What the player should honour right now, sorted by start.
----
---- Three sources, strongest first: a manual mark (the viewer looked at the
---- picture and decided), a sidecar file (a detector decided), a chapter title
---- (a guess). A weaker edit that lands inside a stronger one is dropped rather
---- than merged — two overlapping skips would fight over the playhead.
-local function effective_edits()
-  if EDIT_CACHE then
-    return EDIT_CACHE
-  end
-  local out = {}
-  local function add(edit)
-    for _, other in ipairs(out) do
-      if edit.start < other['end'] and other.start < edit['end'] then
-        return
-      end
-    end
-    out[#out + 1] = edit
-  end
-  for _, edit in ipairs(entry_edits(segment_entry())) do
-    if is_complete(edit) then
-      add(edit)
-    end
-  end
-  for _, edit in ipairs(sidecar_edits()) do
-    add(edit)
-  end
-  for _, edit in ipairs(chapter_edits()) do
-    add(edit)
-  end
-  EDIT_CACHE = sort_edits(out)
-  return EDIT_CACHE
 end
 
 -- ==== ACTIONS ==============================================================
@@ -1230,71 +684,6 @@ local function seek_rel(delta)
     else
       toast('» ' .. fmt_time(delta))
     end
-  end
-end
-
--- Seek ladder, the shape `SeekHandler.cpp` uses: the first press is a nudge,
--- and pressing again inside a short window climbs a ladder of step sizes
--- instead of repeating the same nudge. With a flat 5 s step, rewinding ten
--- minutes took 120 presses; the ladder does it in seven.
---
--- The two columns are separate ladders: the plain arrow key nudges, Shift is
--- the shoulder-button jump. Sharing one counter between them meant a Shift press
--- after two taps of the arrow key started at the third rung.
-local SEEK_NUDGE = { 5, 10, 30, 60, 180, 300, 600, 1800 }
-local SEEK_JUMP = { 15, 60, 300, 1800 }
-local SEEK_LADDER_RESET = 0.9
---- Two presses closer together than this are the OS repeating the key, not a
---- person pressing it again.
-local SEEK_LADDER_REPEAT = 0.12
---- How often a held key is allowed to actually move the picture.
-local SEEK_LADDER_FIRE = 0.2
-
-local seek_ladder = { key = '', direction = 0, step = 0, total = 0, from = 0, at = 0, fired = 0 }
-
-local function seek_step(direction, steps, key)
-  local stamp = now()
-  local gap = stamp - seek_ladder.at
-  local same = seek_ladder.key == key and seek_ladder.direction == direction
-  local held = same and gap < SEEK_LADDER_REPEAT
-
-  if not same or gap > SEEK_LADDER_RESET then
-    seek_ladder.step = 0
-    seek_ladder.total = 0
-    -- The destination is measured from where the burst started, not from the
-    -- last `time-pos`: the observer lags a seek by a frame or two, so adding up
-    -- positions would drift over a long hold.
-    seek_ladder.from = state.position or 0
-  elseif not held then
-    seek_ladder.step = math.min(seek_ladder.step + 1, #steps)
-  end
-  seek_ladder.key = key
-  seek_ladder.direction = direction
-  seek_ladder.at = stamp
-
-  -- A held key stays on the rung it started on: climbing while the OS repeats
-  -- the key reaches the thirty-minute rung within a second or two of holding,
-  -- which lands a long way past anywhere the viewer meant to go. Holding keeps
-  -- nudging instead, at a rate the eye can follow.
-  if held and stamp - seek_ladder.fired < SEEK_LADDER_FIRE then
-    return
-  end
-  seek_ladder.fired = stamp
-
-  local size = steps[seek_ladder.step] or steps[#steps]
-  seek_ladder.total = seek_ladder.total + size * direction
-  command('seek', tostring(size * direction), 'relative', 'exact')
-
-  -- One label that grows with the burst, rather than a toast per press landing
-  -- on top of the one before it.
-  local mark = direction < 0 and '«' or '»'
-  local text = mark .. ' ' .. fmt_time(math.abs(seek_ladder.total))
-  if state.duration > 0 then
-    local aim = math.max(0, math.min(state.duration, seek_ladder.from + seek_ladder.total))
-    text = text .. ' · ' .. fmt_time(aim)
-  end
-  if state.menu == nil then
-    toast(text, 1.4)
   end
 end
 
@@ -1390,148 +779,44 @@ local function cycle_loop()
   end
 end
 
---- Marks a boundary in the current file: start → end → cleared.
----
---- Three presses walk one slot, which is why a half mark is persisted instead of
---- being thrown away. Two slots exist because the two ends of an episode are
---- separate decisions; `intro` keeps the Alt+N it has always had.
-local function mark_segment(slot)
-  slot = slot or 'intro'
-  local label = (slot == 'outro') and '片尾' or '片头'
-  local shortcut = (slot == 'outro') and 'Alt+E' or 'Alt+N'
-  local edits, commit = editable_segments()
-  if not edits then
-    toast('当前文件没有可保存的路径，标记未保存', 3)
-    return
-  end
-  local index, existing = nil, nil
-  for i, edit in ipairs(edits) do
-    if edit.slot == slot then
-      index, existing = i, edit
-      break
-    end
-  end
+local function mark_segment()
+  local stored = current_segment() or {}
+  local intro = stored['intro']
   local pos = state.position
-  if not existing then
-    edits[#edits + 1] = {
-      start = pos,
-      ['end'] = nil,
-      action = DEFAULT_ACTION,
-      slot = slot,
-    }
-    commit()
-    toast(string.format('%s起点 %s，再按 %s 标记终点', label, fmt_time(pos), shortcut))
-  elseif not is_complete(existing) then
-    if pos <= existing.start + 0.5 then
+  if not intro or not tonumber(intro['start']) then
+    set_segment('intro', pos, nil)
+    toast('片头起点已标记 ' .. fmt_time(pos) .. '，再按 Alt+N 标记终点')
+  elseif not tonumber(intro['end']) then
+    if pos <= tonumber(intro['start']) then
       toast('终点必须在起点之后')
       return
     end
-    existing['end'] = pos
-    commit()
-    toast(string.format('%s %s – %s 已保存', label, fmt_time(existing.start), fmt_time(pos)))
+    set_segment('intro', tonumber(intro['start']), pos)
+    toast(string.format('片头 %s – %s 已保存', fmt_time(intro['start']), fmt_time(pos)))
   else
-    table.remove(edits, index)
-    commit()
-    toast(label .. '标记已清除')
+    clear_segment('intro')
+    toast('片头标记已清除')
   end
 end
 
---- How a slot reads in the menu: empty, half-marked, or a saved span.
-local function mark_label(slot)
-  local entry = segment_entry()
-  for _, edit in ipairs(entry_edits(entry)) do
-    if edit.slot == slot then
-      if is_complete(edit) then
-        return fmt_time(edit.start) .. ' – ' .. fmt_time(edit['end'])
-      end
-      return '起点 ' .. fmt_time(edit.start)
-    end
-  end
-  return '无'
-end
-
--- Playback-time consequences of the edits. `cut_seen` exists so the toast for a
--- skip is emitted once per region instead of on every rewind through it.
-local cut_seen = {}
-local muted_by_edits = false
-local mute_was_on = false
-
-local function release_edit_mute()
-  if not muted_by_edits then
+local function maybe_skip(opening)
+  local enabled = mp.get_property('user-data/player/skip-intro') == 'yes'
+  if not enabled then
     return
   end
-  muted_by_edits = false
-  -- Never un-mute a file the viewer had already silenced themselves.
-  if not mute_was_on then
-    mp.set_property('mute', 'no')
-  end
-  mute_was_on = false
-end
-
---- Applies cuts and mutes to the playhead.
----
---- Runs from the time-pos observer, so it covers both playback drifting into a
---- region and a seek landing inside one — those are the same event as far as a
---- cut is concerned. Gated on the preference the UI exposes: turning skipping
---- off must leave the file untouched, mutes included.
-local function apply_edits()
-  if mp.get_property('user-data/player/skip-intro') ~= 'yes' then
-    release_edit_mute()
+  local seg = effective_segments()['intro']
+  if not seg then
     return
   end
   local pos = state.position
-  local active = nil
-  for _, edit in ipairs(effective_edits()) do
-    if edit.start > pos then
-      break
-    end
-    if pos < edit['end'] then
-      active = edit
-    end
-  end
-  if not active then
-    release_edit_mute()
+  if pos > seg['end'] - 1.5 then
     return
   end
-  if active.action == 'mute' then
-    if not muted_by_edits then
-      mute_was_on = mp.get_property('mute') == 'yes'
-      muted_by_edits = true
-      mp.set_property('mute', 'yes')
-      toast('静音片段 · ' .. fmt_time(active['end'] - active.start), 3)
-    end
+  if pos < seg['start'] - 1 then
     return
   end
-  -- Everything else is cut: an explicit cut, a commercial break, a chapter of
-  -- the opening. Only `mute` is treated as sound-off, so an ad break read from
-  -- a sidecar plays silently only if the file said so.
-  release_edit_mute()
-  -- Leave the last fraction of a second alone: a seek that lands one keyframe
-  -- short of the cut end would otherwise bounce back and forth forever.
-  if pos < active['end'] - 0.3 then
-    seek_abs(active['end'])
-    if not cut_seen[active.start] then
-      cut_seen[active.start] = true
-      local label = '剪辑段'
-      if active.slot == 'intro' then
-        label = '片头'
-      elseif active.slot == 'outro' then
-        label = '片尾'
-      elseif active.action == 'commbreak' then
-        label = active.from_edl and '广告段（EDL）' or '广告段'
-      end
-      toast('已跳过' .. label .. ' · ' .. fmt_time(active['end'] - active.start), 3)
-    end
-  end
-end
-
---- Forgets per-file runtime state. Called when a new file is loaded, because
---- the same timestamps on the next episode mean something else entirely.
-local function reset_edits()
-  cut_seen = {}
-  release_edit_mute()
-  -- The next episode has its own sidecar beside it, or none at all.
-  forget_sidecar()
+  seek_abs(seg['end'])
+  toast('已跳过片头 · ' .. fmt_time(seg['end']), 3)
 end
 
 -- ==== MENUS ================================================================
@@ -1673,43 +958,6 @@ local function build_menu(id)
         kind = 'item',
         act = function()
           seek_abs(chapter.time or 0)
-        end,
-      })
-    end
-  elseif id == 'bookmarks' then
-    local marks = state.bookmarks or {}
-    for _, mark in ipairs(marks) do
-      table.insert(rows, {
-        label = mark.label or fmt_time(mark.at),
-        value = (state.position and math.abs(state.position - mark.at) < 1) and '当前' or nil,
-        kind = 'item',
-        act = function()
-          -- Closing on the way out is the difference between "jump there" and
-          -- "jump there and cover the picture with a menu".
-          seek_abs(mark.at)
-          close_menu()
-        end,
-      })
-    end
-    if #marks == 0 then
-      table.insert(rows, { label = '这个文件还没有书签', kind = 'header' })
-    end
-    table.insert(rows, {
-      label = '在当前位置添加',
-      value = fmt_time(state.position or 0),
-      kind = 'item',
-      act = function()
-        toggle_bookmark()
-      end,
-    })
-    if #marks > 0 then
-      table.insert(rows, {
-        label = '清空全部书签',
-        kind = 'item',
-        act = function()
-          if clear_bookmarks() then
-            toast('书签已清空')
-          end
         end,
       })
     end
@@ -1902,44 +1150,11 @@ local function build_menu(id)
       end,
     })
     table.insert(rows, {
-      label = '片头标记（Alt+N）',
-      value = mark_label('intro'),
+      label = '片段标记（Alt+N）',
+      value = current_segment() and '已有标记' or '无',
       kind = 'item',
       act = function()
-        mark_segment('intro')
-      end,
-    })
-    table.insert(rows, {
-      label = '片尾标记（Alt+E）',
-      value = mark_label('outro'),
-      kind = 'item',
-      act = function()
-        mark_segment('outro')
-      end,
-    })
-    table.insert(rows, {
-      label = '旁挂 EDL',
-      value = sidecar_label(),
-      kind = 'item',
-      act = function()
-        -- Re-read: the point of the row is picking up a file dropped while the
-        -- film was already open.
-        forget_sidecar()
-        local count = #sidecar_edits()
-        mark_dirty()
-        if count > 0 then
-          toast('已载入 ' .. count .. ' 段 · ' .. (SIDECAR_SOURCE or 'EDL'), 3)
-        else
-          toast('同目录没有 .edl，也没有 comskip 的 .txt', 3)
-        end
-      end,
-    })
-    table.insert(rows, {
-      label = '书签（Ctrl+B）',
-      value = #(state.bookmarks or {}) > 0 and (tostring(#state.bookmarks) .. ' 个') or '无',
-      kind = 'item',
-      act = function()
-        open_menu('bookmarks')
+        mark_segment()
       end,
     })
     table.insert(rows, {
@@ -1963,7 +1178,6 @@ local MENU_TITLES = {
   audio = '音轨',
   subtitle = '字幕',
   chapters = '章节',
-  bookmarks = '书签',
   speed = '播放速度',
   playlist = '播放列表',
   video = '画面',
@@ -1988,7 +1202,7 @@ local function first_selectable(rows, from, step)
   return 1
 end
 
-function open_menu(id)
+local function open_menu(id)
   if id == 'stats' then
     state.stats = not state.stats
     state.menu = nil
@@ -2219,30 +1433,15 @@ local function draw_progress(parts)
       end
     end
 
-    -- Bookmarks: short gold blocks above the track, against the chapters'
-    -- full-height white hairlines. A tick rather than a span, because a
-    -- bookmark is a point — drawing it as wide as an edit would promise a
-    -- region the player is about to skip, and it skips nothing.
-    for _, mark in ipairs(state.bookmarks or {}) do
-      if mark.at > 0 and mark.at < duration then
-        local bx = x + w * (mark.at / duration)
-        parts[#parts + 1] = rect(bx - 3, top - 9, 6, 3, 1.5, BOOKMARK_TINT, 0xD8)
-      end
-    end
-
-    -- Edits the player honours, split by what they cost the viewer: red for
-    -- "this picture goes away", a faint hairline for "this only goes quiet".
-    for _, edit in ipairs(effective_edits()) do
-      local s = math.max(0, math.min(duration, edit.start))
-      local e = math.max(0, math.min(duration, edit['end']))
+    -- Intro / outro markers from chapters or manual marks.
+    local segments = effective_segments()
+    for _, seg in pairs(segments) do
+      local s = math.max(0, math.min(duration, seg['start']))
+      local e = math.max(0, math.min(duration, seg['end']))
       if e > s then
         local sx = x + w * (s / duration)
-        local span = math.max(2, x + w * (e / duration) - sx)
-        if edit.action == 'mute' then
-          parts[#parts + 1] = rect(sx, top + thickness + 7, span, 2, 1, WHITE, 0x44)
-        else
-          parts[#parts + 1] = rect(sx, top + thickness + 3, span, 4, 2, CUT_TINT, 0xB4)
-        end
+        local ex = x + w * (e / duration)
+        parts[#parts + 1] = rect(sx, top + thickness + 2, math.max(2, ex - sx), 3, 1.5, WHITE, 0x40)
       end
     end
   else
@@ -2425,69 +1624,36 @@ local function draw_stats(parts)
   end
 end
 
---- The help page lists bindings, and which bindings exist depends on the device
---- in the user's hand.
----
---- Everything below drives the same handlers — a pad's A arrives as `enter`,
---- its B as `esc` — but "Space: play/pause" tells someone holding a controller
---- nothing. Rather than print both lists and let each user filter, the page
---- prints the one that describes what they are holding. The host pushes the
---- device down as `user-data/player/input` (see `InputRouter.device`).
-local HELP_KEYBOARD = {
-  { '空格 / K', '播放 / 暂停' },
-  { '← →', '快退 / 快进 5 秒' },
-  { 'Shift + ← →', '快退 / 快进 15 秒' },
-  { '↑ ↓', '音量 ±5' },
-  { 'M', '静音' },
-  { 'J / Shift+J', '下一个 / 上一个字幕' },
-  { 'V', '字幕显示开关' },
-  { 'Z / X', '字幕延迟 -0.1 / +0.1' },
-  { 'A / Shift+A', '下一个 / 上一个音轨' },
-  { '[ / ]', '减速 / 加速' },
-  { 'Backspace', '恢复 1.0×' },
-  { 'C', '下一个章节' },
-  { ', / .', '逐帧后退 / 前进' },
-  { 'S / Shift+S', '截图 / 含字幕截图' },
-  { 'I', '统计信息' },
-  { 'L', '循环模式' },
-  { 'Ctrl + B', '记书签 / 取消书签' },
-  { 'Alt + N / Alt + E', '标记片头 / 片尾' },
-  { 'F7 / F8', '播放列表 / 章节' },
-  { 'F10 / F6', '音轨 / 字幕' },
-  { 'F11', '全屏切换' },
-  { 'Tab', '显示 / 隐藏界面' },
-  { 'Esc', '关闭菜单 / 返回' },
-  { '1 – 9', '跳转到 10% – 90%' },
-}
-
---- A pad reaches a much smaller vocabulary, because that is all the pad has.
---- Written as what the button *does*, not as the key it impersonates: the
---- mapping (`OsdKeys.nameForAction`) is an implementation detail and changes.
-local HELP_GAMEPAD = {
-  { 'A', '确认 / 显示控件' },
-  { 'B', '返回 / 关闭' },
-  { 'X', '显示 / 隐藏控件' },
-  { 'Y', '打开菜单' },
-  { 'Start', '播放 / 暂停' },
-  { '← →', '快退 / 快进（连按加大步长）' },
-  { '↑ ↓', '音量 ±5' },
-  { 'LB / RB', '上一个 / 下一个' },
-  { 'L2 / R2', '快退 / 快进 15 秒' },
-}
-
 local function draw_help(parts)
-  local gamepad = state.input == 'gamepad'
-  local lines = gamepad and HELP_GAMEPAD or HELP_KEYBOARD
-  local title = gamepad and '手柄操作' or '键盘快捷键'
-  -- A pointer user has a keyboard too, so the key table stays; the footer only
-  -- adds what a mouse can do without one.
-  local footer = state.input == 'pointer' and '鼠标：移动显示控件，左键点击，右键菜单' or nil
-
-  local pw = 1180
-  local ph = 120 + math.ceil(#lines / 2) * 44 + (footer and 44 or 0)
+  local lines = {
+    { '空格 / K', '播放 / 暂停' },
+    { '← →', '快退 / 快进 5 秒' },
+    { 'Shift + ← →', '快退 / 快进 15 秒' },
+    { '↑ ↓', '音量 ±5' },
+    { 'M', '静音' },
+    { 'J / Shift+J', '下一个 / 上一个字幕' },
+    { 'V', '字幕显示开关' },
+    { 'Z / X', '字幕延迟 -0.1 / +0.1' },
+    { 'A / Shift+A', '下一个 / 上一个音轨' },
+    { '[ / ]', '减速 / 加速' },
+    { 'Backspace', '恢复 1.0×' },
+    { 'C', '下一个章节' },
+    { ', / .', '逐帧后退 / 前进' },
+    { 'S / Shift+S', '截图 / 含字幕截图' },
+    { 'I', '统计信息' },
+    { 'L', '循环模式' },
+    { 'Alt + N', '标记片头 / 片尾' },
+    { 'F7 / F8', '播放列表 / 章节' },
+    { 'F10 / F6', '音轨 / 字幕' },
+    { 'F11', '全屏切换' },
+    { 'Tab', '显示 / 隐藏界面' },
+    { 'Esc', '关闭菜单 / 返回' },
+    { '1 – 9', '跳转到 10% – 90%' },
+  }
+  local pw, ph = 1180, 120 + math.ceil(#lines / 2) * 44
   local px, py = (W - pw) / 2, (H - ph) / 2
   parts[#parts + 1] = rect(px, py, pw, ph, 30, BLACK, 0xF4)
-  parts[#parts + 1] = text(px + 40, py + 32, 34, WHITE, 0x00, title, 7, true)
+  parts[#parts + 1] = text(px + 40, py + 32, 34, WHITE, 0x00, '键盘快捷键', 7, true)
   parts[#parts + 1] = text(px + pw - 40, py + 40, 20, DIM, 0x00, '任意键关闭', 9, false)
   local half = math.ceil(#lines / 2)
   for i, line in ipairs(lines) do
@@ -2497,9 +1663,6 @@ local function draw_help(parts)
     local y = py + 104 + (row - 1) * 44
     parts[#parts + 1] = text(x, y, 21, WHITE, 0x00, line[1], 7, true, MONO)
     parts[#parts + 1] = text(x + 230, y, 21, GREY, 0x00, line[2], 7, false)
-  end
-  if footer then
-    parts[#parts + 1] = text(px + 40, py + ph - 44, 20, DIM, 0x00, footer, 7, false)
   end
 end
 
@@ -2861,7 +2024,6 @@ local function handle_key(raw)
   local name, mods = esc_key_name(raw)
   local shift = has_mod(mods, 'shift')
   local alt = has_mod(mods, 'alt')
-  local ctrl = has_mod(mods, 'ctrl')
 
   if state.help then
     state.help = false
@@ -2889,12 +2051,6 @@ local function handle_key(raw)
     elseif name == 'right' then
       adjust_row(1)
       return
-    elseif name == 'menu' then
-      -- Swap panels instead of closing and reopening: pressing the button again
-      -- should land on the main menu, not blink the panel off and on. Pressing
-      -- it while already there closes it, which `open_menu` handles.
-      open_menu('more')
-      return
     else
       close_menu()
       -- fall through to the global map
@@ -2918,11 +2074,6 @@ local function handle_key(raw)
     end
   elseif name == 'tab' then
     toggle_ui()
-  elseif name == 'menu' then
-    -- Sent by a gamepad's secondary button. There is no physical key behind it:
-    -- a pad cannot click a toolbar button, so this is the only way into track,
-    -- subtitle and chapter selection without a mouse.
-    open_menu('more')
   elseif name == 'space' or name == 'k' then
     -- Space is pause everywhere, even with the chrome hidden: it is the key
     -- people press without looking.
@@ -2931,12 +2082,12 @@ local function handle_key(raw)
       show()
     end
   elseif name == 'left' then
-    -- Tap to nudge, keep tapping to climb. The first rung matches PsSeek.step
-    -- in lib/design/ps_media.dart and Shift matches PsSeek.jump: change them
-    -- here and there, never here alone.
-    seek_step(-1, shift and SEEK_JUMP or SEEK_NUDGE, shift and 'jump' or 'nudge')
+    -- 5 s is a nudge, 15 s is the shoulder-button jump. Both numbers are
+    -- PsSeek.step / PsSeek.jump in lib/design/ps_media.dart: change them here
+    -- and there, never here alone.
+    seek_rel(shift and -15 or -5)
   elseif name == 'right' then
-    seek_step(1, shift and SEEK_JUMP or SEEK_NUDGE, shift and 'jump' or 'nudge')
+    seek_rel(shift and 15 or 5)
   elseif name == 'up' then
     add_volume(5)
   elseif name == 'down' then
@@ -2979,23 +2130,16 @@ local function handle_key(raw)
     cycle_loop()
   elseif name == 'n' then
     if alt then
-      mark_segment('intro')
+      mark_segment()
     else
       command('playlist-next', 'force')
     end
-  elseif name == 'e' and alt then
-    mark_segment('outro')
   elseif name == 'o' and alt then
     -- Flutter owns the file dialog; the OSD cannot open one.
     seq = seq + 1
     mp.commandv('script-message', 'player-event', utils.format_json({ type = 'subtitle', seq = seq }))
   elseif name == 'b' and alt then
     command('playlist-prev')
-  elseif name == 'b' and ctrl then
-    -- Ctrl+B is the reference build's CreateBookmark (keyboard.xml:457). It
-    -- toggles here rather than only adding, because there is no bookmark
-    -- window to delete from.
-    toggle_bookmark()
   elseif name == 'pageup' then
     command('playlist-prev')
   elseif name == 'pagedown' then
@@ -3050,9 +2194,7 @@ local BINDINGS = {
   { 'F7', 'f7' }, { 'F8', 'f8' }, { 'F9', 'f9' },
   { 'F6', 'f6' }, { 'F10', 'f10' }, { 'F11', 'f11' },
   { 'Alt+n', 'alt+n' },
-  { 'Alt+e', 'alt+e' },
   { 'Alt+o', 'alt+o' },
-  { 'Ctrl+b', 'ctrl+b' },
   { '1', '1' }, { '2', '2' }, { '3', '3' }, { '4', '4' }, { '5', '5' },
   { '6', '6' }, { '7', '7' }, { '8', '8' }, { '9', '9' },
 }
@@ -3495,10 +2637,16 @@ end
 mp.observe_property('time-pos', 'number', function(_, value)
   state.position = tonumber(value) or 0
   mark_dirty()
-  -- Cuts and mutes are evaluated here rather than on a timer: this fires for
-  -- playback progress *and* for seeks, which are the only two ways the playhead
-  -- can arrive inside a marked region.
-  apply_edits()
+  -- Auto-skip the ending once we drift into it. Guarded so it fires at most
+  -- once per file and never fights a deliberate rewind.
+  if not outro_skipped and mp.get_property('user-data/player/skip-intro') == 'yes' then
+    local seg = effective_segments()['outro']
+    if seg and state.position > seg['start'] - 1.5 and state.position < seg['end'] - 1 then
+      outro_skipped = true
+      seek_abs(seg['end'])
+      toast('已跳过片尾', 3)
+    end
+  end
 end)
 
 mp.observe_property('duration', 'number', function(_, value)
@@ -3535,24 +2683,8 @@ mp.observe_property('user-data/player/title', 'string', function(_, value)
   mark_dirty()
 end)
 
--- Which device the user last touched. Only the help page depends on it, so the
--- observer repaints nothing unless that page is up — and it must repaint then,
--- or the list a pad user is staring at stays labelled with keyboard keys.
-mp.observe_property('user-data/player/input', 'string', function(_, value)
-  local device = value or 'keyboard'
-  if device == state.input then
-    return
-  end
-  state.input = device
-  if state.help then
-    mark_dirty()
-    render()
-  end
-end)
-
 mp.observe_property('chapter-list', 'native', function(_, value)
   state.chapters = type(value) == 'table' and value or {}
-  invalidate_edits()
   mark_dirty()
   refresh_menu()
 end)
@@ -3677,19 +2809,12 @@ mp.register_event('file-loaded', function()
   state.stats = false
   state.menu = nil
   state.help = false
-  invalidate_edits()
-  reset_edits()
-  -- Before the first paint, so the ticks are there the moment the bar appears
-  -- instead of popping in on the first redraw.
-  refresh_bookmarks()
+  outro_skipped = false
   mark_dirty()
   render()
   schedule_hide()
-  -- The path is only authoritative once mpv has resolved it; a mark made before
-  -- the first frame would otherwise be filed under the previous episode's key.
   mp.add_timeout(0.8, function()
-    invalidate_edits()
-    apply_edits()
+    maybe_skip(true)
   end)
 end)
 
