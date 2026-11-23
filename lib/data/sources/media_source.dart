@@ -105,7 +105,20 @@ abstract class MediaSource {
   SourceKind get kind => config.kind;
 
   /// Top level listing: the latest items, the channel list, the root folder.
+  ///
+  /// 用户可感知的条目是有限的：实现应只返回一个有限的窗口（新内容优先），
+  /// 网格滚到底时 store 会调 [fetchMore] 续拉下一窗。把整座服务器拉进内存
+  /// 换不来界面上多显示一个字。
   Future<List<MediaItem>> browse();
+
+  /// Whether [browse] returned a window of a larger library. False by
+  /// default: sources that enumerate everything once (local folders, WebDAV
+  /// listings) have no "more".
+  bool get hasMore => false;
+
+  /// 续拉下一窗。返回空列表表示没有更多，或本窗全部失败且暂不值得重试
+  /// ——store 据此停止向下要数据，网格再次滚到底时会自然重试。
+  Future<List<MediaItem>> fetchMore() async => const <MediaItem>[];
 
   /// Drill-down for series / folders / seasons.
   Future<List<MediaItem>> children(MediaItem container) async => const <MediaItem>[];

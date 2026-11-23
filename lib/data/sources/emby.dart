@@ -82,95 +82,94 @@ class EmbySource extends MediaSource {
   /// mapper expects; larger pages only stress the server.
   static const int _pageSize = 200;
 
+  /// 首拉窗口：5 页并行（1000 条，新内容优先）。用户可感知的已加载条目
+  /// 是有限的——刷新不该为窗口之外的数据付出超时代价，网格滚到底时
+  /// store 调 [fetchMore] 续拉下一窗。
+  static const int _windowPages = 5;
+
+  int? _totalRecords;
+  int _fetched = 0;
+
+  @override
+  bool get hasMore => _totalRecords != null && _fetched < _totalRecords!;
+
   @override
   Future<List<MediaItem>> browse() async {
     await _ensureAuth();
-    // Pull the whole Movie/Series library. The old 600-item window is why a
-    // large server looked incomplete; the serial rewrite fixed that but paged
-    // one request at a time, and a ~19k-item library needs 90+ round trips —
-    // the 90 s refresh timeout fired around page 90 while the pagination kept
-    // running in the background. The first page still decides the shape and
-    // the ordering; the rest are fetched in small parallel waves so the whole
-    // library lands inside one refresh deadline. A page that fails twice is
-    // skipped, not fatal: one dropped page beats losing everything after it.
-    const int pageSize = _pageSize;
-    const int waveSize = 6;
-    // Safety valve for servers that report a huge count: 500 pages * 200
-    // items is 100k entries, far past anything the shelves can render.
-    const int maxPages = 500;
+    AppLog.info('Emby 拉取媒体库：$_base/Users/$_userId/Items（首窗 $_windowPages 页）');
+    final List<int> starts = <int>[
+      for (int i = 0; i < _windowPages; i++) i * _pageSize,
+    ];
+    final List<Map<String, dynamic>?> pages =
+        await Future.wait<Map<String, dynamic>?>(starts.map(_fetchPage));
+    final List<MediaItem> out = <MediaItem>[];
+    int failed = 0;
+    for (final Map<String, dynamic>? page in pages) {
+      if (page == null) {
+        failed++;
+        continue;
+      }
+      out.addAll(_items(page));
+      final int? reported = (page['TotalRecordCount'] as num?)?.toInt();
+      if (reported != null) {
+        _totalRecords = reported;
+      }
+    }
+    if (failed == starts.length) {
+      // 整窗失败等于来源失败：抛出让 refresh 走错误通知，而不是把
+      // 空窗口当成"这个服务器没有电影"。
+      throw const SourceException('拉取媒体库失败：所有分页请求均未成功');
+    }
+    // 无总数且最后一页不满：整库已在手，续拉没有意义。
+    if (_totalRecords == null && out.length < _windowPages * _pageSize) {
+      _totalRecords = out.length;
+    }
+    // 按页数推进服务器偏移，而不是按解析成功的条数——坏记录不能把
+    // StartIndex 拉回去重复取。
+    _fetched = _totalRecords != null && _fetched + starts.length * _pageSize > _totalRecords!
+        ? _totalRecords!
+        : starts.length * _pageSize;
+    if (failed > 0) {
+      AppLog.warn('Emby 首窗跳过 $failed 页（请求失败），已加载 ${out.length} 项');
+    }
+    return out;
+  }
 
-    AppLog.info('Emby 拉取媒体库：$_base/Users/$_userId/Items');
-    final Map<String, dynamic> first = await _itemsPage(0, pageSize);
-    final List<MediaItem> out = _items(first);
-    final int firstRecords = (first['Items'] as List?)?.length ?? 0;
-    final int? reported = (first['TotalRecordCount'] as num?)?.toInt();
-    if (firstRecords == 0) {
-      return out;
+  @override
+  Future<List<MediaItem>> fetchMore() async {
+    final int? total = _totalRecords;
+    if (total == null || _fetched >= total) {
+      return const <MediaItem>[];
     }
-    if (firstRecords < pageSize && (reported == null || reported <= firstRecords)) {
-      // Small server: the whole library fit on page one.
-      return out;
-    }
-
-    int skipped = 0;
-    if (reported != null) {
-      final int pageCap =
-          reported > pageSize * maxPages ? pageSize * maxPages : reported;
-      if (pageCap < reported) {
-        AppLog.warn('Emby 媒体库超过分页上限，仅拉取前 $pageCap 项');
+    final int begin = _fetched;
+    final int end = begin + _windowPages * _pageSize > total
+        ? total
+        : begin + _windowPages * _pageSize;
+    final List<int> starts = <int>[
+      for (int s = begin; s < end; s += _pageSize) s,
+    ];
+    final List<Map<String, dynamic>?> pages =
+        await Future.wait<Map<String, dynamic>?>(starts.map(_fetchPage));
+    final List<MediaItem> out = <MediaItem>[];
+    int failed = 0;
+    for (final Map<String, dynamic>? page in pages) {
+      if (page == null) {
+        failed++;
+        continue;
       }
-      final List<int> starts = <int>[
-        for (int s = pageSize; s < pageCap; s += pageSize) s,
-      ];
-      for (int i = 0; i < starts.length; i += waveSize) {
-        final int end =
-            i + waveSize < starts.length ? i + waveSize : starts.length;
-        final List<Map<String, dynamic>?> pages =
-            await Future.wait<Map<String, dynamic>?>(
-          starts.sublist(i, end).map(_fetchPage),
-        );
-        for (final Map<String, dynamic>? page in pages) {
-          if (page == null) {
-            skipped++;
-            continue;
-          }
-          out.addAll(_items(page));
-        }
-      }
-    } else {
-      // No authoritative count: keep fetching waves until a page comes back
-      // short, which is the only end signal such servers give.
-      final int ceiling = pageSize * waveSize * maxPages;
-      int start = pageSize;
-      while (start < ceiling) {
-        final List<int> wave = <int>[
-          for (int k = 0; k < waveSize; k++) start + k * pageSize,
-        ];
-        final List<Map<String, dynamic>?> pages =
-            await Future.wait<Map<String, dynamic>?>(wave.map(_fetchPage));
-        bool ended = false;
-        for (int k = 0; k < pages.length; k++) {
-          final Map<String, dynamic>? page = pages[k];
-          if (page == null) {
-            skipped++;
-            continue;
-          }
-          out.addAll(_items(page));
-          final int records = (page['Items'] as List?)?.length ?? 0;
-          if (records < pageSize) {
-            ended = true;
-            break;
-          }
-        }
-        if (ended) {
-          break;
-        }
-        start += waveSize * pageSize;
-      }
+      out.addAll(_items(page));
     }
-    if (skipped > 0) {
-      AppLog.warn('Emby 媒体库分页跳过 $skipped 页（服务器中途断开），已保留其余 ${out.length} 项');
+    if (failed == starts.length) {
+      // 整窗失败：不动 _fetched，hasMore 保持 true——网格再次滚到底时
+      // 会重试本窗，网络恢复后自动续上。
+      AppLog.warn('Emby 续拉 $begin..$end 全部失败，保留进度待重试');
+      return const <MediaItem>[];
     }
+    _fetched = end;
+    if (failed > 0) {
+      AppLog.warn('Emby 续拉跳过 $failed 页，本窗 ${out.length} 项');
+    }
+    AppLog.info('Emby 续拉 ${out.length} 项（$begin..$end / $total）');
     return out;
   }
 

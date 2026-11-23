@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/strings.dart';
@@ -188,13 +190,27 @@ class MediaPageState extends State<MediaPage> {
                       onAdd: () => setState(() => _dialogOpen = true),
                       onOpenFile: widget.onOpenFile,
                     )
-                  : _LibraryGrid(
-                      items: items,
-                      shown: shown,
-                      pickedGenre: _genre,
-                      onPickGenre: (String? value) => setState(() => _genre = value),
-                      onPlay: widget.onPlay,
-                      onOpen: widget.onOpenItem,
+                  : NotificationListener<ScrollNotification>(
+                      // 滚到底部前 800px 就开始续拉下一窗：无感加载，网格
+                      // 永远比滚动快一步。store 的防抖保证滚轮连滚只触发
+                      // 一窗。
+                      onNotification: (ScrollNotification notification) {
+                        if (notification.metrics.extentAfter < 800 &&
+                            AppStore.instance.libraryHasMore &&
+                            !AppStore.instance.loadingMoreLibrary) {
+                          unawaited(AppStore.instance.loadMoreLibrary());
+                        }
+                        return false;
+                      },
+                      child: _LibraryGrid(
+                        items: items,
+                        shown: shown,
+                        pickedGenre: _genre,
+                        onPickGenre: (String? value) =>
+                            setState(() => _genre = value),
+                        onPlay: widget.onPlay,
+                        onOpen: widget.onOpenItem,
+                      ),
                     ),
             ),
             if (_dialogOpen)

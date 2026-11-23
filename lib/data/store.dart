@@ -353,6 +353,75 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  final Set<String> _loadingMore = <String>{};
+
+  /// 任一分页来源正在续拉——网格据此决定要不要再触发一次。
+  bool get loadingMoreLibrary => _loadingMore.isNotEmpty;
+
+  /// 是否还有来源能续拉下一窗。只对实现了分页的来源为真（本地文件夹
+  /// 一次枚举完毕，没有"更多"）。
+  bool get libraryHasMore {
+    for (final SourceConfig config in sources) {
+      if (!config.enabled || config.kind == SourceKind.tmdb) {
+        continue;
+      }
+      final MediaSource? source = _open[config.id];
+      if (source != null && source.hasMore) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// 网格滚到底时续拉：每个分页来源各取一窗，按 id 去重后并入。
+  /// 单个来源失败只写日志——续拉是渐进增强，不能变成另一种报错弹窗。
+  Future<void> loadMoreLibrary() async {
+    if (loading || _loadingMore.isNotEmpty) {
+      return;
+    }
+    final List<MediaSource> targets = <MediaSource>[];
+    for (final SourceConfig config in sources) {
+      if (!config.enabled || config.kind == SourceKind.tmdb) {
+        continue;
+      }
+      final MediaSource? source = _open[config.id];
+      if (source != null && source.hasMore) {
+        targets.add(source);
+      }
+    }
+    if (targets.isEmpty) {
+      return;
+    }
+    _loadingMore.addAll(targets.map((MediaSource source) => source.config.id));
+    _notify();
+    try {
+      final Set<String> known =
+          items.map((MediaItem item) => item.id).toSet();
+      for (final MediaSource source in targets) {
+        try {
+          final List<MediaItem> listing =
+              await source.fetchMore().timeout(const Duration(seconds: 45));
+          int added = 0;
+          for (final MediaItem item in listing) {
+            if (known.add(item.id)) {
+              items.add(_withResume(item));
+              added++;
+            }
+          }
+          if (added > 0) {
+            AppLog.info('${source.config.label} 续拉 $added 项');
+          }
+        } on Object catch (error, stack) {
+          AppLog.error('${source.config.label} 续拉失败', error, stack);
+        }
+      }
+    } finally {
+      _loadingMore
+          .removeAll(targets.map((MediaSource source) => source.config.id));
+      _notify();
+    }
+  }
+
   MediaItem _withResume(MediaItem item) {
     final Duration? saved = _resume[item.id];
     if (saved == null || item.duration == null || item.duration!.inMilliseconds <= 0) {
