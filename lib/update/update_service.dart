@@ -194,6 +194,9 @@ class UpdateService {
   /// Downloads and unpacks the candidate into
   /// `<install>/updates/<version>/`, returning the payload directory that
   /// `apply` would copy over the install directory.
+  ///
+  /// 已解包完整的版本直接复用：重复点"安装"不再重新下载，堆积的目录
+  /// 也就没有了"每试一次堆一层"的来源。
   Future<String> prepareInstall(
     UpdateCandidate candidate, {
     void Function(int received, int total)? onProgress,
@@ -201,6 +204,11 @@ class UpdateService {
     final String root = _updateRoot();
     final String versionDir = '$root${Platform.pathSeparator}'
         '${_safeName(candidate.version)}';
+    final Directory? ready = _payloadDir(versionDir);
+    if (ready != null) {
+      AppLog.info('更新包已就绪，复用 ${ready.path}');
+      return ready.path;
+    }
     Directory(versionDir).createSync(recursive: true);
     final String zipPath = '$versionDir${Platform.pathSeparator}update.zip';
     await _download(candidate.assetUrl, zipPath, onProgress: onProgress);
@@ -351,93 +359,83 @@ class UpdateService {
     exit(0);
   }
 
-  /// Stages a restart-and-swap: a small PowerShell script waits for this
-  /// process to exit, copies the new build over the install directory while
-  /// excluding `updates/` and `log/`, then starts the new exe.
+  /// Stages a restart-and-swap by restarting THIS executable in updater mode
+  /// (`--apply-update`). The updater is a small visible window: it waits for
+  /// this process to exit, sweeps the install directory, copies the payload
+  /// with a real progress bar, starts the new build and reports the result.
+  /// The old apply_update.ps1 was invisible on purpose and silent on failure —
+  /// a locked file killed it mid-copy, leaving the old version running, the
+  /// payload stranded in `updates/` and the user with no idea what happened.
   ///
   /// [keepUserData] defaults to true: replacing a config the user built up
-  /// with the package defaults is never a silent decision. When it is false the
-  /// script removes `state.json` after the swap, so the new build starts clean
-  /// on purpose.
+  /// with the package defaults is never a silent decision. When it is false
+  /// the updater removes `state.json` after the swap, so the new build starts
+  /// clean on purpose.
   Future<void> apply(String payloadDir, {bool keepUserData = true}) async {
-    final String install = File(Platform.resolvedExecutable).parent.path;
-    final String sep = Platform.pathSeparator;
-    // If the user chose data inside the install directory (portable-style),
-    // the swap must leave that top-level folder alone. data-dir.txt is also
-    // preserved: it records where the data is, and the update package ships
-    // its own copy for fresh installs only.
     final String dataDir = AppPaths.dataDir;
-    String? dataSegment;
-    final String prefix = install.endsWith(sep) ? install : '$install$sep';
-    if (dataDir.toLowerCase().startsWith(prefix.toLowerCase())) {
-      final String relative = dataDir.substring(prefix.length);
-      final String first = relative.split(RegExp(r'[\\/]')).first;
-      if (first.isNotEmpty) {
-        dataSegment = first;
-      }
-    }
-    final List<String> patterns = <String>[
-      'updates',
-      'log',
-      'data-dir.txt',
-      'apply_update.ps1',
-      // Inno Setup 的卸载器属于安装记录，换掉它会让"应用和功能"里的条目失效。
-      'unins*',
-      if (dataSegment != null) dataSegment,
-    ];
-    final String patternList =
-        patterns.map((String name) => "'${_ps(name)}'").join(',');
-    final String script = '$install${Platform.pathSeparator}updates'
-        '${Platform.pathSeparator}apply_update.ps1';
-    File(script).parent.createSync(recursive: true);
-    File(script).writeAsStringSync('''
-\$ErrorActionPreference = 'Stop'
-\$payload = '${_ps(payloadDir)}'
-\$install = '${_ps(install)}'
-\$dataDir = '${_ps(dataDir)}'
-\$keepData = \$${keepUserData ? 'true' : 'false'}
-\$exe = Join-Path \$install 'xnx_player.exe'
-\$self = \$MyInvocation.MyCommand.Path
-\$patterns = @($patternList)
-Start-Sleep -Seconds 2
-# `Get-ChildItem -Exclude` is ignored when combined with -LiteralPath, which
-# meant this sweep deleted everything — data-dir.txt, a portable data folder,
-# and even the updates/ folder holding this script. Match names ourselves.
-Get-ChildItem -LiteralPath \$install | Where-Object {
-  \$name = \$_.Name
-  -not (\$patterns | Where-Object { \$name -like \$_ })
-} | ForEach-Object {
-  Remove-Item -LiteralPath \$_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-}
-# data-dir.txt 记录的是用户的现有数据位置，更新包里的那份只对全新解压有意义。
-# updates/ 与 log/ 是运行时目录，覆盖它们会打断本次更新或清掉日志。
-\$skip = @('data-dir.txt', 'updates', 'log')
-Get-ChildItem -LiteralPath \$payload | Where-Object { \$skip -notcontains \$_.Name } | ForEach-Object {
-  Copy-Item -LiteralPath \$_.FullName -Destination \$install -Recurse -Force
-}
-# 用户选了"不保留"：只清配置与库日志，数据目录本身留着（截图、更新缓存还在）。
-if (-not \$keepData) {
-  foreach (\$f in @('state.json', 'library.log')) {
-    \$p = Join-Path \$dataDir \$f
-    if (Test-Path -LiteralPath \$p) {
-      Remove-Item -LiteralPath \$p -Force -ErrorAction SilentlyContinue
-    }
-  }
-}
-Start-Process -FilePath \$exe
-Remove-Item -Force \$self
-''');
     await Process.start(
-      'powershell.exe',
-      <String>['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+      Platform.resolvedExecutable,
+      <String>[
+        '--apply-update',
+        payloadDir,
+        '--data-dir',
+        dataDir,
+        '--keep-data',
+        keepUserData ? 'true' : 'false',
+      ],
       mode: ProcessStartMode.detached,
     );
-    debugPrint('update staged from $payloadDir');
     exit(0);
   }
 
-  /// Escapes a path for a single-quoted PowerShell literal.
-  static String _ps(String value) => value.replaceAll("'", "''");
+  /// Removes a downloaded update the user chose not to apply now. Leaving it
+  /// in `updates/` is how the directory grew four versions deep — every
+  /// attempt re-downloaded and none of them ever finished applying.
+  void discardDownload(String version) {
+    try {
+      final Directory dir = Directory(
+        '${_updateRoot()}${Platform.pathSeparator}${_safeName(version)}',
+      );
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
+      }
+    } on Object {
+      // 缓存清理失败无害：下次启动的 pruneUpdateCache 会再收一次。
+    }
+  }
+
+  /// 启动时清理 updates/ 的堆积：历史版本目录、旧脚本、.updating 残留。
+  /// snapshot 启动（exe 就在 updates/ 里）时跳过——清掉的是正在运行的家。
+  /// 正常启动则可以放心清：这些只是下载缓存，当前版本不在其中。
+  static void pruneUpdateCache() {
+    if (snapshotRoot() != null) {
+      return;
+    }
+    try {
+      final Directory root = Directory(
+        '${File(Platform.resolvedExecutable).parent.path}'
+        '${Platform.pathSeparator}updates',
+      );
+      if (!root.existsSync()) {
+        return;
+      }
+      for (final FileSystemEntity entity in root.listSync()) {
+        final String name = entity.uri.pathSegments.last.toLowerCase();
+        final bool stale = name == 'apply_update.ps1' ||
+            name.endsWith('.updating') ||
+            (entity is Directory && RegExp(r'^\d+\.\d+').hasMatch(name));
+        if (stale) {
+          try {
+            entity.deleteSync(recursive: true);
+          } on Object {
+            // 锁定（例如用户手动从缓存目录启动过）就留给下一次启动。
+          }
+        }
+      }
+    } on Object {
+      // 清理失败无害——堆积只是磁盘占用，不影响功能。
+    }
+  }
 
   String _updateRoot() {
     final String install = File(Platform.resolvedExecutable).parent.path;

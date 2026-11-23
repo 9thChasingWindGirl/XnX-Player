@@ -40,8 +40,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// Last download fraction reported, used to throttle status repaints.
   double _downloadProgress = 0;
+
+  /// 下载完成后弹确认框用的总字节数（onProgress 报告），0 表示未知。
+  int _downloadedBytes = 0;
   UpdateCandidate? _pending;
   final UpdateService _updater = UpdateService();
+
+  /// 下载完成 → 确认是否立即应用。返回 false 表示"稍后"：调用方负责
+  /// 清理下载缓存。
+  Future<bool> _confirmDownloaded(String kind, String version) async {
+    final bool? go = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => _DownloadedConfirmDialog(
+        kind: kind,
+        version: version,
+        bytes: _downloadedBytes,
+      ),
+    );
+    return go ?? false;
+  }
 
   void _cycleProxy() {
     const List<String> modes = <String>['none', 'system', 'custom'];
@@ -244,12 +261,17 @@ class _SettingsPageState extends State<SettingsPage> {
       });
       // A download is the canonical live activity: one row that fills up,
       // visible from the top bar without opening settings.
-      NoticeCenter.instance.activity('update-download', '正在下载 ${candidate.version}');
+      // 下载完毕不再静默进入覆盖：弹窗确认"是否立即更新"，稍后则清掉
+      // 下载缓存——updates/ 的堆积正是"每次都下、从来没人说应用不应用"
+      // 的产物。
       void onProgress(int received, int total) {
         if (!mounted) {
           return;
         }
         final double fraction = total > 0 ? received / total : 0;
+        if (total > 0) {
+          _downloadedBytes = total;
+        }
         NoticeCenter.instance.activity(
           'update-download',
           '正在下载 ${candidate.version}',
@@ -284,6 +306,23 @@ class _SettingsPageState extends State<SettingsPage> {
           }
           NoticeCenter.instance.finish(
             'update-download',
+            title: '安装包下载完成 ${candidate.version}',
+            body: '等待确认是否运行安装程序',
+          );
+          final bool go = await _confirmDownloaded(
+            '安装包',
+            candidate.version,
+          );
+          if (!go || !mounted) {
+            _updater.discardDownload(candidate.version);
+            setState(() {
+              _updateStatus = '已取消更新，安装包缓存已清理';
+              _downloadProgress = 0;
+            });
+            return;
+          }
+          NoticeCenter.instance.finish(
+            'update-download',
             title: '正在启动安装程序 ${candidate.version}',
             body: '按向导完成安装，现有数据目录会被沿用',
           );
@@ -294,6 +333,20 @@ class _SettingsPageState extends State<SettingsPage> {
         final String payload =
             await _updater.prepareInstall(candidate, onProgress: onProgress);
         if (!mounted) {
+          return;
+        }
+        NoticeCenter.instance.finish(
+          'update-download',
+          title: '更新包下载完成 ${candidate.version}',
+          body: '等待确认是否开始更新',
+        );
+        final bool go = await _confirmDownloaded('更新包', candidate.version);
+        if (!go || !mounted) {
+          _updater.discardDownload(candidate.version);
+          setState(() {
+            _updateStatus = '已取消更新，下载缓存已清理';
+            _downloadProgress = 0;
+          });
           return;
         }
         NoticeCenter.instance.finish(
@@ -1724,3 +1777,74 @@ class _RollbackPickerDialogState extends State<_RollbackPickerDialog> {
     );
   }
 }
+
+/// "更新包已下载，是否立即更新？"——下载与安装之间补上的一步确认。
+/// 旧流程下载完直接退出应用开始覆盖，用户只能看着程序突然消失。
+class _DownloadedConfirmDialog extends StatelessWidget {
+  const _DownloadedConfirmDialog({
+    required this.kind,
+    required this.version,
+    required this.bytes,
+  });
+
+  final String kind;
+  final String version;
+  final int bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final double winW = MediaQuery.of(context).size.width;
+    final double winH = MediaQuery.of(context).size.height;
+    final double width = (winW - 48).clamp(320.0, 640.0);
+    return Center(
+      child: Material(
+        color: const Color(0xEE141821),
+        borderRadius: BorderRadius.circular(PsRadius.sheet),
+        child: Container(
+          width: width,
+          constraints: BoxConstraints(maxHeight: winH - 48),
+          padding: const EdgeInsets.all(36),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(PsRadius.sheet),
+            border: Border.all(color: PsColor.text.withValues(alpha: 0.16)),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('$kind已下载 ${version.replaceFirst(RegExp(r"^v"), "")}',
+                    style: PsType.page.copyWith(fontSize: 32)),
+                const SizedBox(height: 12),
+                _UpdateNote(bytes > 0
+                    ? '${kind}大小 ${_megabytesStatic(bytes)}。'
+                        '确认后将关闭程序并应用更新，完成后自动重启。'
+                    : '确认后将关闭程序并应用更新，完成后自动重启。'),
+                const SizedBox(height: 26),
+                Row(
+                  children: <Widget>[
+                    PsButton(
+                      label: '稍后',
+                      width: 160,
+                      onSelect: () => Navigator.of(context).pop(false),
+                    ),
+                    const SizedBox(width: 12),
+                    PsButton(
+                      label: '开始更新',
+                      primary: true,
+                      onSelect: () => Navigator.of(context).pop(true),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 与设置页的 _megabytes 同格式；顶层函数复制一份，保持文件内自包含。
+String _megabytesStatic(int bytes) =>
+    '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';

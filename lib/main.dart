@@ -10,8 +10,9 @@ import 'core/app_log.dart';
 import 'core/app_version.dart';
 import 'core/strings.dart';
 import 'update/update_service.dart';
+import 'update/updater_app.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> argv) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // The app's own log comes up before anything that can fail: a launch that
@@ -19,6 +20,49 @@ Future<void> main() async {
   // trace, not just the playback log mpv writes later.
   await AppLog.init();
   S.appVersion = resolveAppVersion();
+
+  // 更新应用模式：主程序下载完更新包后以 --apply-update 重启自身，这个
+  // 进程就是"更新程序"——可视化进度与结果，替代静默的 PowerShell 脚本。
+  final int applyIndex = argv.indexOf('--apply-update');
+  if (applyIndex >= 0 && applyIndex + 1 < argv.length) {
+    String dataDir = '';
+    bool keepData = true;
+    for (int i = 0; i < argv.length; i++) {
+      if (argv[i] == '--data-dir' && i + 1 < argv.length) {
+        dataDir = argv[++i];
+      }
+      if (argv[i] == '--keep-data' && i + 1 < argv.length) {
+        keepData = argv[++i] == 'true';
+      }
+    }
+    final String payloadDir = argv[applyIndex + 1];
+    AppLog.info('更新程序启动：payload=$payloadDir keepData=$keepData');
+    try {
+      await windowManager.ensureInitialized();
+      await windowManager.waitUntilReadyToShow(
+        const WindowOptions(
+          size: Size(520, 240),
+          minimumSize: Size(520, 240),
+          center: true,
+          title: 'XnX 更新程序',
+          titleBarStyle: TitleBarStyle.normal,
+        ),
+        () {
+          unawaited(windowManager.show());
+          unawaited(windowManager.focus());
+        },
+      );
+    } on Object catch (error, stack) {
+      AppLog.error('更新窗口初始化失败', error, stack);
+    }
+    runApp(UpdaterApp(
+      payloadDir: payloadDir,
+      dataDir: dataDir,
+      keepData: keepData,
+    ));
+    return;
+  }
+
   AppLog.info('XnX Player ${S.appVersion} 启动 '
       '(${Platform.operatingSystem} ${Platform.operatingSystemVersion})');
   AppLog.info('可执行文件：${Platform.resolvedExecutable}');
@@ -56,6 +100,9 @@ Future<void> main() async {
   }
 
   _ensureInstallDirs();
+  // 上一轮更新留下的下载缓存与失败残骸（旧脚本、.updating 残留 exe）在
+  // 这里清掉——更新成功与否，updates/ 都不该堆历史版本。
+  UpdateService.pruneUpdateCache();
 
   runApp(const XnXApp());
 }
