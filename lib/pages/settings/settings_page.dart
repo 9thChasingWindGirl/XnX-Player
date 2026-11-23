@@ -1077,10 +1077,9 @@ class _UpdateConfirmDialog extends StatefulWidget {
     required this.installed,
     required this.hasInstaller,
     required this.dataDir,
-    this.rollback = false,
   });
 
-  /// The version being installed (or rolled back to).
+  /// The version being installed.
   final String version;
 
   /// True when the data folder lives inside the install folder: the only
@@ -1094,10 +1093,6 @@ class _UpdateConfirmDialog extends StatefulWidget {
   /// Whether the candidate actually ships a setup exe.
   final bool hasInstaller;
   final String dataDir;
-
-  /// A rollback swaps an already-extracted local build: there is no download
-  /// and no data decision, so the dialog drops both.
-  final bool rollback;
 
   @override
   State<_UpdateConfirmDialog> createState() => _UpdateConfirmDialogState();
@@ -1165,10 +1160,7 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
                 ),
               ),
               const SizedBox(height: 22),
-              if (widget.rollback)
-                _UpdateNote('将用本机保留的 ${widget.version} 覆盖程序文件。'
-                    '用户配置与数据目录不受影响。')
-              else if (widget.installed)
+              if (widget.installed)
                 const _UpdateNote('将通过安装程序更新：程序关闭后由向导接管，'
                     '完成安装后自动重新启动。当前数据目录会被沿用。')
               else if (_useInstaller)
@@ -1184,9 +1176,7 @@ class _UpdateConfirmDialogState extends State<_UpdateConfirmDialog> {
                 )
               else
                 _UpdateNote('用户数据保存在 ${widget.dataDir}，更新不会改动它。'),
-              if (!widget.rollback &&
-                  !widget.installed &&
-                  widget.hasInstaller) ...<Widget>[
+              if (!widget.installed && widget.hasInstaller) ...<Widget>[
                 const SizedBox(height: 12),
                 _UpdateToggle(
                   checked: _useInstaller,
